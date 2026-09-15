@@ -118,8 +118,8 @@ against a board before flashing).
 ## Ground rule
 
 Every wire value in the firmware is sourced from a public document — the official
-*LabelWriter 550 Series Printers Technical Reference Manual* (`LW550_TECHREF.txt`), the
-genuine driver GPDs, and the decompiled stock host — and cited in-code. Anything not
+*LabelWriter 550 Series Printers Technical Reference Manual* (Dymo's published doc),
+the genuine driver GPDs, and the decompiled stock host — and cited in-code. Anything not
 sourceable is listed as an assumption in `DECISIONS.md` ("verify on hardware"), never a
 silent guess.
 

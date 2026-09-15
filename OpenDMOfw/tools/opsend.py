@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """OpenDMO-FW host-side sender - speaks the genuine Dymo LabelWriter 550/5XL
-wire protocol (LW550_TECHREF.txt) directly over USB, no vendor driver.
+wire protocol (per the Dymo tech ref) directly over USB, no vendor driver.
 
 The command layout byte-matches the decompiled stock driver
 (StartPrintJob / Density / Quality / MediaType / LabelLength / LabelIndex /
@@ -28,7 +28,7 @@ MODELS = {                          # name -> (PID, dots across head, bytes/line
 EP_OUT = 0x01
 EP_IN  = 0x81
 
-# ---- protocol encoders (LW550_TECHREF.txt p.11-20; decompiled driver) ------
+# ---- protocol encoders (tech ref p.11-20; decompiled driver) --------------
 def cmd_start_job(job_id=1):        return b"\x1b\x73" + job_id.to_bytes(4, "little")
 def cmd_density_reset():            return b"\x1b\x65"              # ESC e -> 100 %
 def cmd_density(duty):              return b"\x1b\x43" + bytes([max(0, min(200, duty))])

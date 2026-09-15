@@ -1,9 +1,9 @@
 /* OpenDMO-FW - host wire-protocol parser (byte-driven, resumable state machine).
  *
  * Implements the LabelWriter 550/5XL host protocol exactly as published in the
- * official "LabelWriter 550 Series Printers Technical Reference Manual"
- * (LW550_TECHREF.txt in this repo) and as confirmed by the decompiled stock
- * PC-side software (DYMO Connect / port monitor):
+ * official "LabelWriter 550 Series Printers Technical Reference Manual" (the
+ * "tech ref") and as confirmed by the decompiled stock PC-side software
+ * (DYMO Connect / port monitor):
  *
  *   ESC s <JobID u32>    start of print job (job ID is echoed in status)
  *   ESC L <len u16>      set maximum label length (dots), used for feed math
@@ -207,7 +207,7 @@ static void feed_next_label(int to_tear)
     motor_step_lines(dots);
 }
 
-/* ---- 32-byte status struct (layout per LW550_TECHREF.txt p.13-16) -------- */
+/* ---- 32-byte status struct (layout per tech ref p.13-16) -------- */
 static void send_status(void)
 {
     const op_config_t *c = store_get();
@@ -237,7 +237,7 @@ static void send_status(void)
     usbp_send_reply(r, sizeof(r));
 }
 
-/* ---- ESC U: 63-byte consumable record (LW550_TECHREF.txt p.16-19) -------- */
+/* ---- ESC U: 63-byte consumable record (tech ref p.16-19) -------- */
 static uint16_t crc16_ccitt(const uint8_t *d, uint16_t n)
 {
     uint16_t crc = 0xFFFF;
@@ -302,12 +302,12 @@ static void send_sku_record(void)
     usbp_send_reply(r, sizeof(r));
 }
 
-/* ---- ESC V: 34-byte version reply (LW550_TECHREF.txt p.20) --------------- */
+/* ---- ESC V: 34-byte version reply (tech ref p.20) --------------- */
 static void send_version(void)
 {
     uint8_t r[34];
     for (int i = 0; i < 34; i++) r[i] = 0;
-    /* 16-char fields, zero-padded (LW550_TECHREF.txt p.20). Per-model values from
+    /* 16-char fields, zero-padded (tech ref p.20). Per-model values from
      * model.h; the exact strings are an assumption (DECISIONS D12). */
     uint8_t hw[16] = MODEL_HW_VERSION;
     uint8_t fw[16] = MODEL_FW_VERSION;

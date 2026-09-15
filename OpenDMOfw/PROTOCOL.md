@@ -1,9 +1,9 @@
 # PROTOCOL — OpenDMO-FW (genuine Dymo LabelWriter 550/5XL wire protocol)
 
 OpenDMO-FW does **not** invent a protocol. It implements the real Dymo host
-protocol exactly as published in the *LabelWriter 550 Series Printers Technical
-Reference Manual* (`LW550_TECHREF.txt`) and as emitted by the decompiled stock
-driver, so DYMO Connect (or any host) can drive it unchanged.
+protocol exactly as published in Dymo's *LabelWriter 550 Series Printers Technical
+Reference Manual* and as emitted by the decompiled stock driver, so DYMO Connect
+(or any host) can drive it unchanged.
 
 The device is a **USB Printer Class** device (interface class 7, subclass 1,
 protocol 2 = bidirectional). The OS binds its generic printer driver

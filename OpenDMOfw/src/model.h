@@ -6,7 +6,7 @@
  *   -DMODEL_OP57  -> OP57  : 57 mm head, 300 dpi, 672 dots, 2 strobe segments
  *
  * Head dimensions per the official "LabelWriter 550 Series Printers Technical
- * Reference Manual" (LW550_TECHREF.txt): the 57 mm head uses 672 individually
+ * Reference Manual": the 57 mm head uses 672 individually
  * addressable dots (84 bytes/line), the 101 mm head uses 1248 dots
  * (156 bytes/line), both at 300 dpi.
  *

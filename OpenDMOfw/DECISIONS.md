@@ -103,8 +103,8 @@ core, protocol, motor, thermics, and config are shared.
 
 ## D11 — Genuine wire protocol
 
-`protocol.c` implements the **real Dymo host protocol**, sourced from
-`LW550_TECHREF.txt` and the decompiled stock driver
+`protocol.c` implements the **real Dymo host protocol**, sourced from the official
+LabelWriter 550 Series Technical Reference Manual and the decompiled stock driver
 (`send_valid_job.py` byte-matches it and printed on a real 550). Key points:
 
 - **Command set** per tech ref p.11–20: `ESC s/L/h/i/T/n/D/G/E/Q/A/C/e/U/V/*/o/@/W`,

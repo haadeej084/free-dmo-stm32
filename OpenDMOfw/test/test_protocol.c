@@ -2,7 +2,7 @@
  *
  * Compiles and runs on the PC (no board): the hardware-dependent calls are
  * mocked. Exercises the genuine LabelWriter 550/5XL wire protocol per
- * LW550_TECHREF.txt: ESC s (job), ESC D (raster), ESC A (32-byte status),
+ * the Dymo tech ref: ESC s (job), ESC D (raster), ESC A (32-byte status),
  * ESC L (paper), ESC n (index), ESC G/E (feed), ESC U (SKU record), plus the
  * backdoor GS C (config). Also re-tests the resumable-across-ring-underflow
  * property: a raster split across many feed/task rounds must not corrupt.

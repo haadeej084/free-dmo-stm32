@@ -41,7 +41,7 @@ tag / DRM / authentication.
 ## Docs
 
 `README.md` (DRM framing), `PROTOCOL.md` (wire protocol + ESC U/V records + GS D),
-`FIELDWORK.md`, `BUILD.md`, `PINMAP.md`, `DECISIONS.md` — all English.
+`FIELDWORK.md`, `BUILD.md`, `PINMAP.md`, `DECISIONS.md`.
 
 ## Remaining: hardware bring-up (cannot be done in software; needs a board)
 

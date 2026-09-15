@@ -10,8 +10,8 @@
 > thermistor divider, and STB polarity on the physical board.
 >
 > **The author's specialism is embedded software, not hardware.** The firmware is
-> built to be robust and self-diagnosing so that a single session of board probing
-> (a multimeter + ~24 h) closes the remaining gap. If you have a board and the tools,
+> built to be robust and self-diagnosing, so a short session with a multimeter — not
+> much work — closes the remaining gap. If you have a board and the tools,
 > [`FIELDWORK.md`](FIELDWORK.md) lists exactly what to measure — reach out at
 > **opendymofw@secret.fyi**.
 

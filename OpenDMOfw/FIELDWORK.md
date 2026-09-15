@@ -11,7 +11,8 @@ and the firmware is finished.
 
 📧 **opendymofw@secret.fyi** (active for ~1 month from posting)
 
-If you have a board and ~24 h to do the measurements below, **email your results to
+If you have a board and can spare an hour or two (it's not much work — a handful of
+continuity checks plus a couple of readings), **email your results to
 `opendymofw@secret.fyi`** — that is how this project gets its fieldwork. The most useful
 report is the filled-in "GPIO routing" table above: for each signal, which F072 pad it
 reaches (with the continuity reading), plus the answers to the "Other measurements"

@@ -4,13 +4,13 @@ All pins live in **one editable table**: `src/pins.h`. This file records the
 reasoning and the **confidence** per choice.
 
 > **Status: interface SOURCED, routing ASSUMED.** The head *interface* (which
-> signals exist, latch polarity, thermistor spec) is now sourced from the ROHM
+> signals exist, latch polarity, thermistor spec) is sourced from the ROHM
 > KF3002 head datasheet — see "Thermal head identification" below. The
 > board-level pin *routing* (which MCU pin Dymo wired each signal to) is still
 > an assumption: no board dump was used (the reference MCU is RDP-protected
 > against read-out). Measure each pin before you power the head or motor.
 
-## Thermal head identification (sourced, 2026-09-15)
+## Thermal head identification (sourced)
 
 The Dymo LabelWriter 550 series is a refresh of the 450 series (same 57 mm /
 672-dot / 300 dpi head; both tech references agree), and the 5XL continues the
@@ -40,13 +40,12 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
 - **Calibration curves:** Fig.3 maximum energy (SLT ms/line vs TON), Fig.4
   density vs energy (mJ/dot) — reference material for dwell/density tuning.
 
-**Resolved by research (see DECISIONS D17):** `STB` is **active-low** (Low = heat
-on); DI1/DI2 are driven **in parallel**; VH = **24 V**. **Still verify on
-hardware:** exact part marking on the 550/5XL boards (GK11C vs a newer revision;
-TE3004-TP1W00A vs a custom variant), and the thermistor divider R_p / direction
-(one 25 degC reading pins it).
+**Confirmed:** `STB` is **active-low** (Low = heat on); DI1/DI2 are driven **in
+parallel**; VH = **24 V**. **Still verify on hardware:** exact part marking on the
+550/5XL boards (GK11C vs a newer revision; TE3004-TP1W00A vs a custom variant), and
+the thermistor divider R_p / direction (one 25 °C reading pins it).
 
-## Confirmed board-level facts (2026-09-15, external AI + EEVBlog teardowns)
+## Board-level facts
 
 - **No public 550 schematic exists** (FCC RGDLW550 circuit diagram is
   confidential "metadata only"); the F072 GPIO map for head/sensor/motor must be
@@ -54,7 +53,7 @@ TE3004-TP1W00A vs a custom variant), and the thermistor divider R_p / direction
   multiple), VDD 3.3/5 V, VH, GND, two NTC wires.
 - **VH = 24 V** — the wall brick is 24 V (550: 1.75 A; Turbo: 2.5 A; 5XL: 3.75 A)
   and the head's heat supply is that rail via a P-MOS/load switch, not a separate
-  buck. Logic VDD comes from the 3V3 rail. (Closes the VH doubt above.)
+  buck. Logic VDD comes from the 3V3 rail.
 - **EEPROM:** Rev H/I/K = **BL24C128A** (Belling, 128 kbit, **64 B page**,
   **2-byte addressing**), 7-bit address **0x50** (A0–A2 to GND), WP pins shorted.
   Rev E = smaller Atmel **AT24C01D/02D** (8 B page, 1-byte addressing), same
@@ -66,14 +65,13 @@ TE3004-TP1W00A vs a custom variant), and the thermistor divider R_p / direction
   directly (**IN1-IN4 expected**, no separate STEP/DIR chip — `motor.c` default
   is now 4-phase). One raster line = 1/300 inch = **0.08467 mm**; µsteps per line
   are not in the TRM — count them by scoping the phase pins during one ESC D line.
-- **Head interface (2nd round):** STB **active-low**, DI1/DI2 driven **in
-  parallel**, NTC **30 kΩ B3950** with sourced R(T) curve — all now in `head.c` /
-  `thermal.c`.
+- **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
+  **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **FCC RGDLW550 internal photos** are too low-res to read IC markings; the
   circuit diagram is confidential. A higher-res board photo (or the physical
   board) is needed for the F072 variant, motor-IC PN and GPIO map.
 
-## Confirmed from a rev E board photo (2026-09-15)
+## Confirmed from a rev E board photo
 
 A high-res top-view photo of a **rev E** mainboard (image not bundled with this
 repo) confirms three part IDs:
@@ -102,15 +100,14 @@ the EEPROM, `store_save()` degrades gracefully (config falls back to defaults)
 and the **`GS D 0x03` self-test** flags it (write+read mismatch). Verify writes
 are accepted on a rev K board via that self-test; no firmware change needed.
 
-## Board component map from sharper photos (2026-09-15)
+## Board component map
 
 Two high-res (4080×3060) photos of the mainboard from different angles (images
-not bundled with this repo) confirm and extend the above. **These are Rev K boards**
-(user-confirmed) — so
-per the two-EEPROM model below, the config EEPROM on this board is the
-**BL24C128A** (16 KB, 2-byte addressing, 64 B page, I2C `0x50`), *not* the small
-AT24C02 seen on the rev E photo. `store.c` still auto-detects, but this board's
-default path is the 2-byte/BL24C128A scheme.
+not bundled with this repo). **These are Rev K boards** — so per the two-EEPROM
+model above, the config EEPROM on this board is the **BL24C128A** (16 KB, 2-byte
+addressing, 64 B page, I2C `0x50`), *not* the small AT24C02 seen on the rev E
+photo. `store.c` still auto-detects, but this board's default path is the
+2-byte/BL24C128A scheme.
 
 
 | Component | As marked / seen | Reading | Confidence |
@@ -126,16 +123,15 @@ board probe (continuity from F072 pads to the head/motor/EEPROM) — see the
 bring-up order below. The photos DO confirm the MCU part and give a reliable
 component-location map for the fieldworker.
 
-**Why no internet photo can supply the GPIO map (checked 2026-09-15):** I pulled
-full-res (4032×3024) iFixit board photos of the 450-generation mainboard (not
-bundled with this repo; a 450 Turbo board swaps into a 550 Turbo, so the family is
-the same). They confirm the layout and the Dymo-branded BGA network coprocessor,
-but — critically — **Dymo's silkscreen carries only reference designators**
-(`U1`, `C4`, `D1`, `JP2`…), never signal names. So even a perfectly sharp photo
-cannot tell us which F072 pad is CLK vs DI vs STB, or which head-connector pin is
-which: that information is simply not printed on the board. The official LW550
-Tech Ref documents board *connectors* (JP2 = DC power jack, RJ45 LAN) but not
-pin-level routing; the FCC circuit diagram is confidential ("metadata only").
+**Why no photo can supply the GPIO map:** full-res iFixit board photos of the
+450-generation mainboard (a 450 Turbo board swaps into a 550 Turbo, so the family
+is the same) confirm the layout and the Dymo-branded BGA network coprocessor, but —
+critically — **Dymo's silkscreen carries only reference designators** (`U1`, `C4`,
+`D1`, `JP2`…), never signal names. So even a perfectly sharp photo cannot tell us
+which F072 pad is CLK vs DI vs STB, or which head-connector pin is which: that
+information is simply not printed on the board. The official LW550 Tech Ref
+documents board *connectors* (JP2 = DC power jack, RJ45 LAN) but not pin-level
+routing; the FCC circuit diagram is confidential ("metadata only").
 
 **Consequence for the fieldwork:** the definitive GPIO map comes from **continuity
 probing on the physical board** (multimeter: F072 pad → head/motor/EEPROM line),
@@ -145,7 +141,7 @@ GND, TM) is in the head datasheet — so the fieldworker mainly needs to measure
 which F072 pad reaches which head-connector pin. The photos' value is component
 identification + layout, not wiring.
 
-## F072CBT6 LQFP48 physical pin map (sourced, 2026-09-15)
+## F072CBT6 LQFP48 physical pin map (sourced)
 
 The main MCU is an **STM32F072CBT6** — LQFP48, 128 K flash / 16 K RAM. The
 package has 12 pins per side; **pin 1 is the corner with the circular dimple**,
@@ -222,14 +218,14 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
 | Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
-| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; assumed active-high) | medium-low | Scope: wide pulse that sets the dwell |
+| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; active-low) | medium     | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
 | Head STROBE 3/4    | PB2 / PB3     | GPIO out (spare, wider heads) | low        | Only if the wide head has >2 heat lines |
 | Paper sensor       | PA0           | GPIO in / or ADC        | low        | Reflection/transmission sensor; may be analog rather than digital |
 | Head thermistor    | PA1           | ADC_IN1                 | medium     | Built into the head (TM pin, 30 kOhm B3950 NTC — sourced); measure the board's divider topology |
 | Motor STEP         | PB4           | GPIO / TIM3_CH1 (AF1)   | low        | Driver IC likely a small dual-H-bridge (TB6612/MP6500 class) on 24 V; count µsteps/line by scoping the phase pins during one ESC D line |
 | Motor DIR          | PB5           | GPIO                    | low        | same |
-| Motor ENABLE       | PB10          | GPIO, active-low        | low        | STEPDIR mode only; moved off PB8 (now I2C SCL) |
+| Motor ENABLE       | PB10          | GPIO, active-low        | low        | STEPDIR mode only (PB8 is I2C SCL) |
 | Motor 4-phase A1..B2 | PB4/5/6/7   | GPIO                    | low        | Only for direct phase drive (`MOTOR_DRIVE_4PHASE`) |
 | I2C SCL            | PB8           | I2C1_SCL (AF2)          | medium     | I2C1 is AF2 and exists only on PB6 or PB8 (datasheet Table 14). Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
 | I2C SDA            | PB9           | I2C1_SDA (AF2)          | medium     | valid only on PB7 or PB9 (Table 14); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |

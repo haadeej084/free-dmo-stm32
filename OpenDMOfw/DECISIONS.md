@@ -6,16 +6,15 @@ is sourced from a public document (the tech reference, the driver GPDs, the
 decompiled host) and cited in-code; anything not sourceable is listed under
 **Assumptions** as "verify on hardware", never a silent guess.
 
-## D1 — Scope: clone the genuine Dymo device (flipped)
+## D1 — Scope: clone the genuine Dymo device
 
 OpenDMO-FW **deliberately clones** the genuine LabelWriter 550/5XL: real USB
 identity, real wire protocol, real roll-state semantics. The goal is for stock
 DYMO Connect to enumerate and drive the device unchanged, so any physical roll
-prints. (An earlier revision took the opposite stance — a generic, brandless
-device that clones no identity. That was reversed: to make the *stock host*
-accept the printer, the host must see a genuine Dymo on the wire.)
+prints. (To make the *stock host* accept the printer, the host must see a genuine
+Dymo on the wire.)
 
-## D2 — USB identity: genuine Dymo VID 0x0922 + per-model PID (flipped)
+## D2 — USB identity: genuine Dymo VID 0x0922 + per-model PID
 
 `src/model.h` / `usb_desc.c` present VID `0x0922`, PID `0x002A` (5XL) /
 `0x0028` (550), `DYMO` / `LabelWriter 5XL|550` strings, and an IEEE-1284 device
@@ -35,7 +34,7 @@ A minimal own device stack for the F0 USB peripheral fits the memory budget and
 keeps the repo dependency-free. TinyUSB would work but adds an external tree and
 an integration layer. Downside of an own stack: less proven — see bring-up note D8.
 
-## D5 — Head as a serial shift-register type (now sourced)
+## D5 — Head as a serial shift-register type
 
 The head is a ROHM KF3002-family module with built-in shift registers, latch
 and heat drivers — confirmed by the public sibling datasheet (KF3002-GL50A) and
@@ -68,9 +67,7 @@ Reasoned but not tested on silicium — verify before production:
 3. **Pinmap** (`pins.h`) — see PINMAP.md, which now carries the complete F072CBT6
    LQFP48 physical pad→GPIO map (Table 13). GPIO alternate-functions verified
    against the F072 datasheet (DocID025004 **Rev 2**, Table 14): I2C1 is **AF2**
-   and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9** (the earlier
-   PB12/PB14 "AF1" was wrong: at AF2 those pins are EVENTOUT / TIM15_CH1, not I2C).
-   The head signals are plain GPIOs (bit-banged shift register — D5/D16), so no AF
+   and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9**. The head signals are
    is involved there. SWD = PA13/PA14 (pads 34/37). The board-level pin *routing*
    is still an assumption (no board dump) — measure each pin on hardware.
 4. **I2C `TIMINGR`** (`store.c`) is a start value for ~100 kHz @ 48 MHz.
@@ -84,7 +81,7 @@ Reasoned but not tested on silicium — verify before production:
 Width-parametrised via `src/model.h` + a build define. **Default = 5XL**
 (101 mm head, **1248 dots**, 156 B/line); **550** is `make MODEL=OP57` (57 mm
 head, **672 dots**, 84 B/line). Head widths come from the tech reference and the
-driver GPDs' `MaxPrintableWidth` — *not* the earlier 1216/680 estimates. Only head
+driver GPDs' `MaxPrintableWidth`. Only head
 geometry, strobe-segment count, and USB identity (PID/product/MDL) differ; USB
 core, protocol, motor, thermics, and config are shared.
 
@@ -96,20 +93,18 @@ core, protocol, motor, thermics, and config are shared.
 - **A3** USB endpoint-HALT: `GET_STATUS`(endpoint) + `SET/CLEAR_FEATURE`
   (ENDPOINT_HALT) with DTOG reset (`usb_core.c`).
 - **A4** Head strobe applies to **N segments** via a pin array (`head.c`, `pins.h`).
-- **A5** Print-density command (now the genuine `ESC C`/`ESC e`).
+- **A5** Print-density command (genuine `ESC C`/`ESC e`).
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
-- **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware) — now
-  compiled + run natively (WinLibs MinGW GCC installed via winget); **37 checks / 23
-  scenarios, both models**. Executing it caught a real `S_ESC_W` desync bug (the old
-  handler never returned to `S_CMD`, so bytes after an `ESC W` were eaten) — fixed.
-- **Host sender** `tools/opsend.py` — now speaks the genuine Dymo protocol via
-  libusb (test pattern or PNG→raster), byte-matched to the decompiled driver.
+- **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
+  compiled + run natively; **37 checks / 23 scenarios, both models**.
+- **Host sender** `tools/opsend.py` — speaks the genuine Dymo protocol via libusb
+  (test pattern or PNG→raster), byte-matched to the decompiled driver.
 
-## D11 — Genuine wire protocol (new)
+## D11 — Genuine wire protocol
 
-`protocol.c` was rewritten from the "open OPRASTER" protocol to the **real Dymo
-host protocol**, sourced from `LW550_TECHREF.txt` and the decompiled stock driver
+`protocol.c` implements the **real Dymo host protocol**, sourced from
+`LW550_TECHREF.txt` and the decompiled stock driver
 (`send_valid_job.py` byte-matches it and printed on a real 550). Key points:
 
 - **Command set** per tech ref p.11–20: `ESC s/L/h/i/T/n/D/G/E/Q/A/C/e/U/V/*/o/@/W`,
@@ -192,10 +187,9 @@ a `GS D` backdoor (`1D 44 <sub> [arg]`) — see PROTOCOL.md "GS D". Design choic
 To reverse: delete `diagnose()` and the `S_DIAG_SUB`/`S_DIAG_ARG` states plus the
 `GS D` branch in `S_AFTER_GS`; nothing else depends on them.
 
-## D16 — Thermal head identified (ROHM KF3002 family, 2026-09-15)
+## D16 — Thermal head identified (ROHM KF3002 family)
 
-The head is no longer an anonymous "serial shift-register type". Sourced
-identification:
+Sourced identification:
 
 - **57 mm (550 class):** ROHM **SHEC 3C56-9638 / GK11C308 / KF3002-GK11C**, Dymo
   assembly **PRTA05412** — from replacement-head listings for the LabelWriter
@@ -212,80 +206,50 @@ identification:
   no MISO (DO1/DO2 are daisy-chain outs). Calibration curves: Fig.3 max energy,
   Fig.4 density vs mJ/dot.
 
-Consequences applied: `pins.h` head section rewritten (plain GPIOs, DI1/DI2,
-STB1–4), `head.c` now bit-bangs the two-half shift + sequential strobe,
 `model.h` sets **both models to 2 strobe segments** (the 57 mm head is also
-two-half: 2×336), `thermal.c` documents the sourced NTC spec.
+two-half: 2×336); `head.c` bit-bangs the two-half shift with a sequential per-half
+strobe; `thermal.c` documents the sourced NTC spec.
 
-**Still "verify on hardware" (doubts):** exact part marking on the 550/5XL
-boards (GK11C vs a newer revision; TE3004-TP1W00A vs a custom variant); the
-thermistor divider topology / R_p (NTC direction flag in `thermal.c` — one
-25 degC reading pins it). **Resolved by external research (see D17):** STB is
-**active-low** (Low = fires the heat driver), DI1/DI2 are driven **in parallel**,
-and VH = **24 V**.
+**Still verify on hardware:** exact part marking (GK11C vs a newer revision;
+TE3004-TP1W00A vs a custom variant); the thermistor divider R_p / direction
+(one 25 °C reading pins it). **Confirmed:** STB is **active-low** (Low fires
+the heat driver), DI1/DI2 driven **in parallel**, VH = **24 V**.
 
-## D17 — Board-level facts confirmed externally (2026-09-15)
-
-External research (EEVBlog 550-series teardowns + a knowledgeable second AI)
-confirmed or closed several of the D16 doubts:
+## D17 — Board-level facts
 
 - **No public 550 schematic** (FCC RGDLW550 circuit diagram is confidential,
   "metadata only"). The F072 GPIO map for head/sensor/motor is **not published
-  anywhere** — it must be measured on the board (continuity from the head flex
-  to the LQFP). This is now the single biggest remaining unknown.
-- **VH = 24 V confirmed.** The wall brick is 24 V (550: 1.75 A; Turbo: 2.5 A;
-  5XL: 3.75 A) and the head's heat supply is that rail via a P-MOS/load switch
-  (no separate buck). Logic VDD = 3V3 rail. Closes the D16 VH doubt.
-- **EEPROM confirmed:** Rev H/I/K = **BL24C128A** (Belling, 128 kbit, 64 B page,
-  **2-byte internal addressing**), address **0x50**, WP pins shorted; Rev E =
-  Atmel AT24C01D/02D (8 B page, 1-byte addressing). **This exposed a real bug:**
-  the old `store.c` assumed 1-byte addressing (24C02–24C16 class), which would
-  have mis-addressed the BL24C128A. `store.c` now detects the scheme at init
-  (config read-back, then a scratch-area round-trip probe) and uses the matching
-  page size (64 B / 8 B) — one firmware works on both revisions.
-- **NFC front-end:** SLRC610 @ I2C **0x28** on the same bus — different address,
-  ignored by our firmware (tag emulation is out of scope).
-- **Feed motor driver:** not named in public teardowns; likely a small dual-H-
-  bridge (TB6612/MP6500 class) or discrete 4-transistor H-bridge on 24 V. µsteps
-  per dot line are not in the TRM — count them by scoping the phase pins during
-  one ESC D line (one raster line = 1/300 inch of paper).
+  anywhere** — it must be measured on the board (continuity from the head flex to
+  the LQFP). This is the single biggest remaining unknown.
+- **VH = 24 V.** The wall brick is 24 V (550: 1.75 A; Turbo: 2.5 A; 5XL: 3.75 A);
+  the head's heat supply is that rail via a P-MOS/load switch (no separate buck).
+  Logic VDD = the 3V3 rail.
+- **EEPROM:** Rev H/I/K = **BL24C128A** (Belling, 128 kbit, 64 B page, **2-byte
+  internal addressing**), address **0x50**, WP pins shorted; Rev E = Atmel
+  AT24C01D/02D (8 B page, 1-byte addressing). `store.c` detects the scheme at init
+  and uses the matching page size — one firmware works on both revisions.
+- **NFC front-end:** SLRC610 @ I2C **0x28** on the same bus — a different address,
+  ignored (tag emulation is out of scope).
+- **Feed motor driver:** not named in public teardowns; likely a small dual-H-bridge
+  (TB6612/MP6500 class) or a discrete 4-transistor H-bridge on 24 V, driving the four
+  phases directly (`MOTOR_DRIVE_4PHASE`; STEP/DIR kept as fallback). µsteps per dot
+  line are not in the TRM — count them by scoping the phase pins during one ESC D line.
+- **STB polarity = active-low** (Low = heat driver on), from the ROHM KF3002 timing
+  chart; `head.c` fires low. DI1/DI2 are driven in parallel (two shift-register banks,
+  one CLK).
+- **NTC curve:** 30 kΩ @ 25 °C, B=3950; R(T) = 30000·exp(3950·(1/T − 1/298.15))
+  (25 °C ≈ 30 kΩ, 45 °C ≈ 13.4 kΩ, 60 °C ≈ 7.8 kΩ). One 25 °C ADC reading pins the
+  divider R_p.
+- **Feed contract:** one raster line = 1/300 inch = **0.08467 mm**; µsteps/line =
+  (N_steps/rev · microstep · gear) / (π · D_roller_mm · 11.811). The drive-train
+  constants are unpublished — count phase pulses per ESC D line.
+- **Board part IDs** (from a rev E board photo, not bundled): **STM32F072CBT6**
+  (LQFP48, 128 K / 16 K), **24C02A** EEPROM (256 B, 1-byte), **SLRC610** NFC front-end
+  — confirming the two-EEPROM model above.
 
-**Second research round (2026-09-15) — head/motor/thermistor details now sourced:**
-
-- **STB polarity = active-low** (Low = heat driver on), from the ROHM KF3002
-  timing chart (GD31A/GL50A). `head.c` flipped: strobes idle high, fire low.
-- **DI1/DI2 driven in parallel** by the host (two shift-register banks, one CLK);
-  confirmed — matches the existing `head.c` bit-bang.
-- **NTC curve sourced:** 30 kΩ @ 25 degC, B=3950; R(T) = 30000·exp(3950·(1/T −
-  1/298.15)). Reference: 25 degC=30 kΩ, 45 degC≈13.4 kΩ, 60 degC≈7.8 kΩ. One
-  25 degC ADC reading pins the divider R_p (added to `thermal.c`).
-- **Feed contract:** one raster line = 1/300 inch = **0.08467 mm**. µsteps/line =
-  (N_steps/rev · microstep · gear) / (π · D_roller_mm · 11.811); the drive-train
-  constants are unpublished, so count phase pulses per ESC D line (added to
-  `motor.c`).
-- **Motor drive mode → IN1-IN4 expected:** a small dual-H-bridge on 24 V drives
-  the four phases directly (no separate STEP/DIR chip). `motor.c` default set to
-  `MOTOR_DRIVE_4PHASE` (STEP/DIR kept as fallback).
-- **FCC RGDLW550 internal photos** exist (fccid.io) but are **too low-res
-  (595×842) to read IC markings**; the circuit diagram is "metadata only" +
-  short/long-term confidential. A higher-res board photo or the physical board is
-  needed for the F072 variant / motor-IC / GPIO map.
-
-**Rev E board photo (2026-09-15) — three part IDs confirmed:**
-
-A high-res top-view photo of a rev E mainboard (image not bundled with this repo)
-shows:
-**STM32F072CBT6** (LQFP48, 128 K / 16 K — the exact target), **24C02A** EEPROM
-(256 B, 1-byte addressing), and **SLRC610** NFC front-end. This confirms the
-two-EEPROM model: rev E = small 24C02A (1-byte), rev H/I/K = large BL24C128A
-(2-byte).
-
-**This exposed a real bug in `store.c` detection.** A round-trip probe cannot
-distinguish 1-byte from 2-byte addressing — a write+read is *self-consistent
-under either scheme* (both shift by the same amount), so it "succeeds" on both.
-The old code would have picked 2-byte for a rev E board and mis-addressed every
-config write. Fixed: detection now uses the **config magic field as the external
-reference** — it reads the config under each width and keeps the one whose magic
-matches; on first boot (no valid config) it defaults to 2-byte (current
-production) and persists immediately so the width is pinned from boot 1. One
-firmware now works correctly on both EEPROM revisions.
+**`store.c` EEPROM detection.** A round-trip probe cannot distinguish 1-byte from
+2-byte addressing (a write+read is self-consistent under either scheme), so detection
+uses the **config magic field as the external reference**: it reads the config under
+each width and keeps the one whose magic matches; on first boot (no valid config) it
+defaults to 2-byte (current production) and persists immediately, pinning the width
+from boot 1. One firmware works on both EEPROM revisions.

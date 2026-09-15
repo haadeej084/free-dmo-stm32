@@ -98,8 +98,7 @@ static uint8_t addr_prefix(uint16_t off, uint8_t *buf)
 
 /* Page-wise writing: a 24Cxx wraps a write WITHIN a page, so a block that
  * crosses a page boundary must be split into chunks. Per chunk, wait for the
- * write cycle (delay). (This was the bug in the old version: one big
- * transaction across a page boundary.) */
+ * write cycle (delay). */
 static int eeprom_write(uint16_t off, const uint8_t *data, uint16_t n)
 {
     uint16_t page = (s_addrw == 2) ? 64 : 8;

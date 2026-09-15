@@ -186,8 +186,8 @@ int main(void){
     CHECK(g_reply[2] == 1);                        /* mock store_selftest -> 1 */
 
     /* 16) ESC W control command: the 4-byte header + N payload bytes are consumed
-     *     (payload looks like commands), then the parser RESUMES (regression for
-     *     the old S_ESC_W that never returned to S_CMD). */
+     *     (payload looks like commands), then the parser RESUMES at the command
+     *     state — it must not stay inside the payload. */
     reset_state();
     unsigned char w[] = { 0x1B, 'W', 4, 0, 0, 0,   /* len=4 dir=0 obj=0 */
                           0x1B, 'A', 0x00, 0x1B }; /* 4 adversarial payload bytes */

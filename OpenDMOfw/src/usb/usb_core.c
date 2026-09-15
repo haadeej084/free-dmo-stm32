@@ -58,9 +58,9 @@ static void pma_read(uint16_t off, uint8_t *dst, uint16_t n)
  * That is exactly what TinyUSB's fsdev_common.h does -- ep_change_status() XORs the
  * new value into the STAT field and ep_write() masks with U_EPREG_MASK, never
  * disturbing the other direction's STAT or the hardware-maintained DTOG bits.
- * (Earlier versions masked with EPREG_MASK|STAT_x here, which silently cleared the
- * OTHER direction's STAT to DISABLED -- e.g. after SET_CONFIGURATION the bulk OUT
- * endpoint was left disabled and could never receive print data.)
+ * (Masking with EPREG_MASK|STAT_x here would silently clear the OTHER direction's
+ * STAT to DISABLED -- e.g. after SET_CONFIGURATION the bulk OUT endpoint would be
+ * left disabled and could never receive print data.)
  */
 #define EP_NORM_MASK 0x0F3Fu   /* EA | STAT_TX | KIND | TYPE | SETUP : normal R/W bits to keep */
 

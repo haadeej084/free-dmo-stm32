@@ -1,5 +1,5 @@
 /* STM32F072x8 : 128 KB flash @ 0x08000000, 16 KB SRAM @ 0x20000000.
-   Cortex-M0, main stack aan de top van SRAM. */
+   Cortex-M0, main stack at the top of SRAM. */
 
 ENTRY(Reset_Handler)
 
@@ -9,7 +9,7 @@ MEMORY
   RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 16K
 }
 
-/* 2 KB stack, 1 KB heap-reserve (newlib-nano gebruikt weinig). */
+/* 2 KB stack, 1 KB heap-reserve (newlib-nano uses little RAM). */
 _estack     = ORIGIN(RAM) + LENGTH(RAM);
 _Min_Stack_Size = 0x800;
 _Min_Heap_Size  = 0x400;

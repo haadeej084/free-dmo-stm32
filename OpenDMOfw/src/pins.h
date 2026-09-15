@@ -84,10 +84,10 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * On the STM32F0 line I2C is AF2 (NOT AF1), and I2C1 exists ONLY on:
  *   SCL = PB6 or PB8,  SDA = PB7 or PB9
  * (datasheet DocID025004 Rev 2, Table 14 "STM32F072xx alternate function pin
- * description", Port B, AF2 row). The earlier PB12/PB14 assumption was wrong:
- * at AF2 those pins are EVENTOUT and TIM15_CH1 — neither is I2C. We use the
- * PB8/PB9 pair so it sits cleanly next to the head-strobe (PB0-3) and motor
- * (PB4-7) blocks with no pin conflict; PB6/PB7 is the other valid pair.
+ * description", Port B, AF2 row). Note PB12/PB14 are EVENTOUT and TIM15_CH1 at
+ * AF2 -- neither is I2C. We use the PB8/PB9 pair so it sits cleanly next to the
+ * head-strobe (PB0-3) and motor (PB4-7) blocks with no pin conflict; PB6/PB7 is
+ * the other valid pair.
  * CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to whichever
  * pair Dymo used, then set these two macros + AF2 in store.c. */
 #define PIN_I2C_SCL         ((pin_t){GPIOB, 8})   /* I2C1_SCL AF2            */

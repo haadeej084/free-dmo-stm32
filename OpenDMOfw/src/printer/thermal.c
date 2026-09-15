@@ -34,6 +34,9 @@ void thermal_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
     gpio_mode(((pin_t){GPIOA, 1}), GPIO_ANALOG);   /* PA1 = ADC_IN1 */
 
+    /* F0 ADC: calibrate while ADEN=0, then enable (RM0091). */
+    ADC1->CR |= ADC_CR_ADCAL;
+    while (ADC1->CR & ADC_CR_ADCAL) {}
     ADC1->CR |= ADC_CR_ADEN;
     while (!(ADC1->ISR & ADC_ISR_ADRDY)) {}
     ADC1->CHSELR = (1u << ADC_HEAD_TEMP_CH);

@@ -1,8 +1,9 @@
 /* OpenDMOfw - paper-size table (keyed by the ESC L code from the host driver).
  *
- * The host driver's DOC_SETUP selects a paper size with  ESC L <lo> <hi>
- * (code = hi<<8|lo, i.e. the two wire bytes read as a big-endian u16, matching
- * the GPD literals like "<1B>L<0867>"). The code identifies the stock; the
+ * The host driver's DOC_SETUP selects a paper size with ESC L + u16 LE
+ * (PROTOCOL.md / DECISIONS D11). The GPD literal "<1B>L<0867>" is the numeric
+ * code 0x0867; on the wire that is bytes 67 08. The table stores that u16
+ * value. The code identifies the stock; the
  * raster geometry itself arrives explicitly in the ESC D header. This table is
  * used for:
  *   - feed math (label pitch = paper height + physical gap)
@@ -22,7 +23,7 @@
 #include "../model.h"
 
 typedef struct {
-    uint16_t code;          /* ESC L code (hi<<8|lo) */
+    uint16_t code;          /* ESC L u16 LE value (e.g. 0x0867) */
     uint16_t width_dots;    /* page width in dots */
     uint16_t height_dots;   /* page height in dots */
 } paper_t;

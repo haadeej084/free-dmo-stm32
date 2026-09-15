@@ -12,8 +12,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-TOOL="/c/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/14.2 rel1/bin"
-export PATH="$TOOL:$PATH"
+# Prefer a toolchain already on PATH; fall back to the common Windows install.
+if ! command -v arm-none-eabi-gcc >/dev/null 2>&1; then
+  TOOL="/c/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/14.2 rel1/bin"
+  export PATH="$TOOL:$PATH"
+fi
 
 MCUFLAGS="-mcpu=cortex-m0 -mthumb -mfloat-abi=soft"
 SRC="src/startup.c src/system.c src/usb/usb_core.c src/usb/usb_desc.c \
@@ -27,7 +30,7 @@ build_model() {
   local CFLAGS="$MCUFLAGS -Os -g3 -std=c11 -ffreestanding \
     -ffunction-sections -fdata-sections -Wall -Wextra -Wno-unused-parameter \
     -fno-common -DMODEL_$MODEL -Isrc"
-  local LDFLAGS="$MCUFLAGS -Tlinker/stm32f072x8.ld -nostartfiles \
+  local LDFLAGS="$MCUFLAGS -Tlinker/stm32f072xb.ld -nostartfiles \
     -Wl,--gc-sections -Wl,-Map=$BUILD/$TARGET.map --specs=nano.specs"
 
   echo "=== building $MODEL ($TARGET) ==="

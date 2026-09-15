@@ -62,13 +62,14 @@ per-line ceiling (`head.c`). Conservative defaults; calibrate on hardware.
 
 Reasoned but not tested on silicium — verify before production:
 1. **PMA access** is 1:1 (STM32F0x2, 1024 B). Confirm with a single EP0 echo.
-2. **EPnR toggle / rc_w0 macros** (`usb_core.c`) follow the ST pattern; check
-   enumeration with a USB analyzer.
+2. **EPnR STAT/CTR** (`usb_core.c`) use TinyUSB's keep-mask + XOR-STAT (STAT/DTOG
+   are toggle bits; CTR is rc_w0). Confirm enumeration with a USB analyzer.
 3. **Pinmap** (`pins.h`) — see PINMAP.md, which now carries the complete F072CBT6
    LQFP48 physical pad→GPIO map (Table 13). GPIO alternate-functions verified
    against the F072 datasheet (DocID025004 **Rev 2**, Table 14): I2C1 is **AF2**
-   and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9**. The head signals are
-   is involved there. SWD = PA13/PA14 (pads 34/37). The board-level pin *routing*
+   and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9**. USB DM/DP = PA11/PA12
+   AF2. SWD = PA13/PA14 (pads 34/37). LED/button are PA2/PA3 (PC6/PC7 are not
+   bonded on LQFP48). VH enable is PA8 (assumed). The board-level pin *routing*
    is still an assumption (no board dump) — measure each pin on hardware.
 4. **I2C `TIMINGR`** (`store.c`) is a start value for ~100 kHz @ 48 MHz.
 5. **Dwell/density and motor timing** calibrate against print quality + temperature.
@@ -146,11 +147,12 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
 
 ## D13 — Never overwritable / never brickable
 
-The firmware has **no flash-write path** (it cannot reflash itself), and the board
-is set to **RDP level 1** (read-out protected, but still erasable/programmable via
-SWD) plus an IWDG watchdog. Together: the host can never overwrite the firmware,
-and a bad config/loop resets cleanly instead of bricking — RDP level 2 would be a
-one-way door that raises brick risk, so it is deliberately avoided.
+The firmware has **no flash-write path** (it cannot reflash itself) and an IWDG
+watchdog, so a bad config/loop resets instead of hanging forever. It does **not**
+program option bytes: RDP is left as the programmer set it. Do **not** raise the
+chip to RDP level 2 from this image (one-way door, brick risk on the next
+reflash). Stock 550/5XL parts already ship at RDP2 — this firmware cannot be
+installed over SWD until that is lowered (mass-erase).
 
 ## D14 — Roll state is pure config; paper sensor does not gate the host view
 
@@ -249,7 +251,7 @@ the heat driver), DI1/DI2 driven **in parallel**, VH = **24 V**.
 
 **`store.c` EEPROM detection.** A round-trip probe cannot distinguish 1-byte from
 2-byte addressing (a write+read is self-consistent under either scheme), so detection
-uses the **config magic field as the external reference**: it reads the config under
-each width and keeps the one whose magic matches; on first boot (no valid config) it
-defaults to 2-byte (current production) and persists immediately, pinning the width
-from boot 1. One firmware works on both EEPROM revisions.
+uses the **config magic field** (`ODM1`): it tries 2-byte at offset `0x100`, then
+legacy 2-byte at `0`, then 1-byte at `0`. On first boot it persists with 2-byte and
+**verifies the magic**; if that fails it retries 1-byte; if both fail, config stays
+in RAM (WP high or no EEPROM). Scratch self-test is `GS D 0x03` only.

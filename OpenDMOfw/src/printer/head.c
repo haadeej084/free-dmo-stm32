@@ -53,6 +53,8 @@ void head_init(void)
         gpio_mode(k_strobe[s], GPIO_OUT);
         gpio_set(k_strobe[s], 1);           /* active-low: idle high = off */
     }
+    gpio_mode(PIN_HEAD_VH, GPIO_OUT);
+    gpio_set(PIN_HEAD_VH, HEAD_VH_ON_LEVEL);   /* assumed P-MOS: Low = 24 V on */
 }
 
 void head_reset(void)
@@ -64,7 +66,7 @@ void head_reset(void)
     gpio_set(PIN_HEAD_DI2, 0);
 }
 
-void head_set_density(uint8_t d) { if (d >= 1 && d <= 16) s_density = d; }
+void head_set_density(uint8_t d) { if (d <= 16) s_density = d; }  /* 0 = heat off */
 
 static void strobe(pin_t p, uint32_t us)
 {
@@ -76,6 +78,10 @@ static void strobe(pin_t p, uint32_t us)
 
 void head_print_line(const uint8_t *bits, uint16_t nbytes)
 {
+    /* ESC C duty 0 = printing disabled: skip heat, caller still feeds. */
+    if (s_density == 0)
+        return;
+
     /* 1) shift in the dot line: one CLK per dot pair (half 1 on DI1, half 2
      *    on DI2). HEAD_DOTS is even for both models (672 = 2x336,
      *    1248 = 2x624). */

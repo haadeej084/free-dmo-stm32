@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # OpenDMOfw - wire-protocol verification harness (host, no board needed).
 #
-# The build host has no C compiler and no QEMU, so the firmware's protocol.c
-# cannot be *executed* here. This harness instead transcribes the response
+# Independent of the native C parser test (test_protocol.c). This harness
+# transcribes the response
 # generators (send_status / send_sku_record / send_version in
 # src/printer/protocol.c) into Python and checks their output byte-for-byte
 # against two independent sources of truth:

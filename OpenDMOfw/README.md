@@ -14,9 +14,15 @@
 > much work — closes the remaining gap. If you have a board and the tools,
 > [`FIELDWORK.md`](FIELDWORK.md) lists exactly what to measure — reach out at
 > **opendymofw@secret.fyi**.
+>
+> **Stock 550/5XL MCUs ship at RDP Level 2.** SWD debug and the system bootloader
+> are disabled; `st-flash write` will not take until RDP has already been lowered
+> (that mass-erases flash). This image is for an F072 you are already allowed to
+> program (replacement chip, or a chip whose RDP was lowered). A factory printer
+> still uses the Bluepill I2C tag-emulator path until then.
 
 Firmware that runs **in place on a genuine D.mo LabelWriter 550 / 5XL mainboard**
-(STM32F072, flashed over SWD — no new hardware) and makes the printer **print on any
+(STM32F072, flashed over SWD once the chip is writable) and makes the printer **print on any
 roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only (the network
 "LabelWriter Print Server" coprocessor is out of scope). One codebase builds both models:
 

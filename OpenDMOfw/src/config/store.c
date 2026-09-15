@@ -7,9 +7,10 @@
  * Sourced (EEVBlog 550-series teardowns, Rev H/I/K): **BL24C128A** (Belling,
  * 128 kbit = 16 KB, **64 B page, 2-byte internal addressing**), 7-bit address
  * **0x50** (A0-A2 to GND). Rev E boards carry a smaller Atmel **AT24C01D/02D**
- * (8 B page, 1-byte addressing) at the same address. So this driver DETECTS
- * the addressing scheme at init (config read-back, then a scratch-area probe)
- * and uses the matching page size — one firmware works on both revisions.
+ * (8 B page, 1-byte addressing) at the same address. Detection uses the
+ * config magic as the external reference (a write+read cannot tell 1-byte
+ * from 2-byte addressing). First boot persists and verifies; if 2-byte
+ * fails it retries 1-byte; if both fail, config stays in RAM.
  *
  * The I2C bus also carries the NFC front-end (SLRC610 @ 0x28); it is a
  * different device address and is simply ignored by this driver.
@@ -23,14 +24,21 @@
 #include "../system.h"
 #include "../pins.h"
 
-#define CFG_MAGIC   0x4F503537u      /* "OP57" */
-#define EEPROM_ADDR 0x00             /* internal offset of the config block */
+#define CFG_MAGIC   0x4F444D31u      /* "ODM1" — shared by OP57 and OP104 */
 #define I2C_TIMINGR 0x10420F13u      /* ~100 kHz at PCLK 48 MHz (calibrate) */
-#define SCRATCH_OFF 64               /* self-test/probe area, past the config block */
+/* 2-byte (16 KB) config sits past the first 256 B so a stock image's low
+ * EEPROM is left alone; 1-byte parts only have 256 B so they use offset 0. */
+#define EEPROM_OFF_2B  0x0100
+#define EEPROM_OFF_1B  0x0000
+#define SCRATCH_OFF_2B 0x0140
+#define SCRATCH_OFF_1B 0x0040
 
 /* Address width (bytes) and page size follow the detected part:
  * 2-byte / 64 B page = BL24C128A (Rev H/I/K); 1-byte / 8 B page = AT24C01D/02D (Rev E). */
 static uint8_t s_addrw = 2;          /* default: current production part */
+
+static uint16_t cfg_off(void)     { return (s_addrw == 2) ? EEPROM_OFF_2B  : EEPROM_OFF_1B; }
+static uint16_t scratch_off(void) { return (s_addrw == 2) ? SCRATCH_OFF_2B : SCRATCH_OFF_1B; }
 
 static op_config_t s_cfg;
 
@@ -122,45 +130,57 @@ static int eeprom_read(uint16_t off, uint8_t *data, uint16_t n)
     return i2c_xfer(EEPROM_I2C_ADDR, pfx, plen, data, n);
 }
 
-/* Try to read the config under a given addressing width. Returns 1 and loads
- * it into s_cfg if the magic matches (i.e. this width is the part's native
- * scheme for the existing data). A round-trip probe CANNOT distinguish the two
- * schemes — a write+read is self-consistent under either — so the magic field
- * is the external reference that disambiguates them. */
-static int try_width_magic(uint8_t addrw)
+/* Try to read the config under a given addressing width + offset. Returns 1
+ * and loads it into s_cfg if the magic matches. A write+read round-trip cannot
+ * tell 1-byte from 2-byte addressing (self-consistent either way), so magic
+ * is the external reference. */
+static int try_magic(uint8_t addrw, uint16_t off)
 {
     uint8_t old = s_addrw;
     s_addrw = addrw;
     op_config_t tmp;
-    int ok = (eeprom_read(EEPROM_ADDR, (uint8_t*)&tmp, sizeof(tmp)) == 0 &&
+    int ok = (eeprom_read(off, (uint8_t*)&tmp, sizeof(tmp)) == 0 &&
               tmp.magic == CFG_MAGIC);
     if (ok) {
         s_cfg = tmp;
-        if (s_cfg.density < 1 || s_cfg.density > 16) s_cfg.density = 8;
+        if (s_cfg.density > 16) s_cfg.density = 8;
     }
     s_addrw = old;
     return ok;
 }
 
+static int persist_and_verify(void)
+{
+    if (eeprom_write(cfg_off(), (const uint8_t*)&s_cfg, sizeof(op_config_t)) != 0)
+        return 0;
+    op_config_t tmp;
+    if (eeprom_read(cfg_off(), (uint8_t*)&tmp, sizeof(tmp)) != 0)
+        return 0;
+    return tmp.magic == CFG_MAGIC;
+}
+
 void store_load(void)
 {
-    /* Disambiguate the addressing width using the magic field as the external
-     * reference. Try each scheme; a valid config under one pins the width. */
-    if (try_width_magic(2)) return;   /* BL24C128A, 16 KB, 2-byte (rev H/I/K) */
-    if (try_width_magic(1)) return;   /* 24C02 / AT24C0x, 256 B, 1-byte (rev E) */
+    /* Prefer current-production 2-byte at 0x100, then legacy 2-byte at 0,
+     * then 1-byte at 0 (Rev E). */
+    if (try_magic(2, EEPROM_OFF_2B)) { s_addrw = 2; return; }
+    if (try_magic(2, EEPROM_OFF_1B)) { s_addrw = 2; return; }
+    if (try_magic(1, EEPROM_OFF_1B)) { s_addrw = 1; return; }
 
-    /* First boot / factory: no valid config under either scheme. Default to the
-     * current-production part (2-byte, BL24C128A) and persist immediately so the
-     * width is pinned from boot 1 — a board whose part differs simply won't
-     * round-trip its magic next boot and re-selects the other scheme then. */
-    s_addrw = 2;
     defaults();
-    store_save();
+    s_addrw = 2;
+    if (persist_and_verify()) return;
+    s_addrw = 1;
+    if (persist_and_verify()) return;
+    /* WP asserted, missing EEPROM, or wrong I2C pins: keep RAM defaults. */
+    s_addrw = 2;
 }
 
 int store_save(void)
 {
-    return eeprom_write(EEPROM_ADDR, (const uint8_t*)&s_cfg, sizeof(op_config_t));
+    if (eeprom_write(cfg_off(), (const uint8_t*)&s_cfg, sizeof(op_config_t)) != 0)
+        return -1;
+    return 0;
 }
 
 /* Self-test: write a known pattern to the scratch area and read it back.
@@ -169,9 +189,9 @@ int store_save(void)
 int store_selftest(void)
 {
     const uint8_t pattern[4] = { 0xA5, 0x5A, 0xC3, 0x3C };
-    if (eeprom_write(SCRATCH_OFF, pattern, 4) != 0) return 0;
+    if (eeprom_write(scratch_off(), pattern, 4) != 0) return 0;
     uint8_t r[4];
-    if (eeprom_read(SCRATCH_OFF, r, 4) != 0) return 0;
+    if (eeprom_read(scratch_off(), r, 4) != 0) return 0;
     for (int i = 0; i < 4; i++) if (r[i] != pattern[i]) return 0;
     return 1;
 }

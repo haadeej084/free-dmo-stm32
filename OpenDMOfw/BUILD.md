@@ -58,8 +58,13 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
   -c "program build/OP104/opendmo-OP104.bin 0x08000000 verify reset exit"
 ```
 
-> **Note on RDP:** a factory device may be read-out protected (RDP). Flashing
-> requires an MCU you are allowed to write to; lowering RDP erases the flash.
+> **RDP Level 2 on stock printers:** SWD and the system bootloader are off.
+> Lowering RDP mass-erases flash. Flash this image only onto an F072 that is
+> already programmable. The firmware does **not** write option bytes (it will
+> not set RDP1 or RDP2).
+>
+> Linker script: `linker/stm32f072xb.ld` (128 KB flash / 16 KB RAM — the **B**
+> density of F072CBT6; `x8` would be the 64 KB part).
 
 ## Testing enumeration (no head connected)
 

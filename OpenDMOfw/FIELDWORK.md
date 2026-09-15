@@ -7,6 +7,10 @@ genuine LabelWriter 550/5XL mainboard (STM32F072CBT6). Everything listed below i
 currently an *assumption* in `src/pins.h` / `store.c`; measure it, patch the values,
 and the firmware is finished.
 
+**Flashing a factory board:** the stock F072 is **RDP Level 2**. SWD is off until
+RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
+printer. A 550 build is `make MODEL=OP57` (PID `0x0028`); the default `make` is 5XL.
+
 ## How to report — email your findings
 
 📧 **opendymofw@secret.fyi** (active for ~1 month from posting)
@@ -62,6 +66,9 @@ routing (in `src/pins.h`) is:
 | Motor B2   | PB7 | 43 | same |
 | Thermistor | PA1 | 11 | is the NTC divider on pad 11? (ADC_IN1) |
 | Paper sensor | PA0 | 10 | is the paper sensor on pad 10? digital or analog? |
+| Head VH enable | PA8 | 29 | which pad gates the 24 V P-MOS / load switch? polarity? |
+| Status LED | PA2 | 12 | follow the LED (PC6/PC7 are not bonded on LQFP48) |
+| Button | PA3 | 13 | follow the feed/power button |
 | I2C SCL    | PB8 | 45 | confirm PB8 vs PB6 (SCL); trace EEPROM SCL |
 | I2C SDA    | PB9 | 46 | confirm PB9 vs PB7 (SDA); trace EEPROM SDA |
 
@@ -85,15 +92,19 @@ full map.
 4. **Thermistor divider** — find the pull resistor R_p next to the NTC and its direction
    (pull-up vs pull-down). One ADC reading at a known temperature (25 °C ≈ 30 kΩ) pins
    both R_p and `THERMAL_HOTTER_IS_HIGHER` in `thermal.c`.
-5. **VH voltage** — confirm the head heat supply is 24 V (assumed, via a P-MOS/load
-   switch from the 24 V brick).
-6. **EEPROM** — confirm it's a **BL24C128A @ 0x50** (rev K board), check the WP pin state,
-   and verify writes are accepted (the `GS D 0x03` self-test does a write+read round-trip).
+5. **VH voltage + enable** — confirm the head heat supply is 24 V (assumed, via a
+   P-MOS/load switch from the 24 V brick) and **which MCU pad drives that switch**.
+   Without the enable pin, strobes fire with VH off.
+6. **EEPROM** — confirm it's a **BL24C128A @ 0x50** (rev K board), check whether WP
+   (pin 7) is tied to VCC or GND. If WP is high, `store_save()` cannot persist;
+   `GS D 0x03` reports the mismatch and config stays in RAM.
 
 ## On-board bring-up (safe order)
 
-1. Flash over SWD with the **head connector disconnected**; confirm it enumerates as
-   `0922:002a` (5XL) / `0922:0028` (550).
+1. Only on an F072 that is **already writable** (not stock RDP2): flash over SWD
+   with the **head connector disconnected**; confirm it enumerates as
+   `0922:002a` (5XL, default `make`) / `0922:0028` (550, `make MODEL=OP57`).
+
 2. Scope the CLK/DI/LAT/STB lines during a test job; confirm the `pins.h` mapping + STB
    polarity; correct as needed.
 3. Check the thermistor divider direction + ADC thresholds against the 30 kΩ/B3950 curve.

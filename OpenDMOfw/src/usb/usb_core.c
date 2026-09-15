@@ -11,6 +11,7 @@
 #include "usb_core.h"
 #include "../mcu.h"
 #include "../system.h"
+#include "../pins.h"
 
 /* ---- PMA (1:1 access on F0x2) ------------------------------------------- */
 #define PMA ((volatile uint16_t*)USB_PMA_BASE)
@@ -46,23 +47,18 @@ static void pma_read(uint16_t off, uint8_t *dst, uint16_t n)
     }
 }
 
-/* ---- EPnR helpers (rc_w0 CTR-bits + toggle STAT/DTOG) -------------------
+/* ---- EPnR helpers (RM0091: mixed R/W, rc_w0 CTR, toggle STAT/DTOG) ------
  *
- * The EPR register mixes three kinds of bit:
- *   - normal R/W : EA(3:0), STAT_TX(5:4), KIND(8), TYPE(10:9), SETUP(11), STAT_RX(13:12)
- *   - write-1-to-clear (rc_w0): CTR_TX(7), CTR_RX(15)  -- writing 0 leaves them alone
- *   - toggle     : DTOG_TX(6), DTOG_RX(14)             -- only a written 1 changes them
+ *   R/W     : EA(3:0), KIND(8), TYPE(10:9), SETUP(11)
+ *   rc_w0   : CTR_TX(7), CTR_RX(15)  -- write 0 clears, write 1 is a no-op
+ *   toggle  : STAT_TX(5:4), DTOG_TX(6), STAT_RX(13:12), DTOG_RX(14)
+ *             -- write 1 flips, write 0 leaves unchanged
  *
- * So to change ONLY the two STAT bits of one direction we must: keep every normal
- * R/W bit, and write 0 to all the W1C/toggle bits (which is a no-op for them).
- * That is exactly what TinyUSB's fsdev_common.h does -- ep_change_status() XORs the
- * new value into the STAT field and ep_write() masks with U_EPREG_MASK, never
- * disturbing the other direction's STAT or the hardware-maintained DTOG bits.
- * (Masking with EPREG_MASK|STAT_x here would silently clear the OTHER direction's
- * STAT to DISABLED -- e.g. after SET_CONFIGURATION the bulk OUT endpoint would be
- * left disabled and could never receive print data.)
+ * Keep-mask is TinyUSB U_EPREG_MASK: copy R/W + CTR (write 1 preserves CTR),
+ * leave STAT/DTOG 0 unless we XOR the bits we intend to toggle. Writing the
+ * current STAT value as if it were R/W would toggle it (VALID->DISABLED).
  */
-#define EP_NORM_MASK 0x0F3Fu   /* EA | STAT_TX | KIND | TYPE | SETUP : normal R/W bits to keep */
+#define EP_KEEP 0x8F8Fu   /* CTR_RX | SETUP | TYPE | KIND | CTR_TX | EA */
 
 /* Read-modify-write of EPR must be atomic against the USB IRQ. But these helpers
  * run from BOTH the main loop and inside USB_IRQHandler -- a blind `cpsie i` would
@@ -84,35 +80,39 @@ static void ep_set_rx_stat(int n, uint16_t stat /*already in bit12:13*/)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (v & EP_NORM_MASK) | (stat & USB_EP_STAT_RX);
+    uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
+    wr ^= (uint16_t)((v & USB_EP_STAT_RX) ^ (stat & USB_EP_STAT_RX));
+    USB->EPR[n] = wr;
     ep_crit_exit(pm);
 }
 static void ep_set_tx_stat(int n, uint16_t stat /*already in bit4:5*/)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (v & EP_NORM_MASK) | (stat & USB_EP_STAT_TX);
+    uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
+    wr ^= (uint16_t)((v & USB_EP_STAT_TX) ^ (stat & USB_EP_STAT_TX));
+    USB->EPR[n] = wr;
     ep_crit_exit(pm);
 }
 static void ep_clear_ctr_rx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (v & EP_NORM_MASK) | USB_EP_CTR_RX;   /* write-1-to-clear CTR_RX only */
+    USB->EPR[n] = (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_RX) | USB_EP_CTR_TX);
     ep_crit_exit(pm);
 }
 static void ep_clear_ctr_tx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (v & EP_NORM_MASK) | USB_EP_CTR_TX;   /* write-1-to-clear CTR_TX only */
+    USB->EPR[n] = (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_TX) | USB_EP_CTR_RX);
     ep_crit_exit(pm);
 }
 static void ep_init(int n, uint16_t type, uint16_t ea)
 {
-    /* fresh endpoint: STAT/DTOG = 0, CTR-bits cleared (write 1). */
+    /* Fresh endpoint: STAT/DTOG = 0 (write 0 = no toggle from reset 0), CTR cleared. */
     uint32_t pm = ep_crit_enter();
-    USB->EPR[n] = (type & USB_EP_TYPE) | (ea & USB_EP_EA) | USB_EP_CTR_RX | USB_EP_CTR_TX;
+    USB->EPR[n] = (type & USB_EP_TYPE) | (ea & USB_EP_EA);
     ep_crit_exit(pm);
 }
 
@@ -136,16 +136,20 @@ static void ep_dtog_clear_tx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
+    uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     if (v & USB_EP_DTOG_TX)
-        USB->EPR[n] = (v & EP_NORM_MASK) | USB_EP_DTOG_TX;
+        wr |= USB_EP_DTOG_TX;          /* write 1 toggles DTOG_TX back to 0 */
+    USB->EPR[n] = wr;
     ep_crit_exit(pm);
 }
 static void ep_dtog_clear_rx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
+    uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     if (v & USB_EP_DTOG_RX)
-        USB->EPR[n] = (v & EP_NORM_MASK) | USB_EP_DTOG_RX;
+        wr |= USB_EP_DTOG_RX;
+    USB->EPR[n] = wr;
     ep_crit_exit(pm);
 }
 
@@ -366,6 +370,11 @@ void USB_IRQHandler(void)
 void usb_init(void)
 {
     RCC->APB1ENR |= RCC_APB1ENR_USBEN;
+
+    /* PA11/PA12 = USB_DM/DP, AF2, high speed (DocID025004 Table 14). */
+    gpio_af((pin_t){GPIOA, 11}, 2);
+    gpio_af((pin_t){GPIOA, 12}, 2);
+    GPIOA->OSPEEDR |= (3u << (11 * 2)) | (3u << (12 * 2));
 
     USB->CNTR = USB_CNTR_FRES;      /* force reset */
     delay_us(2);

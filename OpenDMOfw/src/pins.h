@@ -75,9 +75,18 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 #define PAPER_PRESENT_LEVEL 0                       /* active-low               */
 #define ADC_HEAD_TEMP_CH    1                       /* PA1 = ADC_IN1 (thermistor)*/
 
-/* ---- UI ----------------------------------------------------------------- */
-#define PIN_LED             ((pin_t){GPIOC, 6})
-#define PIN_BUTTON          ((pin_t){GPIOC, 7})
+/* Head heat supply enable (P-MOS / load switch on the 24 V VH rail).
+ * ASSUMED pin and polarity — LQFP48 has no spare Port-C pins for this.
+ * P-MOS gate is typically active-low (Low = VH on). Verify on the board. */
+#define PIN_HEAD_VH         ((pin_t){GPIOA, 8})
+#define HEAD_VH_ON_LEVEL    0
+
+/* ---- UI -----------------------------------------------------------------
+ * F072CBT6 LQFP48 bonds only PC13/PC14/PC15 on port C. PC6/PC7 exist on the
+ * LQFP64 (F072RB) only — do not use them here. PA2/PA3 are unused in the
+ * assumed head/motor map (pads 12/13). */
+#define PIN_LED             ((pin_t){GPIOA, 2})
+#define PIN_BUTTON          ((pin_t){GPIOA, 3})
 #define BUTTON_PRESSED_LEVEL 0
 
 /* ---- I2C config-EEPROM (24Cxx) ------------------------------------------ *

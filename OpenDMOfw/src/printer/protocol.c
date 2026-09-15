@@ -326,7 +326,7 @@ static void send_version(void)
  *   0x04      diagnostic snapshot -> thermistor, GPIOs, config, model
  * Every reply starts with 'D' so the host can tell it apart from a status struct.
  * These exist so the physical layer (head/motor/EEPROM/thermistor) can be verified
- * on hardware without a full print job - see DECISIONS.md D8 / PROGRESS.md R2-R6. */
+ * on hardware without a full print job - see DECISIONS.md D8 / D15. */
 static void diagnose(uint8_t sub, uint8_t arg)
 {
     const op_config_t *c = store_get();
@@ -381,6 +381,7 @@ static void factory_reset(void)
     cfg->sku[i] = 0;
     cfg->label_count = MODEL_DEFAULT_COUNT;
     cfg->density = 8;
+    cfg->flags = OP_FLAG_PAPER_FORCE;
     store_save();
     set_density(100);
 }

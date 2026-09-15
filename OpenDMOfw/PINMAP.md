@@ -1,4 +1,4 @@
-# PINMAP — OpenDMOfw (STM32F072x8)
+# PINMAP — OpenDMOfw (STM32F072xB / CBT6, 128 K)
 
 All pins live in **one editable table**: `src/pins.h`. This file records the
 reasoning and the **confidence** per choice.
@@ -67,9 +67,10 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   are not in the TRM — count them by scoping the phase pins during one ESC D line.
 - **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
-- **FCC RGDLW550 internal photos** are too low-res to read IC markings; the
-  circuit diagram is confidential. A higher-res board photo (or the physical
-  board) is needed for the F072 variant, motor-IC PN and GPIO map.
+- **FCC RGDLW550 internal photos** are too low-res for GPIO traces; the circuit
+  diagram is confidential. MCU marking **STM32F072CBT6** is confirmed on Rev E
+  and Rev K board photos (see below). Motor-IC PN and GPIO routing still need
+  a probe.
 
 ## Confirmed from a rev E board photo
 
@@ -91,8 +92,10 @@ This confirms the **two-EEPROM model**:
 
 `store.c` detects the scheme at init using the config magic as the external
 reference (a round-trip probe can't tell them apart — it's self-consistent under
-either), so one firmware works on both revisions. The MCU is confirmed as
-**F072CB** (LQFP48), which bounds the pin map to that package's pinout.
+either). First boot writes and **reads the magic back**; if 2-byte fails it
+retries 1-byte; if both fail, config stays in RAM (WP high / missing EEPROM).
+The MCU is confirmed as **F072CB** (LQFP48), which bounds the pin map to that
+package's pinout. PC6/PC7 are **not bonded** on LQFP48.
 
 **WP note (rev H/I/K):** the WP pins are tied by a solder blob on the board — a
 hardware configuration our firmware does not control. If that tie write-protects
@@ -164,8 +167,8 @@ Table 13** ("STM32F072xx pin definitions"):
 | 9   | VDDA           | analog supply                                |
 | 10  | PA0-WKUP       | **paper sensor**                             |
 | 11  | PA1            | **head thermistor (ADC_IN1)**                |
-| 12  | PA2            | —                                            |
-| 13  | PA3            | —                                            |
+| 12  | PA2            | **status LED**                               |
+| 13  | PA3            | **button**                                   |
 | 14  | PA4            | **head LATCH**                               |
 | 15  | PA5            | **head CLK** (JTDO by default)               |
 | 16  | PA6            | **head DI1**                                 |
@@ -181,7 +184,7 @@ Table 13** ("STM32F072xx pin definitions"):
 | 26  | PB13           | —                                            |
 | 27  | PB14           | —                                            |
 | 28  | PB15           | —                                            |
-| 29  | PA8            | —                                            |
+| 29  | PA8            | **head VH enable** (P-MOS, assumed active-low) |
 | 30  | PA9            | —                                            |
 | 31  | PA10           | —                                            |
 | 32  | PA11           | **USB DM** (fixed)                           |
@@ -229,8 +232,9 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Motor 4-phase A1..B2 | PB4/5/6/7   | GPIO                    | low        | Only for direct phase drive (`MOTOR_DRIVE_4PHASE`) |
 | I2C SCL            | PB8           | I2C1_SCL (AF2)          | medium     | I2C1 is AF2 and exists only on PB6 or PB8 (datasheet Table 14). Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
 | I2C SDA            | PB9           | I2C1_SDA (AF2)          | medium     | valid only on PB7 or PB9 (Table 14); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |
-| Status LED         | PC6           | GPIO                    | low        | Follow the LED trace |
-| Button (feed/power)| PC7           | GPIO in, pull-up        | low        | Follow the button trace |
+| Head VH enable     | PA8           | GPIO, assumed active-low P-MOS | low | Trace the 24 V load-switch gate |
+| Status LED         | PA2           | GPIO                    | low        | Follow the LED (not PC6 — unbonded on LQFP48) |
+| Button (feed/power)| PA3           | GPIO in, pull-up        | low        | Follow the button (not PC7 — unbonded on LQFP48) |
 | USB D+/D-          | PA12 / PA11   | fixed (USB peripheral)  | high       | Fixed on the F0; internal pull-up via `USB->BCDR` |
 
 ## Head geometry (per model, in `src/model.h`)
@@ -252,8 +256,9 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 
 ## Bring-up order (safe)
 
-1. **Head connector disconnected.** Flash, confirm the MCU boots and enumerates as a
-   USB printer (`lsusb` shows `0922:002a` for 5XL / `0922:0028` for 550).
+1. **Writable F072 only** (stock chips are RDP2). Head connector disconnected.
+   Flash, confirm the MCU boots and enumerates as a USB printer (`lsusb` shows
+   `0922:002a` for 5XL / `0922:0028` for 550, `make MODEL=OP57`).
 2. Scope the CLK/DI1/DI2/LAT/STB lines during a test print job; confirm the
    mapping in `pins.h` is right (and the STB polarity). Correct as needed.
 3. Check the **thermistor divider direction** (`THERMAL_HOTTER_IS_HIGHER` in

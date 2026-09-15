@@ -159,7 +159,7 @@ The stock host never sends `GS D`, so this cannot collide with the genuine proto
 |-----|-----|--------|-------------|
 | `0x01` | n | Strobe the head n all-on lines at max density, then restore | 4 B: `'D' sub n thermal_ok` |
 | `0x02` | n | Step the feed motor n dot-lines | 3 B: `'D' sub n` |
-| `0x03` | – | EEPROM write/read self-test (scratch area @ offset 64) | 3 B: `'D' sub match(1/0)` |
+| `0x03` | – | EEPROM write/read self-test (scratch: 2-byte `@0x140`, 1-byte `@0x40`) | 3 B: `'D' sub match(1/0)` |
 | `0x04` | – | Diagnostic snapshot | 24 B (below) |
 
 Snapshot (24 B): `[0]'D' [1]sub [2]model id (PID low) [3-4]thermistor raw u16 BE

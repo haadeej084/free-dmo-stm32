@@ -45,9 +45,9 @@ tag / DRM / authentication.
 
 ## Remaining: hardware bring-up (cannot be done in software; needs a board)
 
-GPIO pin routing, LATCH/STROBE polarity/timing, heat-segment count, dwell/density
-calibration, motor steps/line, I2C TIMINGR + EEPROM page size, thermistor
-direction/curve, and USB PMA/EP verification on silicon — per point in `PINMAP.md` /
-`DECISIONS.md`. The software is complete and flashable for both printers; the `GS D`
-diagnostic backdoor reports the raw values to tune against on the board. See
-`FIELDWORK.md` for exactly what to measure.
+GPIO pin routing (including VH enable), LATCH/STROBE polarity/timing, heat-segment
+count, dwell/density calibration, motor steps/line, I2C TIMINGR + EEPROM WP,
+thermistor direction/curve, and USB PMA/EP verification on silicon — per point in
+`PINMAP.md` / `DECISIONS.md`. Stock F072 parts are RDP2 and cannot be flashed over
+SWD until RDP is lowered. The `GS D` diagnostic backdoor reports the raw values to
+tune against on the board. See `FIELDWORK.md` for exactly what to measure.

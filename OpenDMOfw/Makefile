@@ -47,7 +47,7 @@ CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
   -Wall -Wextra -Wno-unused-parameter \
   -fno-common $(MODELDEF) $(INC)
 
-LDSCRIPT := linker/stm32f072x8.ld
+LDSCRIPT := linker/stm32f072xb.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \
   -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
 

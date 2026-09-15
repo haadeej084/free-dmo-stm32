@@ -66,17 +66,27 @@ dmo [patch|restore|set <SKU> <count>|insert [SKU]|reset|off|show|list|watch [ms]
   D.MO Connect re-extracts its DLLs on start/update, so watch mode is what keeps the patch alive.
 - `show` / `list` — status of found DLLs and the flag; known SKUs.
 
-## Which board needs what
+## Which path needs what
 
-| Board | Printer side (OpenDMOfw) | PC side (this tool) |
-|-------|--------------------------|---------------------|
+Two printer-side approaches live in this repo. Do not mix the tables.
+
+**OpenDMOfw** (this tree: replace the F072 image once the chip is writable) reports a
+catalog SKU + count itself (`MainBayStatus = 8`). With the compiled defaults
+(`30387` / `S0904980`) D.MO Connect usually accepts the roll **without** this
+patch. Use the patch if Connect still shows JOKER/empty, or if you want a SKU
+that is not in the catalog (patch A/B/D).
+
+**Bluepill I2C tag emulator** (`free-dmo-stm32` proper, stock F072 left in place):
+
+| Board | Printer side (Bluepill emu) | PC side (this tool) |
+|-------|-----------------------------|---------------------|
 | Rev E | tag emulation | not needed |
 | Rev H | tag emulation + WP blob | not needed |
 | Rev I | bluepill emu (v1.1.1) [+ WP blob] | **IL injection is the load-bearing piece** — the printer accepts the tag but conveys no usable SKU, so the empty-SKU fill-in completes the job |
 | Rev K | tag emulation + learn step + WP blob | optional (fixes the "JOKER" roll display) |
 
-Note: IL injection alone (without the printer-side emulation) does not work — the tag-presence
-check is enforced in the printer's own MCU firmware, not in D.MO Connect.
+IL injection alone (without a printer that reports a valid bay/SKU) does not work —
+the tag-presence check is enforced in the printer's own MCU firmware, not in D.MO Connect.
 
 ## Building from source
 

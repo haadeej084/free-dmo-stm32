@@ -61,9 +61,11 @@ static uint8_t str_serial[26];
 void usb_desc_init_serial(void)
 {
     volatile uint32_t *uid = (volatile uint32_t*)UID_BASE;
+    /* 96-bit UID is three words at 0x1FFFF7AC; do not read uid[3]. */
     uint32_t x = uid[0] ^ uid[1] ^ uid[2];
-    /* 12 digits from the low 48 bits, biased away from a leading zero. */
-    uint64_t v = ((uint64_t)(x ^ 0xA5A5A5A5u) << 16 | (uint64_t)(uid[3] & 0xFFFF));
+    /* 12 digits from the 96-bit UID, biased away from a leading zero. */
+    uint64_t v = ((uint64_t)(x ^ 0xA5A5A5A5u) << 16) |
+                 (uint64_t)((uid[2] >> 16) & 0xFFFFu);
     v %= 900000000000ULL;              /* keep to 12 digits, no leading zero */
     v += 100000000000ULL;
     str_serial[0] = 26; str_serial[1] = 3;

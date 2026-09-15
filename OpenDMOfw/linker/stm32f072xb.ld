@@ -1,5 +1,6 @@
-/* STM32F072x8 : 128 KB flash @ 0x08000000, 16 KB SRAM @ 0x20000000.
-   Cortex-M0, main stack at the top of SRAM. */
+/* STM32F072xB (CBT6): 128 KB flash @ 0x08000000, 16 KB SRAM @ 0x20000000.
+   Cortex-M0, main stack at the top of SRAM.
+   (x8 is the 64 KB part; do not use that name for this 128 KB layout.) */
 
 ENTRY(Reset_Handler)
 

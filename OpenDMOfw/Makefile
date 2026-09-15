@@ -1,12 +1,19 @@
 # OpenDMOfw - firmware build
 # Toolchain: arm-none-eabi-gcc (bare-metal, no vendor-SDK needed).
-# Output: build/<MODEL>/opendmo-<MODEL>.{elf,bin} (flash via SWD).
+# Output: build/OP104/opendmo-OP104.* (default) or build/OP57/opendmo-OP57.*.
 
-# MODEL: OP104 (default, 4"/300dpi) or OP57 (57 mm). Build the small one with:
+# Default build = OP104 (5XL, 4"/300 dpi), plain `make`. Build the 57 mm
+# (550) variant with:
 #   make MODEL=OP57
-MODEL    ?= OP104
-TARGET   := opendmo-$(MODEL)
-BUILD    := build/$(MODEL)
+ifeq ($(MODEL),OP57)
+TARGET   := opendmo-OP57
+BUILD    := build/OP57
+MODELDEF := -DMODEL_OP57
+else
+TARGET   := opendmo-OP104
+BUILD    := build/OP104
+MODELDEF :=
+endif
 
 CROSS    := arm-none-eabi-
 CC       := $(CROSS)gcc
@@ -38,7 +45,7 @@ OBJ := $(patsubst %.c,$(BUILD)/%.o,$(SRC))
 CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra -Wno-unused-parameter \
-  -fno-common -DMODEL_$(MODEL) $(INC)
+  -fno-common $(MODELDEF) $(INC)
 
 LDSCRIPT := linker/stm32f072x8.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \

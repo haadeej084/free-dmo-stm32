@@ -44,8 +44,9 @@ build_model() {
   arm-none-eabi-size "$BUILD/$TARGET.elf"
 }
 
-case "${1:-all}" in
+MODEL_ARG="${1:-OP104}"
+case "$MODEL_ARG" in
   all) build_model OP104; build_model OP57 ;;
-  *)   build_model "$1" ;;
+  *)   build_model "$MODEL_ARG" ;;
 esac
 echo "done."

@@ -1,4 +1,4 @@
-# DECISIONS — OpenDMO-FW
+# DECISIONS — OpenDMOfw
 
 Design choices where the spec was silent or an explicit trade-off was needed.
 Per point: choice + reason + how to reverse it. **Ground rule:** every wire value
@@ -6,19 +6,19 @@ is sourced from a public document (the tech reference, the driver GPDs, the
 decompiled host) and cited in-code; anything not sourceable is listed under
 **Assumptions** as "verify on hardware", never a silent guess.
 
-## D1 — Scope: clone the genuine Dymo device
+## D1 — Scope: clone the genuine D.mo device
 
-OpenDMO-FW **deliberately clones** the genuine LabelWriter 550/5XL: real USB
+OpenDMOfw **deliberately clones** the genuine LabelWriter 550/5XL: real USB
 identity, real wire protocol, real roll-state semantics. The goal is for stock
-DYMO Connect to enumerate and drive the device unchanged, so any physical roll
+D.MO Connect to enumerate and drive the device unchanged, so any physical roll
 prints. (To make the *stock host* accept the printer, the host must see a genuine
-Dymo on the wire.)
+D.mo on the wire.)
 
-## D2 — USB identity: genuine Dymo VID 0x0922 + per-model PID
+## D2 — USB identity: genuine D.mo VID 0x0922 + per-model PID
 
 `src/model.h` / `usb_desc.c` present VID `0x0922`, PID `0x002A` (5XL) /
 `0x0028` (550), `DYMO` / `LabelWriter 5XL|550` strings, and an IEEE-1284 device
-ID whose `MFG`+`MDL` makes Windows derive the exact driver-model match ID Dymo's
+ID whose `MFG`+`MDL` makes Windows derive the exact driver-model match ID D.mo's
 own driver package expects. The serial number is 12 decimal digits from the MCU
 UID (unique per chip). To target a different identity, edit `model.h`.
 
@@ -38,7 +38,7 @@ an integration layer. Downside of an own stack: less proven — see bring-up not
 
 The head is a ROHM KF3002-family module with built-in shift registers, latch
 and heat drivers — confirmed by the public sibling datasheet (KF3002-GL50A) and
-the replacement-head listings that name Dymo's own part (see D16). Host
+the replacement-head listings that name D.mo's own part (see D16). Host
 interface: `CLK` + `DI1`/`DI2` (one data line per half) + `LAT` (Low = THROUGH)
 + `STB1`/`STB2` (heat strobe per half); no MISO. `head.c` bit-bangs these as
 plain GPIOs (no SPI peripheral). If the board turns out to use a different head
@@ -98,12 +98,12 @@ core, protocol, motor, thermics, and config are shared.
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
   compiled + run natively; **37 checks / 23 scenarios, both models**.
-- **Host sender** `tools/opsend.py` — speaks the genuine Dymo protocol via libusb
+- **Host sender** `tools/opsend.py` — speaks the genuine D.mo protocol via libusb
   (test pattern or PNG→raster), byte-matched to the decompiled driver.
 
 ## D11 — Genuine wire protocol
 
-`protocol.c` implements the **real Dymo host protocol**, sourced from the official
+`protocol.c` implements the **real D.mo host protocol**, sourced from the official
 LabelWriter 550 Series Technical Reference Manual and the decompiled stock driver
 (`send_valid_job.py` byte-matches it and printed on a real 550). Key points:
 
@@ -128,7 +128,7 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
 
 - **ESC U CRC:** the 63-byte consumable record carries a CRC16-CCITT over bytes
   8–62 (the SKU + geometry), stored LE at bytes 4–5. The exact polynomial/init is an
-  assumption — DYMO Connect appears to tolerate it, but confirm whether it validates
+  assumption — D.MO Connect appears to tolerate it, but confirm whether it validates
   the CRC.
 - **ESC V version strings:** the 16-char hardware string (`LW5XL-REV.K` / `LW550-REV.K`)
   and firmware string (`FWAP01.02.2112`) are per-model assumptions — the tech ref p.20
@@ -191,7 +191,7 @@ To reverse: delete `diagnose()` and the `S_DIAG_SUB`/`S_DIAG_ARG` states plus th
 
 Sourced identification:
 
-- **57 mm (550 class):** ROHM **SHEC 3C56-9638 / GK11C308 / KF3002-GK11C**, Dymo
+- **57 mm (550 class):** ROHM **SHEC 3C56-9638 / GK11C308 / KF3002-GK11C**, D.mo
   assembly **PRTA05412** — from replacement-head listings for the LabelWriter
   400/400 Turbo/450 Turbo, which share this 57 mm / 672-dot / 300 dpi head (both
   the 450-series and 550-series tech references state 672 dots @ 300 dpi; the 550

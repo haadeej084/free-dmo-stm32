@@ -1,4 +1,4 @@
-/* OpenDMO-FW - system: clock, GPIO helpers, delays. */
+/* OpenDMOfw - system: clock, GPIO helpers, delays. */
 #ifndef OP57_SYSTEM_H
 #define OP57_SYSTEM_H
 

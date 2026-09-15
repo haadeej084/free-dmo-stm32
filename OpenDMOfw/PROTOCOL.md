@@ -1,8 +1,8 @@
-# PROTOCOL — OpenDMO-FW (genuine Dymo LabelWriter 550/5XL wire protocol)
+# PROTOCOL — OpenDMOfw (genuine D.mo LabelWriter 550/5XL wire protocol)
 
-OpenDMO-FW does **not** invent a protocol. It implements the real Dymo host
-protocol exactly as published in Dymo's *LabelWriter 550 Series Printers Technical
-Reference Manual* and as emitted by the decompiled stock driver, so DYMO Connect
+OpenDMOfw does **not** invent a protocol. It implements the real D.mo host
+protocol exactly as published in D.mo's *LabelWriter 550 Series Printers Technical
+Reference Manual* and as emitted by the decompiled stock driver, so D.MO Connect
 (or any host) can drive it unchanged.
 
 The device is a **USB Printer Class** device (interface class 7, subclass 1,
@@ -15,7 +15,7 @@ carries replies (status, SKU record, version).
 
 | Field | 5XL (default, OP104) | 550 (`MODEL=OP57`) |
 |-------|----------------------|--------------------|
-| idVendor | `0x0922` (Dymo) | `0x0922` |
+| idVendor | `0x0922` (D.mo) | `0x0922` |
 | idProduct | `0x002A` | `0x0028` |
 | Manufacturer | `DYMO` | `DYMO` |
 | Product | `LabelWriter 5XL` | `LabelWriter 550` |
@@ -23,7 +23,7 @@ carries replies (status, SKU record, version).
 | IEEE-1284 ID | `MFG:DYMO;MDL:LabelWriter 5XL;CID:DYMOLabelWriter_5XLB;CLS:PRINTER;DES:...` | `...MDL:LabelWriter 550;CID:DYMOLabelWriter_550B;...` |
 
 The `MFG`+`MDL` pair is what makes Windows derive the genuine driver-model match
-ID (`USBPRINT\DYMOLabelWriter_5XLB920` / `...550C80D`) that Dymo's own driver
+ID (`USBPRINT\DYMOLabelWriter_5XLB920` / `...550C80D`) that D.mo's own driver
 package expects. Head widths (1248 / 672 dots) come from the tech reference and
 the driver GPDs' `MaxPrintableWidth`.
 

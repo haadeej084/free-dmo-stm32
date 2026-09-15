@@ -1,9 +1,9 @@
-/* OpenDMO-FW - CENTRAL PIN MAP.
+/* OpenDMOfw - CENTRAL PIN MAP.
  *
  * This is the only place where hardware pins are defined. The head INTERFACE
  * (which signals exist, latch polarity) is sourced from the ROHM KF3002 head
  * datasheet — see the head section below and PINMAP.md. The board-level pin
- * ROUTING (which MCU pin Dymo wired each signal to) is still an ASSUMPTION
+ * ROUTING (which MCU pin D.mo wired each signal to) is still an ASSUMPTION
  * (no board dump was used); adjust once you have measured the board.
  *
  * Notation: {port, pin number}. Port is a GPIO_Type* from mcu.h.
@@ -26,7 +26,7 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 /* ---- Thermal head -------------------------------------------------------- *
  * The head is a ROHM KF3002-family module with BUILT-IN shift registers,
  * latch and heat drivers — the host only feeds serial data and fires strobes:
- *   57 mm (550 class): SHEC 3C56-9638 / GK11C308 / KF3002-GK11C (Dymo assembly
+ *   57 mm (550 class): SHEC 3C56-9638 / GK11C308 / KF3002-GK11C (D.mo assembly
  *                      PRTA05412) — replacement-head listings for the 400/450
  *                      Turbo generation, which shares this head (57 mm, 672
  *                      dots, 300 dpi, per both tech references).
@@ -89,7 +89,7 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * head-strobe (PB0-3) and motor (PB4-7) blocks with no pin conflict; PB6/PB7 is
  * the other valid pair.
  * CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to whichever
- * pair Dymo used, then set these two macros + AF2 in store.c. */
+ * pair D.mo used, then set these two macros + AF2 in store.c. */
 #define PIN_I2C_SCL         ((pin_t){GPIOB, 8})   /* I2C1_SCL AF2            */
 #define PIN_I2C_SDA         ((pin_t){GPIOB, 9})   /* I2C1_SDA AF2            */
 #define EEPROM_I2C_ADDR     0x50                    /* 7-bit                  */

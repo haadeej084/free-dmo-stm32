@@ -7,7 +7,7 @@ using System.Text;
 using Microsoft.Win32;
 using dnlib.DotNet;
 
-namespace DymoPatch
+namespace DmoPatch
 {
     public static class Program
     {
@@ -50,7 +50,7 @@ namespace DymoPatch
                     case "updates": UpdatesBlock(args.Length > 1 ? args[1].ToLowerInvariant() : "status"); break;
                     case "--tray": case "tray": TrayApp.Run(); return 0;
                     default:
-                        Console.WriteLine("usage: dymo [patch|restore|set <SKU> <count>|insert [SKU]|reset|off|show|list|watch [ms]|autostart [on|off|status]|updates [on|off|status]|--tray]");
+                        Console.WriteLine("usage: dmo [patch|restore|set <SKU> <count>|insert [SKU]|reset|off|show|list|watch [ms]|autostart [on|off|status]|updates [on|off|status]|--tray]");
                         return 1;
                 }
             }
@@ -95,8 +95,8 @@ namespace DymoPatch
                 try { PatchDll(live, skus); }
                 catch (Exception ex) { Console.WriteLine("[!] " + live + " :\n" + ex); }
             }
-            Console.WriteLine("Done. Restart DYMO Connect to apply the patch.");
-            Console.WriteLine("Roll switch:  dymo set <SKU> <count>   |   dymo off   (flag: " + FlagPath + ")");
+            Console.WriteLine("Done. Restart D.MO Connect to apply the patch.");
+            Console.WriteLine("Roll switch:  dmo set <SKU> <count>   |   dmo off   (flag: " + FlagPath + ")");
         }
 
         public static void PatchDll(string live, List<string> skus)
@@ -243,7 +243,7 @@ namespace DymoPatch
         public static void Autostart(string mode)
         {
             const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-            const string valueName = "dymo_roll_patch";
+            const string valueName = "dmo_roll_patch";
             string exe = Process.GetCurrentProcess().MainModule.FileName;
             using (var k = Registry.CurrentUser.OpenSubKey(keyPath, true))
             {
@@ -268,7 +268,7 @@ namespace DymoPatch
 
         // ------------------------------------------------------------------ update block (hosts)
         static readonly string[] UpdateDomains = { "dymoreleasecontent.blob.core.windows.net", "printdymolabel.azurewebsites.net" };
-        const string HostsMarker = "# DYMO-UPDATE-BLOCK";
+        const string HostsMarker = "# D.MO-UPDATE-BLOCK";
         public static void UpdatesBlock(string mode)
         {
             string hosts = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "drivers", "etc", "hosts");
@@ -281,12 +281,12 @@ namespace DymoPatch
                     foreach (var d in UpdateDomains) block.Add("127.0.0.1 " + d);
                     lines.AddRange(block);
                     WriteHosts(hosts, lines);
-                    Console.WriteLine("[ok] DYMO update CDNs blocked via hosts file");
+                    Console.WriteLine("[ok] D.MO update CDNs blocked via hosts file");
                     break;
                 case "off":
                     var cur = File.ReadAllLines(hosts).Where(l => !l.Contains(HostsMarker) && !UpdateDomains.Any(d => l.TrimStart().StartsWith("127.0.0.1 " + d))).ToList();
                     WriteHosts(hosts, cur);
-                    Console.WriteLine("[ok] DYMO update block removed");
+                    Console.WriteLine("[ok] D.MO update block removed");
                     break;
                 default:
                     var has = File.Exists(hosts) && File.ReadAllLines(hosts).Any(l => l.Contains(HostsMarker));

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB Printer class requests + data stream coupling.
+/* OpenDMOfw - USB Printer class requests + data stream coupling.
  *
  * Class requests (USB Printer Class 1.1):
  *   0 GET_DEVICE_ID   (bmRequestType 0xA1) -> IEEE-1284 ID with 2-byte length prefix

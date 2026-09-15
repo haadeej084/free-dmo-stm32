@@ -1,9 +1,9 @@
-/* OpenDMO-FW - host wire-protocol parser (byte-driven, resumable state machine).
+/* OpenDMOfw - host wire-protocol parser (byte-driven, resumable state machine).
  *
  * Implements the LabelWriter 550/5XL host protocol exactly as published in the
  * official "LabelWriter 550 Series Printers Technical Reference Manual" (the
  * "tech ref") and as confirmed by the decompiled stock PC-side software
- * (DYMO Connect / port monitor):
+ * (D.MO Connect / port monitor):
  *
  *   ESC s <JobID u32>    start of print job (job ID is echoed in status)
  *   ESC L <len u16>      set maximum label length (dots), used for feed math

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - model selection (width-dependent parameters in one place).
+/* OpenDMOfw - model selection (width-dependent parameters in one place).
  *
  * One codebase, two head widths. The default is the 104 mm (4") class; the
  * 57 mm variant is a build option. Select with a build define:

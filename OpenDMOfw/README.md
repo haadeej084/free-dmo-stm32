@@ -1,4 +1,4 @@
-# OpenDMO-FW
+# OpenDMOfw
 
 > ### ⚠️ Prototype / concept firmware — needs hardware fieldwork
 >
@@ -15,9 +15,9 @@
 > [`FIELDWORK.md`](FIELDWORK.md) lists exactly what to measure — reach out at
 > **opendymofw@secret.fyi**.
 
-Firmware that runs **in place on a genuine Dymo LabelWriter 550 / 5XL mainboard**
+Firmware that runs **in place on a genuine D.mo LabelWriter 550 / 5XL mainboard**
 (STM32F072, flashed over SWD — no new hardware) and makes the printer **print on any
-roll**, by defeating the three layers of Dymo's roll DRM. It is USB-only (the network
+roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only (the network
 "LabelWriter Print Server" coprocessor is out of scope). One codebase builds both models:
 
 | Model | Build | USB PID | Print head | Dots / line |
@@ -27,12 +27,12 @@ roll**, by defeating the three layers of Dymo's roll DRM. It is USB-only (the ne
 
 Both present themselves as the real device — VID `0x0922`, per-model PID, `DYMO` /
 `LabelWriter 5XL|550` strings, and an IEEE-1284 device ID that makes Windows derive the
-exact driver-model match ID Dymo's own driver package expects. A unique serial number is
+exact driver-model match ID D.mo's own driver package expects. A unique serial number is
 taken from the MCU's 96-bit UID.
 
-## What the Dymo DRM actually is
+## What the D.mo DRM actually is
 
-Dymo does not sell cheap rolls; it sells the *lock*. Printing is gated on a genuine Dymo
+D.mo does not sell cheap rolls; it sells the *lock*. Printing is gated on a genuine D.mo
 roll, enforced at **three independent layers**. Remove any one and the printer still
 refuses — so a working bypass must defeat all three:
 
@@ -43,7 +43,7 @@ refuses — so a working bypass must defeat all three:
    (`MainBayStatus = 10`), and the engine will not print. The tech reference is explicit:
    *"the label length is determined by the SKU data found on the NFC Tag."*
 
-2. **PC side (DYMO Connect / `DYMO.LabelAPI.dll`).** Even a printer that reports "roll
+2. **PC side (D.MO Connect / `DYMO.LabelAPI.dll`).** Even a printer that reports "roll
    present" is not enough. The host software validates the reported SKU against an
    embedded catalog, checks `eRollValidity`, and gates printing on a *valid* roll. An
    unknown/empty SKU fails this check on the PC.
@@ -52,21 +52,21 @@ refuses — so a working bypass must defeat all three:
    runs out — or if the tag is a known fake — the roll is rejected. This is what makes
    third-party "refill" rolls stop working.
 
-Practically: the DRM is an **anti-consumer lockout** that forces you to buy Dymo rolls
-(and, on some models, to let Dymo's software decide whether a roll is "real"). It is not
+Practically: the DRM is an **anti-consumer lockout** that forces you to buy D.mo rolls
+(and, on some models, to let D.mo's software decide whether a roll is "real"). It is not
 a security boundary protecting data — it is **anti-consumer DRM packed as "consumer
 convenience"**: useless automatic label recognition.
 
-## How OpenDMO-FW defeats it
+## How OpenDMOfw defeats it
 
-| Layer | What OpenDMO-FW does |
+| Layer | What OpenDMOfw does |
 |-------|---------------------|
-| Printer side | The firmware **clones the genuine Dymo USB identity** and speaks the exact published wire protocol, then reports a **valid, configurable roll state directly** — SKU + count from on-board EEPROM, no NFC tag read. `MainBayStatus` is always reported OK (`8`), never counterfeit. |
-| PC side | The companion tool **`pc-patch/`** patches `DYMO.LabelAPI.dll` (IL injection + catalog/exclusion fixes) so an empty or unknown SKU still resolves to a *valid* roll in DYMO Connect. |
+| Printer side | The firmware **clones the genuine D.mo USB identity** and speaks the exact published wire protocol, then reports a **valid, configurable roll state directly** — SKU + count from on-board EEPROM, no NFC tag read. `MainBayStatus` is always reported OK (`8`), never counterfeit. |
+| PC side | The companion tool **`pc-patch/`** patches `DYMO.LabelAPI.dll` (IL injection + catalog/exclusion fixes) so an empty or unknown SKU still resolves to a *valid* roll in D.MO Connect. |
 | Counter | SKU + label count live in the on-board EEPROM, always reported valid, and **decrement per printed label** like a real roll — so the host sees normal wear instead of an exhausted or fake tag. |
 
-The result: plug in any physical roll (genuine Dymo, third-party, or blank die-cut
-stock), and the printer accepts it, shows a plausible SKU/count in DYMO Connect, and
+The result: plug in any physical roll (genuine D.mo, third-party, or blank die-cut
+stock), and the printer accepts it, shows a plausible SKU/count in D.MO Connect, and
 prints end-to-end.
 
 ## Layout
@@ -74,12 +74,12 @@ prints end-to-end.
 ```
 src/                  firmware (C, hand-rolled USB FS device stack)
   model.h             per-model geometry + USB identity (OP104=5XL default, OP57=550)
-  printer/protocol.c  genuine Dymo wire-protocol parser (see PROTOCOL.md)
+  printer/protocol.c  genuine D.mo wire-protocol parser (see PROTOCOL.md)
   printer/paper.h     paper table from the real driver GPDs (feed pitch + ESC U mm)
   usb/usb_desc.c      USB descriptors: VID/PID/strings/IEEE-1284 device ID
   config/store.c      I2C EEPROM config store (SKU + count), with compiled defaults
 tools/opsend.py       driver-less host sender (libusb) that speaks the real protocol
-pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dymo.ico icon)
+pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico icon)
 test/test_protocol.c  host unit test of the parser (mocked hardware)
 ```
 
@@ -105,7 +105,7 @@ against a board before flashing).
 
 ## Verification criteria
 
-- DYMO Connect enumerates the device as a genuine LabelWriter 550/5XL.
+- D.MO Connect enumerates the device as a genuine LabelWriter 550/5XL.
 - It shows a **valid roll** with the configured SKU and count (no "empty"/"JOKER").
 - A label prints end-to-end from that software — correct size, content, feed.
 - Changing the configured SKU/count (backdoor `GS C` or EEPROM) changes what the host
@@ -118,7 +118,7 @@ against a board before flashing).
 ## Ground rule
 
 Every wire value in the firmware is sourced from a public document — the official
-*LabelWriter 550 Series Printers Technical Reference Manual* (Dymo's published doc),
+*LabelWriter 550 Series Printers Technical Reference Manual* (D.mo's published doc),
 the genuine driver GPDs, and the decompiled stock host — and cited in-code. Anything not
 sourceable is listed as an assumption in `DECISIONS.md` ("verify on hardware"), never a
 silent guess.

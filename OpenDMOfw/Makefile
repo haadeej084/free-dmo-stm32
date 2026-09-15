@@ -1,4 +1,4 @@
-# OpenDMO-FW - firmware build
+# OpenDMOfw - firmware build
 # Toolchain: arm-none-eabi-gcc (bare-metal, no vendor-SDK needed).
 # Output: build/<MODEL>/opendmo-<MODEL>.{elf,bin} (flash via SWD).
 

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - config storage in a 24Cxx I2C EEPROM.
+/* OpenDMOfw - config storage in a 24Cxx I2C EEPROM.
  *
  * Roll state here is PURE configuration: a SKU string + a reported count,
  * freely changeable without re-flashing. No tag, no authentication.

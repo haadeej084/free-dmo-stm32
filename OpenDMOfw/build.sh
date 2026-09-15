@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenDMO-FW - build driver.
+# OpenDMOfw - build driver.
 #
 # This box has no `make`, so this script replicates the Makefile target-for-target
 # (same flags, same object layout) and drives arm-none-eabi-gcc directly.

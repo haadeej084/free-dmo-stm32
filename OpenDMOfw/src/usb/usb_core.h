@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB full-speed device core (STM32F0 USB peripheral). */
+/* OpenDMOfw - USB full-speed device core (STM32F0 USB peripheral). */
 #ifndef OP57_USB_CORE_H
 #define OP57_USB_CORE_H
 

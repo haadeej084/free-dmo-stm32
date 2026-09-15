@@ -4,15 +4,15 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <AssemblyName>dymo</AssemblyName>
-    <RootNamespace>DymoPatch</RootNamespace>
+    <AssemblyName>dmo</AssemblyName>
+    <RootNamespace>DmoPatch</RootNamespace>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
-    <ApplicationIcon>dymo.ico</ApplicationIcon>
+    <ApplicationIcon>dmo.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="dymo.ico" />
+    <EmbeddedResource Include="dmo.ico" />
   </ItemGroup>
 
 </Project>

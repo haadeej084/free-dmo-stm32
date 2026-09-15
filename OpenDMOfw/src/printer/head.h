@@ -1,4 +1,4 @@
-/* OpenDMO-FW - thermal head driver. */
+/* OpenDMOfw - thermal head driver. */
 #ifndef OP57_HEAD_H
 #define OP57_HEAD_H
 #include <stdint.h>

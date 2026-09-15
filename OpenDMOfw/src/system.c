@@ -1,4 +1,4 @@
-/* OpenDMO-FW - clock/GPIO/delay implementation. */
+/* OpenDMOfw - clock/GPIO/delay implementation. */
 #include "system.h"
 
 static volatile uint32_t s_millis;

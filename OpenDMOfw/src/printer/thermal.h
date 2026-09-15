@@ -1,4 +1,4 @@
-/* OpenDMO-FW - head temperature: measurement + limiting. */
+/* OpenDMOfw - head temperature: measurement + limiting. */
 #ifndef OP57_THERMAL_H
 #define OP57_THERMAL_H
 #include <stdint.h>

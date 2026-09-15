@@ -1,4 +1,4 @@
-# FIELDWORK — OpenDMO-FW (what a board owner needs to measure)
+# FIELDWORK — OpenDMOfw (what a board owner needs to measure)
 
 **Status.** The firmware is complete and builds clean for both models
 (`make` → 5XL, `make MODEL=OP57` → 550). Every software-testable layer is done and

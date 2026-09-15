@@ -1,4 +1,4 @@
-# BUILD & FLASH — OpenDMO-FW
+# BUILD & FLASH — OpenDMOfw
 
 ## Requirements
 
@@ -71,9 +71,9 @@ lsusb | grep 0922:0028                     # OP57 / 550
 # device ID (Linux, usblp): the printer returns the IEEE-1284 string via GET_DEVICE_ID
 ```
 
-The genuine Dymo identity is VID `0x0922`; per-model PID `0x002A` (5XL) /
+The genuine D.mo identity is VID `0x0922`; per-model PID `0x002A` (5XL) /
 `0x0028` (550). Windows derives the driver-model match ID from the IEEE-1284
-`MFG`/`MDL` fields, so the stock Dymo driver package binds.
+`MFG`/`MDL` fields, so the stock D.mo driver package binds.
 
 ## Setting config / reading roll status
 
@@ -92,7 +92,7 @@ defaults in `src/config/store.c` apply (per model: 5XL = SKU `S0904980`, count 2
 
 ## Host-side printing without a driver (`tools/opsend.py`)
 
-A small sender that speaks the genuine Dymo wire protocol via libusb — no vendor
+A small sender that speaks the genuine D.mo wire protocol via libusb — no vendor
 driver needed.
 
 ```sh

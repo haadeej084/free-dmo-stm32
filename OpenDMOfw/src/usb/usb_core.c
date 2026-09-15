@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB device core for the STM32F0 USB peripheral.
+/* OpenDMOfw - USB device core for the STM32F0 USB peripheral.
  *
  * Implements: PMA buffer management, EPnR toggle/rc_w0 logic, control transfers
  * (standard requests) and bulk data EPs. Class-specific requests and the

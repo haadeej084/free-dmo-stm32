@@ -1,4 +1,4 @@
-# PINMAP — OpenDMO-FW (STM32F072x8)
+# PINMAP — OpenDMOfw (STM32F072x8)
 
 All pins live in **one editable table**: `src/pins.h`. This file records the
 reasoning and the **confidence** per choice.
@@ -6,17 +6,17 @@ reasoning and the **confidence** per choice.
 > **Status: interface SOURCED, routing ASSUMED.** The head *interface* (which
 > signals exist, latch polarity, thermistor spec) is sourced from the ROHM
 > KF3002 head datasheet — see "Thermal head identification" below. The
-> board-level pin *routing* (which MCU pin Dymo wired each signal to) is still
+> board-level pin *routing* (which MCU pin D.mo wired each signal to) is still
 > an assumption: no board dump was used (the reference MCU is RDP-protected
 > against read-out). Measure each pin before you power the head or motor.
 
 ## Thermal head identification (sourced)
 
-The Dymo LabelWriter 550 series is a refresh of the 450 series (same 57 mm /
+The D.mo LabelWriter 550 series is a refresh of the 450 series (same 57 mm /
 672-dot / 300 dpi head; both tech references agree), and the 5XL continues the
 4XL (101 mm / 1248-dot / 300 dpi).
 
-| Model  | Head (ROHM)                              | Dymo assembly | Source |
+| Model  | Head (ROHM)                              | D.mo assembly | Source |
 |--------|------------------------------------------|---------------|--------|
 | 57 mm  | SHEC 3C56-9638 / GK11C308 / **KF3002-GK11C** | PRTA05412 | Replacement-head listings (eBay/Amazon) for the 400/400 Turbo/450 Turbo, which shares this head |
 | 101 mm | **TE3004-TP1W00A** class (1248 dots @ 300 dpi, 105.706 mm) | — | ROHM official catalog SF2024_EN_Thermal_Printheads.pdf (exact dot count) |
@@ -29,11 +29,11 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
   per half), `VH` (heat supply, 24 V standard for the family), `VDD` (logic,
   3.13–5.25 V), `GND`, `TM` (thermistor). `DO1`/`DO2` are data-out for
   daisy-chaining extra heads — **there is no MISO line**.
-- **Two shift-register halves** (GL50A: 2x320 dots; Dymo 672-dot head: 2x336;
+- **Two shift-register halves** (GL50A: 2x320 dots; D.mo 672-dot head: 2x336;
   1248-dot head: 2x624 unless the board shows 4 heat lines).
 - **LAT polarity: High = HOLD, Low = THROUGH** (active-low latch) — sourced.
 - **Built-in NTC thermistor: 30 kOhm, B = 3950** (equivalent circuit + Fig.5
-  curve) — sourced; the divider topology on the Dymo board is still an
+  curve) — sourced; the divider topology on the D.mo board is still an
   assumption.
 - **Timing:** CLK min period ~100 ns class (bit-banging at a few MHz is far
   inside spec); data "High = BLACK, Low = WHITE".
@@ -113,7 +113,7 @@ photo. `store.c` still auto-detects, but this board's default path is the
 | Component | As marked / seen | Reading | Confidence |
 |-----------|------------------|---------|------------|
 | Main MCU  | **STM32F072CBT6** (readable from two angles; lot `ARM 114928 B02`, `P49 1850 247`) | LQFP48 print-engine MCU — the target part, **confirmed on this board** | high (sourced) |
-| Large square BGA, center-left | **"DYMO"** printed on package, green orientation dot | **Network coprocessor SoC** — the built-in "LabelWriter Print Server" (runs the Linux-style TCP/IP/IPP/SNMP/HTTP OS found in the firmware dump). The 5XL / 550-Turbo have built-in LAN; Dymo's docs put that in a coprocessor. **Out of scope** for our USB-only firmware — ignore it. Part number not readable from the photo. | medium-high (inference) |
+| Large square BGA, center-left | **"DYMO"** printed on package, green orientation dot | **Network coprocessor SoC** — the built-in "LabelWriter Print Server" (runs the Linux-style TCP/IP/IPP/SNMP/HTTP OS found in the firmware dump). The 5XL / 550-Turbo have built-in LAN; D.mo's docs put that in a coprocessor. **Out of scope** for our USB-only firmware — ignore it. Part number not readable from the photo. | medium-high (inference) |
 | Small chip, mid-board | `A8` / `1611` (week-11-2016 date code), swoosh logo | Unidentified — likely a power switch / MOSFET or small driver. Verify on hardware. | low |
 | Small chip, lower-left | `310` / `1735` (week-35-2017 date code), same swoosh logo | Unidentified — likely a power switch / MOSFET or the motor driver. Verify on hardware. | low |
 
@@ -125,8 +125,8 @@ component-location map for the fieldworker.
 
 **Why no photo can supply the GPIO map:** full-res iFixit board photos of the
 450-generation mainboard (a 450 Turbo board swaps into a 550 Turbo, so the family
-is the same) confirm the layout and the Dymo-branded BGA network coprocessor, but —
-critically — **Dymo's silkscreen carries only reference designators** (`U1`, `C4`,
+is the same) confirm the layout and the D.mo-branded BGA network coprocessor, but —
+critically — **D.mo's silkscreen carries only reference designators** (`U1`, `C4`,
 `D1`, `JP2`…), never signal names. So even a perfectly sharp photo cannot tell us
 which F072 pad is CLK vs DI vs STB, or which head-connector pin is which: that
 information is simply not printed on the board. The official LW550 Tech Ref
@@ -151,7 +151,7 @@ numbered counter-clockwise: top edge left→right = 1–12, right edge top→bot
 Complete physical pad → GPIO map, extracted from datasheet **DocID025004 Rev 2,
 Table 13** ("STM32F072xx pin definitions"):
 
-| Pad | Pin            | OpenDMO-FW role (bold = assumed, to confirm) |
+| Pad | Pin            | OpenDMOfw role (bold = assumed, to confirm) |
 |-----|----------------|----------------------------------------------|
 | 1   | VBAT           | battery backup                               |
 | 2   | PC13           | tamper / RTC                                 |

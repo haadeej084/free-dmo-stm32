@@ -1,4 +1,4 @@
-/* OpenDMO-FW - minimal STM32F072 register definitions.
+/* OpenDMOfw - minimal STM32F072 register definitions.
  *
  * Deliberately NOT a full CMSIS/vendor SDK: only the peripheral registers that
  * this firmware actually touches, so the repo builds standalone with a bare

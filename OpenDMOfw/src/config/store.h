@@ -1,4 +1,4 @@
-/* OpenDMO-FW - persistent printer config (I2C EEPROM, with defaults). */
+/* OpenDMOfw - persistent printer config (I2C EEPROM, with defaults). */
 #ifndef OP57_STORE_H
 #define OP57_STORE_H
 #include <stdint.h>

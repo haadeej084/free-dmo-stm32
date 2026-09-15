@@ -1,4 +1,4 @@
-/* OpenDMO-FW - paper-size table (keyed by the ESC L code from the host driver).
+/* OpenDMOfw - paper-size table (keyed by the ESC L code from the host driver).
  *
  * The host driver's DOC_SETUP selects a paper size with  ESC L <lo> <hi>
  * (code = hi<<8|lo, i.e. the two wire bytes read as a big-endian u16, matching
@@ -12,7 +12,7 @@
  * protocol layer.
  *
  * Dimensions are in dots at 300 dpi, taken from the genuine driver GPD files:
- *   5XL : lw4xl.gpd   (DYMO Connect Drivers/DLS)
+ *   5XL : lw4xl.gpd   (D.MO Connect Drivers/DLS)
  *   550 : LW5XX.GPD   (spooler driver store)
  * PageDimensions = PAIR(width_dots, height_dots).
  */

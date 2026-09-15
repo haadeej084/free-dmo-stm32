@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""OpenDMO-FW host-side sender - speaks the genuine Dymo LabelWriter 550/5XL
-wire protocol (per the Dymo tech ref) directly over USB, no vendor driver.
+"""OpenDMOfw host-side sender - speaks the genuine D.mo LabelWriter 550/5XL
+wire protocol (per the D.mo tech ref) directly over USB, no vendor driver.
 
 The command layout byte-matches the decompiled stock driver
 (StartPrintJob / Density / Quality / MediaType / LabelLength / LabelIndex /
@@ -20,7 +20,7 @@ Examples:
 """
 import argparse, sys, time
 
-VID = 0x0922                       # genuine Dymo vendor ID
+VID = 0x0922                       # genuine D.mo vendor ID
 MODELS = {                          # name -> (PID, dots across head, bytes/line)
     "OP104": (0x002A, 1248, 156),   # LabelWriter 5XL  (101 mm head)
     "OP57":  (0x0028,  672,  84),   # LabelWriter 550  (57 mm head)
@@ -206,7 +206,7 @@ def send_job(dev, lines, dots, data, job_id=1, length=0):
 
 # ---- CLI -------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="OpenDMO-FW Dymo wire-protocol sender")
+    ap = argparse.ArgumentParser(description="OpenDMOfw D.mo wire-protocol sender")
     ap.add_argument("--model", choices=MODELS, default="OP104")
     ap.add_argument("--vid", type=lambda s: int(s, 0))
     ap.add_argument("--pid", type=lambda s: int(s, 0))

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - feed stepper.
+/* OpenDMOfw - feed stepper.
  *
  * One raster line = 1/300 inch of paper = 0.08467 mm (550 TRM: 300 dpi in the
  * feed direction). The µsteps per line is set by the drive train:

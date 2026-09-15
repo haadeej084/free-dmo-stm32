@@ -1,11 +1,11 @@
-/* OpenDMO-FW - head thermistor via ADC + safety limiting.
+/* OpenDMOfw - head thermistor via ADC + safety limiting.
  *
  * The head has a BUILT-IN NTC thermistor (TM pin): 30 kOhm, B = 3950 — sourced
  * from the ROHM KF3002-GL50A datasheet (equivalent circuit "THERMISTOR 30k
  * B:3950" + Fig.5 thermistor curve). NTC means hotter = LOWER resistance.
  *
  * ASSUMPTION (verify on hardware, see PINMAP.md / DECISIONS D16): the divider
- * topology on the Dymo board. If the thermistor sits between the ADC pin and
+ * topology on the D.mo board. If the thermistor sits between the ADC pin and
  * GND (pull-up to VDD), hotter = lower voltage = lower ADC value, so set
  * THERMAL_HOTTER_IS_HIGHER 0. If it sits between VDD and the ADC pin
  * (pull-down to GND), hotter = higher ADC value (=1). The limit threshold is

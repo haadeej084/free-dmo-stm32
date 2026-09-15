@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB descriptors (generic, own identity). */
+/* OpenDMOfw - USB descriptors (generic, own identity). */
 #ifndef OP57_USB_DESC_H
 #define OP57_USB_DESC_H
 #include <stdint.h>

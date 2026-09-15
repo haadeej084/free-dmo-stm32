@@ -1,4 +1,4 @@
-/* OpenDMO-FW - feed stepper. */
+/* OpenDMOfw - feed stepper. */
 #ifndef OP57_MOTOR_H
 #define OP57_MOTOR_H
 #include <stdint.h>

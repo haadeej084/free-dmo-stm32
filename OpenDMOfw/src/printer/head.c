@@ -1,4 +1,4 @@
-/* OpenDMO-FW - thermal head driver (ROHM KF3002-family shift-register head).
+/* OpenDMOfw - thermal head driver (ROHM KF3002-family shift-register head).
  *
  * The head module contains its own shift registers, latch and heat drivers
  * (ROHM KF3002-GL50A datasheet, equivalent circuit + timing chart). Per dot
@@ -14,7 +14,7 @@
  * shift-register halves driven in parallel (DI1||DI2), STB polarity
  * (Low = fires the heat driver), built-in NTC thermistor (30 kOhm B=3950 on TM).
  * ASSUMPTIONS (verify on hardware, see PINMAP.md / DECISIONS D16): which MCU
- * pin Dymo wired each signal to, the VH heat-supply voltage on this board, and
+ * pin D.mo wired each signal to, the VH heat-supply voltage on this board, and
  * the base dwell.
  */
 #include "head.h"

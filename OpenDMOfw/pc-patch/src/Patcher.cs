@@ -6,7 +6,7 @@ using System.Text;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 
-namespace DymoPatch
+namespace DmoPatch
 {
     /// Core patching, ported from the proven Python patcher:
     ///   A  catalog: SKU Region -> Global (keep the real paper).
@@ -21,7 +21,7 @@ namespace DymoPatch
     public static class Patcher
     {
         // Flag file read at runtime (per poll) to choose the spoofed roll. Absent -> defaults.
-        public const string FlagFileName = "dymo_roll.flag";
+        public const string FlagFileName = "dmo_roll.flag";
         public const string DefaultSku = "S0904980";   // 104x159mm, biggest 5XL roll
         public const int    DefaultCount = 220;
 
@@ -273,7 +273,7 @@ namespace DymoPatch
 
             body.SimplifyBranches();
 
-            if (Environment.GetEnvironmentVariable("DYMO_DUMPIL") == "1")
+            if (Environment.GetEnvironmentVariable("DMO_DUMPIL") == "1")
             {
                 var insd = body.Instructions;
                 System.Console.WriteLine("=== DUMP MoveNext: MaxStack=" + body.MaxStack + " instrs=" + insd.Count + " ===");

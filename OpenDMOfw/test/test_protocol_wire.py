@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# OpenDMO-FW - wire-protocol verification harness (host, no board needed).
+# OpenDMOfw - wire-protocol verification harness (host, no board needed).
 #
 # The build host has no C compiler and no QEMU, so the firmware's protocol.c
 # cannot be *executed* here. This harness instead transcribes the response

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - startup + vector table (in C, no assembly needed).
+/* OpenDMOfw - startup + vector table (in C, no assembly needed).
  * Copies .data, zeroes .bss, calls SystemInit + main. */
 #include <stdint.h>
 #include "mcu.h"

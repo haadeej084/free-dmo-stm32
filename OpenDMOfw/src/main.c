@@ -1,4 +1,4 @@
-/* OpenDMO-FW - entrypoint.
+/* OpenDMOfw - entrypoint.
  *
  * Initializes all subsystems and runs the main loop. The USB IRQ fills the
  * print-data ring buffer; protocol_task() processes it here synchronously (head + feed

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace DymoPatch
+namespace DmoPatch
 {
     /// System-tray switch: re-applies the patch continuously (watch thread) and offers
     /// Insert new roll / Reset counter / presets / Custom / off / startup / block-updates.
@@ -18,20 +18,20 @@ namespace DymoPatch
 
             // patch now, then keep patched in the background
             try { Program.PatchAll(); } catch (Exception ex) { MessageBox.Show("patch: " + ex.Message); }
-            var watcher = new Thread(() => Program.Watch(500)) { IsBackground = true, Name = "dymo-watch" };
+            var watcher = new Thread(() => Program.Watch(500)) { IsBackground = true, Name = "dmo-watch" };
             watcher.Start();
 
             using (var ni = new NotifyIcon())
             {
                 ni.Icon = LoadAppIcon() ?? SystemIcons.Application;
-                ni.Text = "DYMO roll switch";
+                ni.Text = "D.MO roll switch";
                 ni.Visible = true;
                 ni.ContextMenuStrip = BuildMenu(ni);
                 Application.Run();
             }
         }
 
-        /// Loads the app icon embedded in the assembly (dymo.ico); null on any failure.
+        /// Loads the app icon embedded in the assembly (dmo.ico); null on any failure.
         static Icon LoadAppIcon()
         {
             try
@@ -89,7 +89,7 @@ namespace DymoPatch
                 (s, e) => { Program.Autostart("on"); MessageBox.Show("Startup entry added."); }));
             m.Items.Add(new ToolStripMenuItem("Remove from Windows startup", null,
                 (s, e) => { Program.Autostart("off"); }));
-            m.Items.Add(new ToolStripMenuItem("Block DYMO Connect updates…", null,
+            m.Items.Add(new ToolStripMenuItem("Block D.MO Connect updates…", null,
                 (s, e) => { try { Program.UpdatesBlock("on"); } catch (Exception ex) { MessageBox.Show("Needs admin rights:\n" + ex.Message); } }));
 
             m.Items.Add(new ToolStripSeparator());
@@ -102,9 +102,9 @@ namespace DymoPatch
         static void RefreshStatus(NotifyIcon ni)
         {
             if (Program.ReadFlag(out string sku, out int count))
-                ni.Text = "DYMO roll: " + sku + " / " + count;
+                ni.Text = "D.MO roll: " + sku + " / " + count;
             else
-                ni.Text = "DYMO roll: authentic (off)";
+                ni.Text = "D.MO roll: authentic (off)";
         }
 
         static void CustomInput()
@@ -125,7 +125,7 @@ namespace DymoPatch
             TextBox t1, t2;
             public InputForm(string l1, string l2)
             {
-                Text = "DYMO roll";
+                Text = "D.MO roll";
                 FormBorderStyle = FormBorderStyle.FixedDialog;
                 MaximizeBox = false; MinimizeBox = false;
                 StartPosition = FormStartPosition.CenterScreen;

@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB descriptors.
+/* OpenDMOfw - USB descriptors.
  *
  * IDENTITY (see DECISIONS.md): the device presents itself as the genuine
  * label printer of its class: VID 0x0922, per-model PID, "DYMO" /

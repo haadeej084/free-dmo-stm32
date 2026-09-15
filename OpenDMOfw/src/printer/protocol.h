@@ -1,4 +1,4 @@
-/* OpenDMO-FW - open print protocol (see PROTOCOL.md for the format). */
+/* OpenDMOfw - open print protocol (see PROTOCOL.md for the format). */
 #ifndef OP57_PROTOCOL_H
 #define OP57_PROTOCOL_H
 #include <stdint.h>

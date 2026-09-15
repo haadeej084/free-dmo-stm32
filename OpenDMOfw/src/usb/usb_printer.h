@@ -1,4 +1,4 @@
-/* OpenDMO-FW - USB Printer class layer. */
+/* OpenDMOfw - USB Printer class layer. */
 #ifndef OP57_USB_PRINTER_H
 #define OP57_USB_PRINTER_H
 #include <stdint.h>

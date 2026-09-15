@@ -30,7 +30,7 @@ welcome bonus, but the email report is the essential part.
 
 ## What is ALREADY verified (don't redo these)
 
-- **MCU = STM32F072CBT6**, LQFP48, 128 K flash / 16 K RAM — confirmed on the board.
+- **MCU = STM32F072CBT6**, LQFP48, 128 K flash / 16 K RAM — confirmed on the Rev K motherboard.
 - **Complete physical pin map** (pad → GPIO), extracted from datasheet Table 13 — see
   `PINMAP.md`, section "F072CBT6 LQFP48 physical pin map". Use it to find each pad.
 - **Head interface** = ROHM KF3002-family module: built-in shift registers + latch +

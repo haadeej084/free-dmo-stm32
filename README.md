@@ -4,6 +4,15 @@ Endless freedom for D.MO 550 series label writer printer.
 
 [![Release](https://img.shields.io/github/release/free-dmo/free-dmo-stm32.svg?maxAge=60)](https://github.com/free-dmo/free-dmo-stm32/releases/latest) <== Click here to download
 
+## Also in this repo: OpenDMO-FW (in-place F072 firmware)
+
+A separate, prototype/concept approach lives in [`OpenDMOfw/`](OpenDMOfw/): firmware that
+runs **in place** on the genuine Dymo mainboard (STM32F072, flashed over SWD — no new
+hardware) and prints on any roll. It is software-complete but still needs **hardware
+fieldwork** (GPIO routing, motor steps/line, thermistor divider, STB polarity). If you have
+a LabelWriter 550/5XL and a multimeter, see [`OpenDMOfw/FIELDWORK.md`](OpenDMOfw/FIELDWORK.md)
+— report your findings to **opendymofw@secret.fyi**.
+
 ## Wiring
 
 Components needed:

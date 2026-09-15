@@ -1,0 +1,799 @@
+ 
+  
+ 
+ 
+ 
+LabelWriter® 550 Series Printers  
+Technical Reference Manual 
+for  LabelWriter 550, LabelWriter 550 Turbo , and LabelWriter 5 XL  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+© 2021 Sanford, L.P.  2 
+© 2021 Sanford, L.P. All rights reserved.  
+No part of this document or the software may be reproduced or transmitted in any form or by any 
+means or translated into another language without the prior written consent of Newell Office Brands. 
+DYMO and LabelWriter are registered marks in the US and other countries. All other trademarks are the 
+property of their respective holders. 
+Sanford, L.P. has used reasonable efforts to ensure that the information provided by Sanford, L.P. in this 
+manual is accurate and up to date, but Sanford, L.P. reserves the right to make changes or corrections 
+and does not warrant that any of the information is accurate or complete. Sanford, L.P. hereby disclaims 
+all liability, and makes no warranties (including any implied warranties of merchantability or fitness for a 
+particular purpose), in relation to the manual or the information it contains. Sanford, L.P. provides 
+limited or no support for the activities referenced in this manual. You expressly understand and agree 
+that Sanford, L.P. shall not be liable for any direct, indirect, consequential, incidental, special, punitive or 
+exemplary damages (including but not limited to lost profits, loss of data or damage to hardware or 
+software) arising from your use or inability to use the information in this manual, even if Sanford, L.P. 
+has been informed of the possibility of such damages. 
+  
+© 2021 Sanford, L.P.  3 
+ 
+Contents 
+About the LabelWriter 550 Series Printers ................................................................................................... 4 
+Print Data .................................................................................................................................................. 4 
+Print Job Structure .................................................................................................................................... 4 
+Data Synchronization ................................................................................................................................ 7 
+Label Positioning ....................................................................................................................................... 7 
+Top-of-Form Sync ...................................................................................................................................... 7 
+Label Length .............................................................................................................................................. 7 
+Label-Movement Commands .................................................................................................................... 7 
+Print Status Response ............................................................................................................................... 8 
+Self-Test Capability........................................................................................................................................ 8 
+Print Mode .................................................................................................................................................... 8 
+Low Power Mode .......................................................................................................................................... 9 
+Power Requirements .................................................................................................................................... 9 
+AC Adapter ................................................................................................................................................ 9 
+Connectors ................................................................................................................................................ 9 
+USB Printer Interface .................................................................................................................................... 9 
+USB Vendor ID ......................................................................................................................................... 10 
+USB Product IDs ...................................................................................................................................... 10 
+LAN Printer Interface .................................................................................................................................. 10 
+IP Address ............................................................................................................................................... 10 
+mDNS ...................................................................................................................................................... 10 
+Printer Commands ...................................................................................................................................... 10 
+Commands Sent to the Printer ............................................................................................................... 10 
+ 
+© 2021 Sanford, L.P.  4 
+About the LabelWriter 550 Series Printers 
+The LabelWriter 550 series printers (LabelWriter 550, 550 Turbo, 5XL) are high-performance, low-cost 
+printers used for printing mailing labels, postage, file folder labels, barcode labels, and more. The 
+LabelWriter 550 and LabelWriter 550 Turbo printers have a 57 mm wide print head. The LabelWriter 5XL 
+has a 101 mm wide print head. All printers have 300-dpi print head. 
+The 57 mm wide thermal print head uses 672 individually addressable dots to form individual raster 
+lines of data at 300 dots per inch across the print head— the 101 mm wide print head uses 1248 dots. 
+Both use 300 dots per inch in the travel direction as directed by the print control data. Because they use 
+specially treated, heat-activated paper, the printers require no ink, toner, or other refills.  
+All 550 series printer models connect to a host computer through a standard full-speed USB 2.0-
+compatible interface. There are no built-in fonts. The host computer is responsible for sending 
+commands and data to the printer to form each individual raster line of data. This is generally 
+performed by printer drivers in the host computer that convert the image of the label into the proper 
+command and data stream required by the printers. 
+LabelWriter 550 Turbo and 5XL printers can connect to a host through a 10M/100M Ethernet LAN 
+connection.  
+Print Data  
+Print data is encoded in strings of 8-bit bytes.  
+The default value for LabelWriter 550 and LabelWriter 550 Turbo printers is 84 bytes per line (84 * 8 = 
+672, the number of dots in the print head)— for LabelWriter 5XL, 156 bytes (156*8=1248, the number of 
+dots in the print head). The host-computer can send fewer bytes than the maximum within the <esc> D 
+command. The control electronics do not check the validity of the new value. Therefore, it is the 
+responsibility of the host-software to send only those values which are valid for the width of the print 
+head.  
+The Bytes-Per-Line variable is held by the control electronics until they are changed by a new command 
+sequence, is reset to default values by a power-on reset, a software reset command, or after the end of 
+a print job.  
+Print Job Structure 
+The print job structure consists of the following parts: 
+1. Print Job Header 
+2. Label Structure 
+a. Label Header 
+b. Label Data 
+c. Label Trailer 
+3. Print Job Trailer 
+© 2021 Sanford, L.P.  5 
+Print jo b
+Label index = n
+Label index = 2
+Label index = 1
+Set maximum label length (‘ESC’, ‘L’, length)
+Start of print job (‘ESC’, ‘s’, Job ID)
+Select output tray * (‘ESC’, ‘q’, tray ID)
+Select text output mode (‘ESC’, ‘h’) Select graphics output mode (‘ESC’, ‘i’)or
+Set content type  (‘ESC’, ‘T’, type)
+Print job 
+header
+Set label index (‘ESC’, ‘n’, index)
+Start of label print data (‘ESC’, ‘D’, width, length)
+Label print data
+Feed to print head (‘ESC’, ‘G’) Feed to cut position (‘ESC’, ‘E’)or
+Feed command (‘ESC’, ‘E’, Feed to tear bar )
+Label 
+header
+Label 
+data
+Label 
+trailer
+End of print job (‘ESC’, ‘Q’)Print job 
+trailer
+ = Mandatory fields
+ = Optional fields
+Memory offset: 0x0000
+M emor y offset : n
+Select energy setting (‘ESC’, ‘C’)
+ 
+ 
+Print Job Header 
+The Print Job Header is the beginning of a print job structure. It is mandatory to have <ESC s> to let the 
+printer know the start of the print job.  
+The table below shows the mandatory command for the header section along with optional commands 
+that can be placed in this section.  
+Mandatory Commands 
+Start of Print Job <ESC s> 
+Optional Commands 
+Set Maximum Label Length <ESC L> 
+Select Text Output Mode or  
+Select Graphics Output Mode 
+<ESC h> or 
+<ESC i> 
+Select Energy Setting <ESC C>  
+Set Output Tray * (will be 
+supported by LW550 Twin 
+Turbo) <ESC q> 
+Select Content Type <ESC T> 
+© 2021 Sanford, L.P.  6 
+ 
+Label Structure 
+The Label structure has the following 3 parts: 
+1. Label Header 
+2. Label Data 
+3. Label Trailer 
+The structure must be present for each label that is to be printed in a single print job. 
+Label Header 
+The Label Header is the beginning of the label structure. It is mandatory to have <ESC n> to indicate the 
+label index and <ESC D> to indicate the start of the label print data. See the “Printer Commands” later in 
+this document for more details. 
+The table below shows the mandatory command for the header section along with optional commands 
+that can be placed in this section.  
+Mandatory Commands 
+Set Label Index <ESC n> 
+Start of Label Print Data & 
+Label Print Data <ESC D> 
+Label Data 
+The Label Data is the data that will be printed out onto the labels. It is an array of binary data bytes. It’s 
+size equals width*height. ‘0’ means a dot is not printed; ‘1’ means a dot is printed. The most significant 
+bit of the first print data byte represents the lower pixel of the first line. See the <ESC D> command in 
+the “Printer Commands” section later in this document for more details. 
+ 
+Bytes per line= roundup( (height * Bytes Per Pixel) / 8) 
+Label Trailer 
+The Label Trailer is end of the label structure. It moves the label to either the print head of the next label 
+or to the tear position. It is mandatory that <ESC G> (Feed to Print Head) or <ESC E> (Feed to Tear 
+Position) be used in this section. 
+Mandatory Commands 
+Feed to Print Head <ESC G> 
+Feed to Tear Position <ESC E>  
+ 
+Print Job Trailer 
+The print Job Trailer is the final part of the print job structure. It is mandatory to use the <ESC Q> 
+command to end the print job. 
+ 
+© 2021 Sanford, L.P.  7 
+Data Synchronization  
+After the printer receives a Lock Request from the host, the printer will respond. (See Print Status 
+Response section for details.) The host (Host-A) will be granted a lock only if the printer is not printing. 
+Once the lock is granted, the Host-A will begin to send the print data for the current print job with the 
+<ESC s> command. (See “Print Job Structure” section above for additional details). If another host 
+(Host-B) requests the printer’s status, the printer will respond that it is printing. No other host can 
+interrupt the print job of Host-A. 
+The data goes into a buffer and the printer sorts through the various commands applying the print job 
+settings.  
+The data between the height value in the <ESC D> command and before <ESC G> or <ESC E> is the data 
+that will be printed, also referred to as print data.  
+  
+Label Positioning  
+A motor-driven platen, which acts as a pinch roller, controls label movement within the printer. The 
+control electronics track label travelling positions. An infrared LED photocell detects the top-of-form 
+sense hole that is located between labels. The absolute positions of the label and the tear bar are 
+calculated based up the reading of an infrared LED photocell sensor.  
+Top-of-Form Sync  
+At power up, label position is always assumed to be correct. If an Out of Paper condition is detected at 
+power up, user requires to press form feed button and the stepper motor will advance until label load to 
+Top-of-Form tear bar position.   
+Label Length  
+The label length is determined by the SKU data found on the NFC Tag. 
+If the roll has continuous form paper the Form Feed command (<esc> E) is changed to feed enough dot 
+lines to allow for the last line of print data to extend past the printer tear-bar. 
+The host can use <esc> L to Set Length to Continuous Stock. See more details in the “Printer Commands” 
+section later in this document. Only authentic Dymo labels with a valid NFC Tag can be used for printing. 
+Label-Movement Commands  
+There are two label-movement commands implemented in the LabelWriter 550 Series: Form Feed, Short 
+Form Feed. These commands operate as follows. 
+Form Feed Command (<esc> E)  
+This command advances the most recently printed label to a position where it can be torn off. This 
+positioning places the next label beyond the starting print position. Therefore, a reverse-feed will be 
+automatically invoked when printing the next label. Use Feed to Print Head (Short Form Feed) to 
+optimize print speed and to eliminate the reverse feeding when printing multiple labels. 
+ 
+© 2021 Sanford, L.P.  8 
+Short Form Feed Command (<esc> G)  
+This command feeds the next label into print position (die-cut labels). The most recently printed label 
+might still be partially inside the printer and cannot be torn off or cut. This command is meant to be 
+used between labels on a multiple label print job. 
+Use this command when printing multiple labels. The normal Form Feed command also works for this 
+purpose. However, using the Short Form Feed command optimizes the printer and minimizes print time 
+by eliminating the need to reverse feed after advancing the top-of-form mark to the tear bar, as the 
+normal Form Feed command does. The Short Form Feed command advances the printed label just far 
+enough to place the next label in position for printing. Because of the mechanics of the printer, the 
+preceding label will still be partially within the label exit slot. For a label to be in tear-off position, you 
+must use the normal Form Feed command (<esc> E).  
+Print Status Response  
+The LabelWriter 550 series responds to status request with 32 bytes dedicated to reporting its current 
+state.  
+The host requests the status from the printer by issuing an <ESC A> command (See the “Printer 
+Command” section later in the document for more details).  
+Self-Test Capability  
+The printers include a self-test capability in the form of canned print patterns. To activate the self-test, 
+press the form-feed button and power button together and hold it down for approximately 10 seconds. 
+The self-test will start printing a repeating series of test patterns. To stop the self-test, press the form-
+feed button a second time.  
+Print Mode  
+The LabelWriter 550 series features the following print modes: 
+• Text 
+• Barcode and Graphics 
+The LabelWriter 550 and LabelWriter 550 Turbo has the additional print mode: 
+• High Speed ***NOTE: Not all label rolls have the high-speed feature*** 
+Printer Model Print Mode 
+Text Barcode and Graphics High Speed 
+DYMO LabelWriter 550     
+DYMO LabelWriter 550 Turbo     
+DYMO LabelWriter 5XL    N/A 
+For better accuracy of dot placement and sizing, the LabelWriter 550 series printers incorporate a 
+feature which allows the host computer to specify a 300 x 300 dpi Barcode and Graphics print mode. In 
+Barcode and Graphics mode, the print quality is improved by a reduction in print speed which provides 
+smooth and even printing, resulting in greater regularity of dot darkness and size. This mode may 
+improve print quality of smaller barcodes and some graphic images. This creates more precise dots for 
+better image quality.  
+© 2021 Sanford, L.P.  9 
+Low Power Mode  
+The LabelWriter 550 series includes an automatic power saving feature. After 30 seconds of inactivity 
+the printer will shut down its unused internal peripherals and dim its LEDs. Pressing the power button 
+while the printer is in this state will cause it to resume normal operation rather than feeding a label. If 
+print data is sent to the printer while it is in Low Power mode it will automatically resume full operation. 
+Power Requirements  
+The LabelWriter 550 series printers are normally supplied with an external, universal (100 – 240 VAC) AC 
+power adapter. For OEM applications, a DC voltage can also be supplied to the main printed circuit 
+board (PCB) of the printer using the JP2 connector.  
+Note: The printers have been tested and certified for EMC and safety requirements using the supplied 
+AC adapter. Supplying a non-DYMO power source may change the EMC and safety certifications.  
+Input power is variable based on the amount of information printed and the duty cycle of the label 
+printing.  
+The printer driver (print commands from the host computer) controls some printing parameters and will 
+change maximum power usage. 
+AC Adapter  
+LabelWriter 550 
+Model   DSA-42PFC-24 2 240175 (42.0W) 
+Input voltage  100 – 240 VAC, 50/60 Hz, 1.2 Amps  
+Output voltage  24 VDC, 1.75Amps  
+LabelWriter 550 Turbo 
+DYMO part number  DYS865-240250W (60.0W) 
+Input voltage  100 – 240 VAC, 50/60 Hz, 1.5 Amps  
+Output voltage  24 VDC, 2.5Amps  
+LabelWriter 5XL 
+DYMO part number  DSA-96PFB-24 2 240375 (90.0W) 
+Input voltage  100 – 240 VAC, 50/60 Hz, 1.5 Amps  
+Output voltage  24 VDC, 3.75Amps  
+ 
+Connectors  
+JP2: 
+DC jack, 5.5 mm O.D. x 2.5 mm I.D. Center Positive 
+USB Printer Interface  
+The LabelWriter 550 series printers all communicate with the host computer using a full-speed USB 2.0 
+interface. This interface also operates with USB Version 1.1 or later. The printers implement the 
+standard USB Printer Class Device interface for communications (see 
+http://www.usb.org/developers/devclass/).  
+© 2021 Sanford, L.P.  10 
+While it is not the purpose of this section to define how to write a USB driver for a printer device, this 
+section provides some product specific information that is required for any USB device.  
+Each USB device provides plug-and-play information when it is connected to a host computer. This 
+information includes a manufacturer specific, or Vendor, ID (VID) and a product specific ID (PID). These 
+identifiers, when combined with the class type provided during USB enumeration, are sufficient to 
+identify the driver to load. 
+USB Vendor ID  
+The USB Vendor ID (VID) assigned to DYMO by the USB Implementers Forum is 0x0922h (2338 Decimal).  
+USB Product IDs  
+Each printer has a unique Product ID, as shown in the table below. 
+Printer Model  Product ID (Hex)  
+DYMO LabelWriter 550  0x0028  
+DYMO LabelWriter 550 Turbo  0x0029  
+DYMO LabelWriter 5XL  0x002A 
+ 
+LAN Printer Interface  
+The LabelWriter 550 Turbo and LabelWriter 5XL printers are also able to communicate with the host 
+computer using 10M/100M Ethernet LAN connection. 
+The printer will auto-connect upon ethernet cable plugin into the RJ45 connector.  
+IP Address 
+IPv4 protocol is supported. 
+By default, IP address of the LabelWriter 550 Turbo and LabelWriter 5XL printers will be obtained by 
+DHCP.  Communication will be enabled upon successful assignment of IP address. 
+mDNS 
+The mDNS protocol is used to discover printer on the network and conforms with mDNS protocol (RFC 
+6762/6763) specifications. The port used for this service is 5353. 
+Below are the mDNS strings used for printers with a LAN interface: 
+Printer Supported Profiles & protocols 
+DYMO LabelWriter 550 Turbo DYMO LabelWriter 550 Turbo on DYMOLW550T<6 digit MAC Address>E 
+DYMO LabelWriter 5XL DYMO LabelWriter 5XL on DYMOLW5XL<6 digit MAC Address>E 
+ 
+Printer Commands  
+All LabelWriter 550 series printers implement the same basic commands.  
+Commands Sent to the Printer  
+The commands implemented by the LabelWriter printer are as follows. Note that each command is 
+listed with its mnemonic (<ESC> s as well as its hexadecimal representation (1B 73). Parameter values 
+are specified as "n" for single byte values or "n1 n2" for two-byte values. 
+© 2021 Sanford, L.P.  11 
+ESC s  Start of Print Job  
+1B 73 
+Indicates a new print job. A unique job ID is passed along with this command.  
+Format: 
+Byte 0 1 2 3 4 5 
+ ‘ESC’ ‘s’ Job ID 
+ 
+ESC L  Set Maximum Label Length  
+1B 4C 
+Sets the print engine mode between normal label stock and continuous label stock. Normal label stock is 
+the default mode for the print engine. 
+ESC h  Select Text Output Mode  
+1B 68 
+Tells the print engine that the label shall be printed with the print settings which are ideal for text. Text 
+mode is the default printer setting. 
+ESC i  Select Graphics Output Mode  
+1B 69  
+Tells the print engine that the label shall be printed with the print settings which are ideal for graphics 
+and barcodes. The print speed might be reduced in this mode. 
+ESC T  Content Type  
+1B 74 
+ 
+ 
+Sets the speed of the printer. Default is Normal Speed (0x10). 
+Byte Value Meaning 
+0x10 Normal Speed 
+0x20 High Speed 
+ 
+ESC n  Set Label Index  
+1B 6E 
+Sets the label index. The same label index is returned int eh print status providing the host the possibility 
+to track which label is being printed. Default value is 0. 
+Byte 0 1 2 3 
+ ‘ESC’ ‘n’ Label Index 
+ 
+Byte 0 1 2 
+ ‘ESC’ ‘T’ Speed Mode 
+© 2021 Sanford, L.P.  12 
+ESC D  Start of Label Print Data & Label Print Data  
+1B 44 
+Indicates the start of the label print data and notifies the print engine about the label’s height and 
+width. The height is defined in dots while the width specifies the number of lines. The width does not 
+include the leader and trailer. 
+Format: 
+Byte 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 …  n 
+ ‘ESC’ ‘D’ BPP Align Width Height Print Data 
+ 
+ 
+print head
+dot 0
+Label
+Label print data
+height
+width
+First bit of print data
+Last bit of print data
+ 
+Byte  Name Description 
+2 BPP Default value is 1. 
+3 Alignment Print Alignment 
+2: Bottom  
+Byte 4 to Byte 7 Width Number of lines 
+Range: 0 to 232 
+Byte 8 to Byte 11 Height Number of dots 
+Range: 0 to 232 
+Byte 12 to Byte n Print Data The data that will be printed onto the label(s) 
+ 
+ESC G Feed to Print Head (Short Form Feed) 
+1B 47 
+Feeds the next label into print position. The most recently printed label might still be partially inside the 
+printer and cannot be torn off. This command is meant to be used between labels on a multiple label 
+print job.  
+© 2021 Sanford, L.P.  13 
+ESC E Feed to Tear Position (Long Form Feed) 
+1B 45 
+Advances the most recently printed label to a position where it can be torn off by the automatic cutter. 
+This positioning places the next label beyond the starting print position. Reverse-feed will be 
+automatically invoked when printing the next label. 
+ESC Q End of Print Job 
+1B 51 
+Indicates the end of a print job. Upon reception of this command the print engine will release the 
+connection and start accepting other print jobs. 
+ESC A Request Print Engine Status  
+1B 41 
+P
+rint Status Response: 
+Byte  Bits Name Description 
+Byte 0 b7… b0 Print status The actual print engine status. 
+ 
+Type: predefined values 
+Default value: 0 
+Range: 
+0 = idle:  
+1 = printing 
+2 = error 
+3 = cancel 
+4 = busy 
+5 = Unlock 
+ 
+
+© 2021 Sanford, L.P.  14 
+Byte  Bits Name Description 
+0-3: Once lock is granted to active host, status replies 
+by active host 
+4: after printer wakes up from standby  
+5: Status reply before lock is granted to active host 
+Byte 4… 
+Byte 1 
+b31… b0 Print job ID The Job ID of the ongoing print process. 
+ 
+Type: u32 
+Default value: 0 
+Range: 
+0 = printer idle 
+1…2 32 = Job ID 
+Byte 6… 
+Byte 5 
+b15…b0  Label index The index of the label/page currently being printed. 
+ 
+Type: u16 
+Default value: 0 
+Range: 
+0…2 16 = index 
+Byte 7 b7… b0 Reserved  Default value: 0 
+Byte 8 b7… b0 Print head status The actual thermal print head status. 
+ 
+Type: predefined values 
+Default value: 2 
+Range: 
+0 = ok 
+1 = overheated 
+2 = status unknown 
+Byte 9 b7… b0 Print density The actual print density setting in %. 
+ 
+Type: u8 
+Default value: 100 
+Range: 
+0 = disable printing 
+1…2 00 = density in % 
+Byte 10 b7… b0 Main bay  status The status of the main bay. 
+ 
+Type: predefined values 
+Default value: 0 
+Range: 
+0 = bay status unknown 
+1 = bay open; media presence unknown 
+2 = no media present 
+3 = media not inserted properly 
+4 = media present – media status unknown 
+5 = media present – empty 
+© 2021 Sanford, L.P.  15 
+Byte  Bits Name Description 
+6 = media present – critically low 
+7 = media present – low 
+8 = media present – ok 
+9 = media present – jammed 
+10 = media present – counterfeit media 
+Byte 22… 
+Byte 11 
+B95…b0  SKU Info The SKU of the inserted consumable 
+ 
+Type: char 
+Default value: 0 (empty) 
+XXXXXXXX = SKU 
+Byte 26… 
+Byte 23 
+b31… b0 Error ID The ID of the present error. 
+ 
+Type: u32 
+Default value: 0 
+Range: 
+0 = no error present 
+1…2 32 = error codes 
+Byte 28 
+Byte 27 
+B15…b0  Label count Remaining count of inserted consumable 
+ 
+Type: u16 
+Default value: 0 (empty) 
+Byte 29 b3…b0  EPS Status The status of the external power supply. 
+ 
+1 = EPS present 
+b7…b4  Reserved Default value: 0 
+Byte 30 b3…b0  Print Head Voltage Print Head Voltage 
+ 
+Type: predefined values 
+Default value: 0 
+Range: 
+0 = unknown  
+1 = ok 
+2 = low 
+3 = critically low 
+4 = too low for printing 
+b7…b4  Reserved Default value: 0 
+Byte 31 b7… b0 Reserved  Default value: -1  
+ 
+© 2021 Sanford, L.P.  16 
+ESC C Set Print Density 
+1B 43 
+Sets the strobe time of the printer to a given percentage of its standard duty cycle. A lower value results 
+in lighter printouts while a higher value leads to darker printouts. Default value is 100. Duty range is 0-
+200%. 
+Byte 0 1 2 
+ ‘ESC’ ‘C’ Duty 
+ 
+ESC e Reset Print Density to Default  
+1B 65 
+Resets the print density to default value of 100%. 
+ESC U Get SKU Information  
+1B 55 
+Used to retrieve the inserted LW550 Consumable SKU information from NFC. 
+The following is the 63-Byte response to ESC U: 
+Byte  Bits Name Description 
+Byte 1… 
+Byte 0 
+b15…b0  Magic number 0xCAB6 
+Byte 2 b7…b0  Version Current version is ‘0’ 
+Byte 3 b7…b0  Length  
+Byte 7… 
+Byte 4 
+b15…b0  CRC  
+Byte 19… 
+Byte 8 
+b95…b0  SKU # The SKU # of inserted  
+ 
+Type: char 
+Default value: 0 
+Range: 
+1…12 = SKU #  
+Byte 20 b7…b0  Brand ID Type: predefined values 
+ 
+Default value: 0x00 
+ 
+0x00 = DYMO 
+0x01-0xFF = Undefined 
+ 
+ 
+Byte 21 b7…b0  Region Type: predefined values 
+ 
+Default value: 0xFF 
+ 
+0xFF = Global 
+© 2021 Sanford, L.P.  17 
+Byte  Bits Name Description 
+0x00-0xFE = Undefined  
+Byte 22 b7…b0  Material Type The type of label material 
+ 
+Type: predefined values 
+ 
+Range: 
+0x00 = Card 
+0x01 = Clear 
+0x02 = Durable 
+0x03 = Paper 
+0x04 = Permanent 
+0x05 = Plastic 
+0x06 = Removable 
+0x07 = Time exp. 
+0x08 – 0xFF = Undefined  
+Byte 23 b7…b0  Label Type Label Type 
+ 
+Type: predefined values 
+ 
+Range: 
+0x00 = Continuous 
+0x01 = Die 
+0x02 = Card 
+0x03 – 0xFF = Undefined 
+Byte 24 b7…b0  Label Color 
+ 
+Label Color 
+ 
+Type: predefined values 
+ 
+Range: 
+0x00 = Clear 
+0x01 = White 
+0x02 = Pink 
+0x03 = Yellow 
+0x04 = Green 
+0x05 = Blue 
+0x06 – 0xFF = Undefined 
+Byte 25 b7…b0  Content Color Content Color 
+ 
+Type: predefined values 
+ 
+Range: 
+0x00 = Black 
+0x01 = Red/Black 
+0x02 – 0xFF = Undefined 
+© 2021 Sanford, L.P.  18 
+Byte  Bits Name Description 
+Byte 26 b7…b0  Marker Type Marker Type 
+ 
+Type: predefined values 
+ 
+Range: 
+0x00 = Marker 1 front edge indicates offset to cut location 
+and offset to start of label 
+ 
+0x01 = Marker 1 front edge indicates offset to cut location 
+and Marker 1 rear edge indicates offset to start of label 
+ 
+0x02 = Marker 1 front edge indicates offset to start of label 
+and Marker 1 rear edge indicates offset to cut location 
+0x03 = Marker 1 front edge indicates cut location and 
+Marker 2 front edge indicates offset to start of label 
+ 
+0x04 – 0xFF = Undefined 
+Byte 27 b7….b0  Reserved  
+Byte 29 …  
+Byte 28 
+b15…b0  Marker Pitch Marker Pitch 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 31 …  
+Byte 30 
+b15…b0  Marker1 width Marker1 width 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 33 …  
+Byte 32 
+b15…b0  Marker1 to start 
+of label 
+Marker1 to start of label 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 35 …  
+Byte 34 
+b15…b0  Marker2 width Marker2 width 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 37 …  
+Byte 36 
+b15…b0  Marker2 offset Marker2 offset 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 39 …  
+Byte 38 
+b15…b0  Vertical offset 
+ 
+Vertical offset 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+© 2021 Sanford, L.P.  19 
+Byte  Bits Name Description 
+Byte 41 …  
+Byte 40 
+b15…b0  Label length Label length 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 43 …  
+Byte 42 
+b15…b0  Label width 
+ 
+Label width 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 45 …  
+Byte 44 
+b15…b0  Printable area 
+horizontal offset 
+ 
+Printable area horizontal offset 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 47 …  
+Byte 46 
+b15…b0  Printable area 
+vertical offset 
+Printable area vertical offset 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 49 …  
+Byte 48 
+b15…b0  Liner width Liner width 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 51 …  
+Byte 50 
+b15…b0  Total label count  
+Byte 53… 
+Byte 52 
+b15…b0  Total Length Length of roll 
+ 
+Type: u16  
+1 – 2^16 = length in mm 
+Byte 55 …  
+Byte 54 
+b15…b0  Counter Margin Used to determine remaining labels on roll or limit usage 
+Byte 56 b7…b0  Counter Strategy Type: predefined values 
+ 
+Range: 
+0x00 = Counting up from 0x0000 to “amount of labels” + 
+“counter margin” 
+0x01 = Counting up from 0xFFFF – “amount of labels” – 
+“Counter margin” to 0xFFFF 
+0x02 – 0xFF = Undefined 
+Byte 59, 
+Byte 57 
+b23…b0  Reserved  
+Byte 61, 
+Byte 60 
+b15…b0  Production date DDYY format 
+Byte 63, 
+Byte 62 
+b15…b0  Production time HHMM format 
+ 
+© 2021 Sanford, L.P.  20 
+ESC V Request Print Engine Version  
+1B 56 
+Used to retrieve version information of the print engine. 
+Format: 
+Byte 0 …  15 16 …  31 32 33 
+ HW Version FW Version Product ID 
+ 
+HW Version: 
+Byte 0 to 15 
+This is the hardware version as a 16-character UTF-8 encoded string. 
+FW Version: 
+Byte 16 to 31 
+This is the firmware version as a 16-character UTF-8 encoded string. 
+Byte Meaning 
+16 to 19 Application FW Version: “FWAP” 
+Boot Loader FW Version: “FWBL” 
+20 to 23 Major Release Version 
+24 to 27 Minor Release Version 
+28 to 31 Release Date 
+Format: MMYY 
+ 
+PID: 
+Byte 32 to 33 
+Two bytes of USB PID 
+ESC @ Restart Print Engine  
+1B 40 
+Reboots the print engine. 
+ESC * Restore Print Engine Factory Settings  
+1B 24 
+Restores all the factory settings of the printer. 
+ESC o Set Label Count 
+Sets label count. 
+Byte 0 1 2 
+ ‘ESC’ ‘o’ Count 
+ 
+ 
+ 

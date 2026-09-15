@@ -55,8 +55,7 @@ refuses — so a working bypass must defeat all three:
 Practically: the DRM is an **anti-consumer lockout** that forces you to buy Dymo rolls
 (and, on some models, to let Dymo's software decide whether a roll is "real"). It is not
 a security boundary protecting data — it is **anti-consumer DRM packed as "consumer
-convenience"**: automatic label recognition, which is useless to anyone printing on
-non-Dymo stock.
+convenience"**: useless automatic label recognition.
 
 ## How OpenDMO-FW defeats it
 

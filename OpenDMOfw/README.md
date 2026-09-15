@@ -53,7 +53,7 @@ refuses — so a working bypass must defeat all three:
    third-party "refill" rolls stop working.
 
 Practically: the DRM is an **anti-consumer lockout** that forces you to buy D.mo rolls
-(and, on some models, to let D.mo's software decide whether a roll is "real"). It is not
+(and to let D.mo's software decide whether a roll is "real"). It is not
 a security boundary protecting data — it is **anti-consumer DRM packed as "consumer
 convenience"**: useless automatic label recognition.
 

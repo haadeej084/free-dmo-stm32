@@ -25,8 +25,10 @@ UID (unique per chip). To target a different identity, edit `model.h`.
 ## D3 — Clock: HSI48 + CRS instead of an external crystal
 
 The F072 has an internal 48 MHz oscillator (HSI48) trimmed by CRS against USB
-SOF — USB-conformant without a crystal. If the board has an HSE crystal and you
-want it, replace `SystemInit()` in `system.c` with an HSE→PLL config at 48 MHz.
+SOF — USB-conformant without a crystal. `SystemInit()` sets `CRS_CFGR.SYNCSRC`
+to USB SOF explicitly (not only the reset default). If the board has an HSE
+crystal and you want it, replace `SystemInit()` in `system.c` with an HSE→PLL
+config at 48 MHz.
 
 ## D4 — USB stack: hand-rolled instead of TinyUSB
 

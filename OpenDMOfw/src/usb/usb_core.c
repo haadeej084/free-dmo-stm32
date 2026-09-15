@@ -173,6 +173,7 @@ static uint8_t  s_pending_addr;      /* SET_ADDRESS: applied only in the status 
 static int      s_configured;
 static const uint8_t *s_ctrl_ptr;    /* in-progress control IN */
 static uint16_t s_ctrl_len;
+static int      s_ctrl_zlp;          /* send a ZLP after an exact MPS last packet */
 
 static void ctrl_tx_chunk(void)
 {
@@ -189,6 +190,9 @@ void usb_ctrl_send(const uint8_t *data, uint16_t len, uint16_t wLength)
     if (len > wLength) len = wLength;   /* never more than requested */
     s_ctrl_ptr = data;
     s_ctrl_len = len;
+    /* Short packet that is an exact multiple of MPS needs a ZLP so the host
+     * knows the transfer ended (USB 2.0 5.5.3), when wLength was larger. */
+    s_ctrl_zlp = (len < wLength) && (len != 0) && ((len % EP_MAXPKT) == 0);
     ctrl_tx_chunk();
 }
 void usb_ctrl_stall(void)
@@ -324,6 +328,11 @@ static void on_ctr(void)
                 s_pending_addr = 0;
             }
             if (s_ctrl_len) ctrl_tx_chunk();     /* next descriptor chunk */
+            else if (s_ctrl_zlp) {
+                s_ctrl_zlp = 0;
+                *btable_tx_cnt(EP_CTRL) = 0;
+                ep_set_tx_stat(EP_CTRL, STAT_TX(USB_EP_STAT_VALID));
+            }
         }
     } else {
         if (epr & USB_EP_CTR_RX) {
@@ -358,12 +367,20 @@ void USB_IRQHandler(void)
         USB->DADDR = USB_DADDR_EF | 0;
         s_configured = 0;
         s_pending_addr = 0;
+        s_ctrl_len = 0;
+        s_ctrl_zlp = 0;
         return;
     }
     if (istr & USB_ISTR_CTR) on_ctr();
 
-    if (istr & USB_ISTR_SUSP) USB->ISTR = (uint16_t)~USB_ISTR_SUSP;
-    if (istr & USB_ISTR_WKUP) USB->ISTR = (uint16_t)~USB_ISTR_WKUP;
+    if (istr & USB_ISTR_WKUP) {
+        USB->CNTR &= ~USB_CNTR_FSUSP;
+        USB->ISTR = (uint16_t)~USB_ISTR_WKUP;
+    }
+    if (istr & USB_ISTR_SUSP) {
+        USB->ISTR = (uint16_t)~USB_ISTR_SUSP;
+        USB->CNTR |= USB_CNTR_FSUSP;
+    }
 }
 
 /* ---- init --------------------------------------------------------------- */
@@ -376,9 +393,11 @@ void usb_init(void)
     gpio_af((pin_t){GPIOA, 12}, 2);
     GPIOA->OSPEEDR |= (3u << (11 * 2)) | (3u << (12 * 2));
 
-    USB->CNTR = USB_CNTR_FRES;      /* force reset */
-    delay_us(2);
-    USB->CNTR = 0;                  /* out of power-down + reset */
+    /* RM0091: come out of PDWN, stay in reset, then release FRES. */
+    USB->CNTR = USB_CNTR_FRES | USB_CNTR_PDWN;
+    USB->CNTR = USB_CNTR_FRES;
+    delay_us(100);
+    USB->CNTR = 0;
     USB->ISTR = 0;
     USB->CNTR = USB_CNTR_CTRM | USB_CNTR_RESETM | USB_CNTR_SUSPM | USB_CNTR_WKUPM;
 

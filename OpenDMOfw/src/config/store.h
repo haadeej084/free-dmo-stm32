@@ -12,9 +12,9 @@ typedef struct {
     uint32_t magic;                 /* validity marker */
     char     sku[OP_SKU_MAX];       /* roll SKU (free config, no tag) */
     uint16_t label_count;           /* reported remaining count */
-    uint8_t  density;               /* 1..16 base black level */
+    uint8_t  density;               /* 0 = heat off; 1..16 base black level */
     uint8_t  flags;                 /* OP_FLAG_* bits */
-} op_config_t;
+} __attribute__((packed)) op_config_t;
 
 void              store_init(void); /* I2C init + load (or defaults) */
 const op_config_t*store_get(void);

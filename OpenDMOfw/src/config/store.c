@@ -68,13 +68,33 @@ static void i2c_init(void)
 static int wait(volatile uint32_t flag)
 {
     uint32_t g = 200000;
-    while (!(I2C1->ISR & flag) && --g) { if (I2C1->ISR & I2C_ISR_NACKF) return -1; }
-    return g ? 0 : -1;
+    while (!(I2C1->ISR & flag) && --g) {
+        wdt_kick();
+        if (I2C1->ISR & I2C_ISR_NACKF) {
+            I2C1->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF;
+            I2C1->CR2 |= I2C_CR2_STOP;
+            return -1;
+        }
+    }
+    if (!g) {
+        I2C1->CR2 |= I2C_CR2_STOP;
+        return -1;
+    }
+    return 0;
+}
+
+static void i2c_bus_recover(void)
+{
+    uint32_t g = 10000;
+    I2C1->CR1 &= ~I2C_CR1_PE;
+    while ((I2C1->CR1 & I2C_CR1_PE) && --g) {}
+    I2C1->CR1 = I2C_CR1_PE;
 }
 
 static int i2c_xfer(uint8_t addr7, const uint8_t *w, uint16_t wn, uint8_t *r, uint16_t rn)
 {
-    if (I2C1->ISR & I2C_ISR_BUSY) { /* clear stale */ }
+    if (I2C1->ISR & I2C_ISR_BUSY)
+        i2c_bus_recover();
     if (wn) {
         I2C1->CR2 = ((uint32_t)addr7 << 1) | ((uint32_t)wn << 16) |
                     (rn ? 0 : I2C_CR2_AUTOEND) | I2C_CR2_START;

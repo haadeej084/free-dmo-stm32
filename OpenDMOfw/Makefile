@@ -51,7 +51,7 @@ LDSCRIPT := linker/stm32f072xb.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \
   -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
 
-.PHONY: all clean size flash
+.PHONY: all clean size flash test
 
 all: $(BUILD)/$(TARGET).bin size
 
@@ -71,6 +71,20 @@ size: $(BUILD)/$(TARGET).elf
 # Flash via st-flash (open-source, ST-Link). See BUILD.md for alternatives.
 flash: $(BUILD)/$(TARGET).bin
 	st-flash write $< 0x08000000
+
+# Host tests: wire-layout transcription + native parser (both models).
+# python3 is required; a host C compiler (cc/gcc) runs test_protocol.c when present.
+test:
+	python3 test/test_protocol_wire.py
+	@if command -v cc >/dev/null 2>&1; then \
+	  cc -Wall -Wextra -std=c11 -Isrc -o /tmp/opendmo-test-op104 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op104; \
+	  cc -Wall -Wextra -std=c11 -DMODEL_OP57 -Isrc -o /tmp/opendmo-test-op57 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op57; \
+	elif command -v gcc >/dev/null 2>&1; then \
+	  gcc -Wall -Wextra -std=c11 -Isrc -o /tmp/opendmo-test-op104 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op104; \
+	  gcc -Wall -Wextra -std=c11 -DMODEL_OP57 -Isrc -o /tmp/opendmo-test-op57 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op57; \
+	else \
+	  echo "skip native test_protocol.c (no host C compiler)"; \
+	fi
 
 clean:
 	rm -rf $(BUILD)

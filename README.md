@@ -7,11 +7,12 @@ Endless freedom for D.MO 550 series label writer printer.
 ## Also in this repo: OpenDMOfw (in-place F072 firmware)
 
 A separate, prototype/concept approach lives in [`OpenDMOfw/`](OpenDMOfw/): firmware that
-runs **in place** on the genuine D.mo mainboard (STM32F072, flashed over SWD — no new
-hardware) and prints on any roll. It is software-complete but still needs **hardware
-fieldwork** (GPIO routing, motor steps/line, thermistor divider, STB polarity). If you have
-a LabelWriter 550/5XL and a multimeter, see [`OpenDMOfw/FIELDWORK.md`](OpenDMOfw/FIELDWORK.md)
-— report your findings to **opendymofw@secret.fyi**.
+runs **in place** on the genuine D.mo mainboard (STM32F072) and prints on any roll.
+Stock printers ship with the F072 at **RDP Level 2**, so SWD flash only works on a
+chip that is already writable. A factory 550/5XL still uses the Bluepill I2C path
+below until then. OpenDMOfw still needs **hardware fieldwork** (GPIO routing, motor
+steps/line, thermistor divider, STB polarity, VH enable). See
+[`OpenDMOfw/FIELDWORK.md`](OpenDMOfw/FIELDWORK.md).
 
 ## Wiring
 

@@ -17,6 +17,9 @@ Examples:
   python opsend.py testpattern
   python opsend.py image label.png
   python opsend.py config --count 500 --sku S0904980
+  python opsend.py sku
+  python opsend.py factory-reset
+  python opsend.py restart
 """
 import argparse, sys, time
 
@@ -217,7 +220,10 @@ def main():
     sub.add_parser("testpattern")
     p = sub.add_parser("image");     p.add_argument("path")
     p = sub.add_parser("config");    p.add_argument("--count", type=int, required=True); p.add_argument("--sku", required=True)
-    p = sub.add_parser("version")
+    sub.add_parser("version")
+    sub.add_parser("sku")
+    sub.add_parser("factory-reset")
+    sub.add_parser("restart")
     p = sub.add_parser("diag");      p.add_argument("sub", type=int, help="0x01 strobe head / 0x02 step motor / 0x03 EEPROM test / 0x04 snapshot")
     p.add_argument("arg", type=int, nargs="?", default=None, help="count for 0x01/0x02")
     a = ap.parse_args()
@@ -238,6 +244,12 @@ def main():
         send(dev, cmd_config(a.count, a.sku)); print("config set:", read_status(dev))
     elif a.cmd == "version":
         send(dev, cmd_version()); print(read_bulk(dev, 34).hex())
+    elif a.cmd == "sku":
+        send(dev, cmd_sku_info()); print(read_bulk(dev, 63).hex())
+    elif a.cmd == "factory-reset":
+        send(dev, cmd_factory_reset()); print("factory reset:", read_status(dev))
+    elif a.cmd == "restart":
+        send(dev, cmd_restart()); print("pipeline reset")
     elif a.cmd == "diag":
         send(dev, cmd_diag(a.sub, a.arg))
         time.sleep(0.2)

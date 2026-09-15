@@ -87,6 +87,8 @@ typedef struct { __IO uint32_t CR, CFGR, ISR, ICR; } CRS_Type;
 #define CRS ((CRS_Type*)0x40006C00u)
 #define CRS_CR_AUTOTRIMEN (1u<<5)
 #define CRS_CR_CEN        (1u<<6)
+#define CRS_CFGR_SYNCSRC_Msk (3u<<28)
+#define CRS_CFGR_SYNCSRC_USB (2u<<28)   /* USB SOF (RM0091) */
 
 /* ---- GPIO --------------------------------------------------------------- */
 typedef struct {
@@ -128,6 +130,8 @@ typedef struct {
 #define I2C_ISR_STOPF (1u<<5)
 #define I2C_ISR_NACKF (1u<<4)
 #define I2C_ISR_BUSY  (1u<<15)
+#define I2C_ICR_NACKCF (1u<<4)
+#define I2C_ICR_STOPCF (1u<<5)
 
 /* ---- ADC (head thermistor temperature) ---------------------------------- */
 typedef struct {
@@ -178,6 +182,7 @@ typedef struct {
 
 #define USB_CNTR_FRES   (1u<<0)
 #define USB_CNTR_PDWN   (1u<<1)
+#define USB_CNTR_FSUSP  (1u<<3)
 #define USB_CNTR_RESETM (1u<<10)
 #define USB_CNTR_CTRM   (1u<<15)
 #define USB_CNTR_SUSPM  (1u<<11)

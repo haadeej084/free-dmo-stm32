@@ -18,8 +18,9 @@ void SystemInit(void)
     RCC->CFGR = (RCC->CFGR & ~0x3u) | RCC_CFGR_SW_HSI48;
     while ((RCC->CFGR & RCC_CFGR_SWS_HSI48) != RCC_CFGR_SWS_HSI48) {}
 
-    /* CRS on: sync source = USB SOF (default), autotrim + counter enable. */
+    /* CRS: sync source = USB SOF (do not rely on reset default), autotrim. */
     RCC->APB1ENR |= RCC_APB1ENR_CRSEN;
+    CRS->CFGR = (CRS->CFGR & ~CRS_CFGR_SYNCSRC_Msk) | CRS_CFGR_SYNCSRC_USB;
     CRS->CR |= CRS_CR_AUTOTRIMEN | CRS_CR_CEN;
 
     /* GPIO port clocks that we use. */
@@ -54,7 +55,7 @@ void wdt_kick(void) { IWDG->KR = 0xAAAA; }
 void delay_ms(uint32_t ms)
 {
     uint32_t t0 = s_millis;
-    while ((s_millis - t0) < ms) { __asm volatile("wfi"); }
+    while ((s_millis - t0) < ms) { wdt_kick(); __asm volatile("wfi"); }
 }
 
 void delay_us(uint32_t us)

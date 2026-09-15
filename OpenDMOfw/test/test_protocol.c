@@ -212,11 +212,31 @@ int main(void){
     CHECK(g_cfg.label_count == 500);
 
     /* 19) ESC * factory reset: config restored to the model defaults. */
-    reset_state(); strcpy(g_cfg.sku, "XYZ"); g_cfg.label_count = 5;
+    reset_state(); strcpy(g_cfg.sku, "XYZ"); g_cfg.label_count = 5; g_cfg.flags = 0;
     unsigned char fr[] = { 0x1B, '*' };
     protocol_feed(fr, sizeof fr); protocol_task();
     CHECK(strcmp(g_cfg.sku, MODEL_DEFAULT_SKU) == 0);
     CHECK(g_cfg.label_count == MODEL_DEFAULT_COUNT);
+    CHECK(g_cfg.flags == OP_FLAG_PAPER_FORCE);
+
+    /* 19b) Counter wrap: last remaining label -> MODEL_DEFAULT_COUNT. */
+    reset_state(); g_cfg.label_count = 1;
+    unsigned char wrap[64]; int nw = 0;
+    wrap[nw++]=0x1B; wrap[nw++]='s'; wrap[nw++]=1; wrap[nw++]=0; wrap[nw++]=0; wrap[nw++]=0;
+    esc_d(&wrap[nw], 1, 16); nw += 12;
+    wrap[nw++] = 0xFF; wrap[nw++] = 0xFF;
+    protocol_feed(wrap, nw); protocol_task();
+    CHECK(g_lines == 1);
+    CHECK(g_cfg.label_count == MODEL_DEFAULT_COUNT);
+
+    /* 19c) ESC L u16 LE paper code 0x0867 is bytes 67 08 (5XL shipping). */
+    reset_state();
+    unsigned char el[] = { 0x1B, 'L', 0x67, 0x08 };
+    protocol_feed(el, sizeof el); protocol_task();
+    unsigned char n1[] = { 0x1B, 'n', 3, 0 };
+    protocol_feed(n1, sizeof n1); protocol_task();
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 3);
 
     /* 20) ESC @ pipeline reset: an in-progress job is cleared. */
     reset_state();

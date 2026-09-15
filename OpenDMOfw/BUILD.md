@@ -117,16 +117,17 @@ the device.
 
 ## Tests
 
-`test/test_protocol.c` is a host unit test of the protocol parser (mocked
-hardware), including the resumable-after-underflow requirement — now compiled and
-**run natively** with the installed host GCC (WinLibs MinGW): **37 checks / 23
-scenarios, both models**.
+`make test` runs the host checks (no board):
 
 ```sh
-x86_64-w64-mingw32-gcc -Wall -Wextra -std=c11 [-DMODEL_OP57] \
-  -Isrc -o test_protocol.exe test/test_protocol.c src/printer/protocol.c && ./test_protocol.exe
+make test
 ```
 
-`test/test_protocol_wire.py` is a Python transcription harness that checks the
-status struct, ESC U record, ESC V reply, and GS D layouts byte-for-byte — no board
-needed.
+- `test/test_protocol_wire.py` — status / ESC U / ESC V / GS D layouts byte-for-byte.
+- `test/test_protocol.c` — parser with mocked hardware (both models), when a host
+  `cc`/`gcc` is on PATH. Also:
+
+```sh
+cc -Wall -Wextra -std=c11 [-DMODEL_OP57] \
+  -Isrc -o test_protocol test/test_protocol.c src/printer/protocol.c && ./test_protocol
+```

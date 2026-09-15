@@ -51,6 +51,7 @@ int main(void)
     /* SystemInit() (clock 48 MHz + CRS) was already done by Reset_Handler. */
     systick_init();
     io_init();
+    wdt_init();                          /* on before I2C/USB so a stuck init recovers */
 
     store_init();                        /* config from EEPROM or defaults */
     head_init();
@@ -62,8 +63,6 @@ int main(void)
     usb_desc_init_serial();              /* unique serial code from MCU UID */
     usb_init();                          /* enumeration starts; host binds printer */
     irq_enable();
-
-    wdt_init();                          /* watchdog on (emit_line kicks during printing) */
 
     for (;;) {
         protocol_task();                 /* processes print data (head/feed) */

@@ -1,0 +1,25 @@
+name: OpenDMOfw
+
+on:
+  push:
+    paths:
+      - 'OpenDMOfw/**'
+      - '.github/workflows/opendmofw.yml'
+  pull_request:
+    paths:
+      - 'OpenDMOfw/**'
+      - '.github/workflows/opendmofw.yml'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+      - name: Build OP104 and OP57
+        working-directory: OpenDMOfw
+        run: make && make MODEL=OP57
+      - name: Host tests
+        working-directory: OpenDMOfw
+        run: make test

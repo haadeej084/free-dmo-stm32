@@ -570,3 +570,102 @@ wakeup), 2.9.x (IWDG, unreachable), 2.1.4 (RDP1 race, reinforces D13), 2.2.1
 PA11/PA12 additional-function note; strobe propagation delay; the NFC board's
 PWDN/IRQ lines; the 3C56-9638 head marking from FCC photos; motor-driver voltage
 classes; the RDP2 evidence and its limits.
+
+## D24 — Verification without a board, and what the research pass found
+
+### New checks (all run in CI)
+
+- **`test/test_usb.c`** runs the real `usb_core.c`, `usb_desc.c` and
+  `usb_printer.c` against a software model of the STM32F0 USB peripheral —
+  EPnR toggle / rc_w0 / read-only bits and the transaction behaviour of RM0091
+  30.5–30.6 — and plays the host: bus reset, descriptors (compared byte for byte
+  with a genuine 0922:0028 `lsusb -v`), SET_ADDRESS timing, configuration and
+  DATA0 reset, bulk OUT with flow control, bulk IN with the busy guard,
+  GET_DEVICE_ID / GET_PORT_STATUS / SOFT_RESET (both recipients), endpoint
+  HALT, STALL recovery, ZLP, suspend. 91 checks per model. Six deliberately
+  injected bugs (no DTOG reset, SOFT_RESET without flush, address applied too
+  early, STAT written as read/write, no ZLP, EP0 re-armed after STALL) are each
+  caught. The only source change was routing EPnR writes through one macro,
+  `USB_EPR_WRITE`, which is a plain register write in the firmware.
+- **`test/renode/smoke.py`** boots the actual `.elf` in Renode 1.17 (STM32F072
+  platform) and checks it reaches the main loop without a fault, that SysTick
+  counts real milliseconds, and that the LED follows `main.c` for cold head,
+  head over 70 °C and paper out. Renode does not model HSI48RDY or give the
+  ADC a settable value, so those two reads are hooked; USB is not modelled
+  (hence `test_usb.c`).
+- **`test/renode/head_shift.py`** calls `head_print_line()` in the image,
+  records every GPIOA write, and rebuilds what the head latches on each rising
+  CLK: 624 / 336 clocks, DI1 and DI2 streams exact, data never changing on the
+  edge that samples it, missing bytes white.
+- **`make stack`** (`tools/stack_depth.py`): worst case from GCC's call graph is
+  920 bytes (5XL) / 776 bytes (550) including the deepest interrupt and the
+  exception frame, against the 2048-byte stack.
+- **Static analysis** (GCC `-fanalyzer`, `-Wconversion` and friends, cppcheck
+  2.21): no real defect. The analyzer's out-of-bounds paths through
+  `pma_write` combine a 1-byte reply with a stale length from a different
+  control transfer, which the state machine cannot produce. Three loops that
+  read a string byte before checking the bound were reordered anyway.
+- **`make test`** now uses `set -e`: before, a failing 5XL parser test was
+  masked when the 550 run that followed it passed.
+
+### A real finding: the 5XL line did not fit the time budget
+
+Renode's instruction count for the shift of one full line was 20 546 on the
+5XL build. At 1.2–2.0 clock cycles per instruction that is 0.51–0.86 ms, and
+with 0.54 ms of strobe at density 8 the line exceeded the 1.08 ms per line
+that DYMO's rated 53 labels/min implies. CLK, DI1 and DI2 are all on GPIOA, so
+`head.c` now writes "both data bits + CLK low" and "CLK high" as two BSRR
+words from a four-entry table built once per line: 11 898 instructions
+(0.30–0.50 ms) for the 5XL, 6 462 for the 550, same bit stream, verified by
+`head_shift.py`. `HEAD_SHIFT_SAME_PORT` in `pins.h` guards the assumption and
+`head_init()` refuses to drive the head if a remap breaks it.
+
+### Research results
+
+- **DYMO Connect never reads `ESC U`.** Decompiling `DYMO.LabelAPI.dll`,
+  `DYMO.PrinterCommands` and the rest of the installed assemblies: the only
+  printer commands built are `ESC A`, `ESC Q`, `ESC V`, `ESC W`, and no 0xCAB6
+  magic or record CRC exists anywhere. Roll state comes from the 32-byte
+  status: bay status (byte 10: 8 OK, 10 counterfeit → "unknown label" dialog,
+  NoMedia → empty), the 12-byte SKU, and the label count. The label size
+  comes from the SKU catalog, filtered by region; an SKU the catalog does not
+  accept for the install's region shows as empty, not counterfeit. So our
+  `ESC U` fidelity matters only to other hosts, and host acceptance depends on
+  status byte 10 = 8, a catalogued SKU and a count — which is what `pc-patch`
+  already addresses.
+- **Device ID.** Two independent reports of the genuine LabelWriter 450 string
+  (apple/cups#5821, michaelrsweet/pappl#396):
+  `MFG:DYMO;CMD: ;MDL:LabelWriter 450;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 450;SERN:01010112345600;`,
+  with `SERN` equal to the USB serial in the CUPS URI. Our string now ends in
+  `SERN:<USB serial>;` the same way. No genuine 550/5XL string was found; DYMO's
+  INF confirms MFG `DYMO` and MDL `LabelWriter 550` / `LabelWriter 5XL`
+  (untruncated at 19 characters), and the 550 Turbo as `LabelWriter 550 Turbo`.
+- **ESC V values:** no genuine capture exists publicly. DYMO Connect contains
+  `FWAP`/`FWBL` and a `{0}.{1}` format next to them, so it most likely shows
+  "major.minor" (inference).
+- **FCC internal photos** (RGDLW550 5092158 / 5387314, RGDLW550T 5092072,
+  RGDLW5XL 5092116), read at their 1072×804 resolution:
+  - head bar `3C56-9638` on the 550 and the 550 Turbo; the 5XL bar is not
+    visible in its exhibit;
+  - feed motor `LEILI 35BY412-339 6.5Ω` on the 550 and, partially legible,
+    the same on the 5XL;
+  - NFC daughterboard `LW NFC BOARD REV E 200805` with a 32-pin QFN and a
+    crystal, on a **6-wire** cable (consistent with I2C + PWDN + IRQ + power);
+  - button board `LW550 Button RevB`, main boards `LW550_Rev E 20200812` and a
+    2021 revision;
+  - **the 550 Turbo and 5XL main boards, which carry an RJ45 LAN jack, show one
+    large ST QFP of about 14 mm next to it** (scaled against the USB-B
+    receptacle), i.e. a 100-pin-class part, and no 48-pin F072 is evident at
+    that resolution. The USB-only 550 shows the small 48-pin class MCU. So the
+    network models' print-engine MCU is **not established** as an STM32F072CB,
+    and an OP104 image can only be used on a 5XL whose MCU has been read as
+    one (FIELDWORK section 5, step 1). The Rev K photos this repo started from
+    did show an F072CB next to a DYMO-marked BGA; which model and revision that
+    board came from is not recorded.
+  - Not legible anywhere: motor-driver, EEPROM, load-switch and regulator
+    markings, the paper-sensor type, and any trace to an MCU pin.
+- **Motor:** LEILI 35BY412 = 7.5°/step (48 steps/rev); low-resistance bipolar
+  variants run on 24 V; no gearbox in the -339 part. No source gives the gear
+  train or roller diameter. One full step per line fits the rated speed
+  (~1360 rpm); two does not. `MOTOR_STEPS_PER_LINE` stays 1, now as an
+  estimate with a reason rather than a placeholder.

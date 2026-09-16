@@ -46,6 +46,12 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 #define PIN_HEAD_CLK        ((pin_t){GPIOA, 5})   /* shift clock             */
 #define PIN_HEAD_DI1        ((pin_t){GPIOA, 6})   /* shift data, half 1      */
 #define PIN_HEAD_DI2        ((pin_t){GPIOA, 7})   /* shift data, half 2      */
+/* 1 while CLK, DI1 and DI2 share one GPIO port (all GPIOA above). head.c then
+ * shifts with two BSRR writes per dot instead of four, which is what keeps a
+ * 1248-dot line inside the genuine per-line time budget. The preprocessor
+ * cannot compare the ports itself: set this to 0 if you move one of the three
+ * to another port, and head_init() traps a mismatch at run time. */
+#define HEAD_SHIFT_SAME_PORT 1
 #define PIN_HEAD_LATCH      ((pin_t){GPIOA, 4})   /* Low = THROUGH (sourced) */
 #define PIN_HEAD_STROBE     ((pin_t){GPIOB, 0})   /* STB1: heat half 1       */
 #define PIN_HEAD_STROBE2    ((pin_t){GPIOB, 1})   /* STB2: heat half 2       */

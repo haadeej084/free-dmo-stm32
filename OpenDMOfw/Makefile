@@ -55,7 +55,7 @@ LDSCRIPT := linker/stm32f072xb.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \
   -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
 
-.PHONY: all clean size flash test
+.PHONY: all clean size flash test stack renode
 
 all: $(BUILD)/$(TARGET).bin size
 
@@ -76,19 +76,30 @@ size: $(BUILD)/$(TARGET).elf
 flash: $(BUILD)/$(TARGET).bin
 	st-flash write $< 0x08000000
 
-# Host tests: wire-layout transcription + native parser (both models).
-# python3 is required; a host C compiler (cc/gcc) runs test_protocol.c when present.
+# Host tests: wire-layout transcription, the native parser and the USB stack
+# against a register model (both models each). python3 is required; the C tests
+# run when a host compiler (cc or gcc) is present. `set -e` so a failure in ANY
+# of them fails the target, not only the last one.
+USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
+
 test:
 	python3 test/test_protocol_wire.py
-	@if command -v cc >/dev/null 2>&1; then \
-	  cc -Wall -Wextra -std=c11 -Isrc -o /tmp/opendmo-test-op104 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op104; \
-	  cc -Wall -Wextra -std=c11 -DMODEL_OP57 -Isrc -o /tmp/opendmo-test-op57 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op57; \
-	elif command -v gcc >/dev/null 2>&1; then \
-	  gcc -Wall -Wextra -std=c11 -Isrc -o /tmp/opendmo-test-op104 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op104; \
-	  gcc -Wall -Wextra -std=c11 -DMODEL_OP57 -Isrc -o /tmp/opendmo-test-op57 test/test_protocol.c src/printer/protocol.c && /tmp/opendmo-test-op57; \
-	else \
-	  echo "skip native test_protocol.c (no host C compiler)"; \
-	fi
+	@set -e; 	HOSTCC=$$(command -v cc || command -v gcc || true); 	if [ -z "$$HOSTCC" ]; then echo "skip native C tests (no host C compiler)"; exit 0; fi; 	for m in OP104 OP57; do 	  $$HOSTCC -Wall -Wextra -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m 	    test/test_protocol.c src/printer/protocol.c; 	  /tmp/opendmo-test-$$m; 	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); 	  /tmp/opendmo-usbtest-$$m; 	done
+
+# Worst-case stack: call graph + frame sizes from GCC, checked against the
+# linker script's _Min_Stack_Size (0x800). See tools/stack_depth.py.
+STACK_LIMIT := 2048
+stack:
+	@rm -rf $(BUILD)/stack && mkdir -p $(BUILD)/stack
+	@for f in $(SRC); do 	  $(CC) $(CFLAGS) -fcallgraph-info=su -c $$f -o $(BUILD)/stack/$$(basename $$f .c).o || exit 1; 	done
+	python3 tools/stack_depth.py --limit $(STACK_LIMIT) $(BUILD)/stack/*.ci
+
+# The real image in the Renode emulator (boot/LED/SysTick smoke test and the
+# head shift bit-stream + cost check). Needs Renode: RENODE=/path/to/renode.
+RENODE ?= renode
+renode: $(BUILD)/$(TARGET).elf
+	RENODE=$(RENODE) python3 test/renode/smoke.py $(if $(filter OP57,$(MODEL)),OP57,OP104)
+	RENODE=$(RENODE) python3 test/renode/head_shift.py $(if $(filter OP57,$(MODEL)),OP57,OP104)
 
 clean:
 	rm -rf $(BUILD)

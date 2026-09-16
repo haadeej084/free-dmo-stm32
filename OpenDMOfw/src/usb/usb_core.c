@@ -82,7 +82,7 @@ static void ep_set_rx_stat(int n, uint16_t stat /*already in bit12:13*/)
     uint16_t v = USB->EPR[n];
     uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     wr ^= (uint16_t)((v & USB_EP_STAT_RX) ^ (stat & USB_EP_STAT_RX));
-    USB->EPR[n] = wr;
+    USB_EPR_WRITE(n, wr);
     ep_crit_exit(pm);
 }
 static void ep_set_tx_stat(int n, uint16_t stat /*already in bit4:5*/)
@@ -91,28 +91,28 @@ static void ep_set_tx_stat(int n, uint16_t stat /*already in bit4:5*/)
     uint16_t v = USB->EPR[n];
     uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     wr ^= (uint16_t)((v & USB_EP_STAT_TX) ^ (stat & USB_EP_STAT_TX));
-    USB->EPR[n] = wr;
+    USB_EPR_WRITE(n, wr);
     ep_crit_exit(pm);
 }
 static void ep_clear_ctr_rx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_RX) | USB_EP_CTR_TX);
+    USB_EPR_WRITE(n, (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_RX) | USB_EP_CTR_TX));
     ep_crit_exit(pm);
 }
 static void ep_clear_ctr_tx(int n)
 {
     uint32_t pm = ep_crit_enter();
     uint16_t v = USB->EPR[n];
-    USB->EPR[n] = (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_TX) | USB_EP_CTR_RX);
+    USB_EPR_WRITE(n, (uint16_t)((v & EP_KEEP & ~USB_EP_CTR_TX) | USB_EP_CTR_RX));
     ep_crit_exit(pm);
 }
 static void ep_init(int n, uint16_t type, uint16_t ea)
 {
     /* Fresh endpoint: STAT/DTOG = 0 (write 0 = no toggle from reset 0), CTR cleared. */
     uint32_t pm = ep_crit_enter();
-    USB->EPR[n] = (type & USB_EP_TYPE) | (ea & USB_EP_EA);
+    USB_EPR_WRITE(n, (type & USB_EP_TYPE) | (ea & USB_EP_EA));
     ep_crit_exit(pm);
 }
 
@@ -148,7 +148,7 @@ static void ep_dtog_clear_tx(int n)
     uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     if (v & USB_EP_DTOG_TX)
         wr |= USB_EP_DTOG_TX;          /* write 1 toggles DTOG_TX back to 0 */
-    USB->EPR[n] = wr;
+    USB_EPR_WRITE(n, wr);
     ep_crit_exit(pm);
 }
 static void ep_dtog_clear_rx(int n)
@@ -158,7 +158,7 @@ static void ep_dtog_clear_rx(int n)
     uint16_t wr = (uint16_t)((v & EP_KEEP) | USB_EP_CTR_RX | USB_EP_CTR_TX);
     if (v & USB_EP_DTOG_RX)
         wr |= USB_EP_DTOG_RX;
-    USB->EPR[n] = wr;
+    USB_EPR_WRITE(n, wr);
     ep_crit_exit(pm);
 }
 

@@ -67,6 +67,23 @@ USTR(str_prod, 'D',0,'Y',0,'M',0,'O',0,' ',0,
  * matching the numeric format of the genuine device-instance suffix.
  * Length = 2 (header) + 12*2 = 26 bytes. Filled by usb_desc_init_serial(). */
 static uint8_t str_serial[26];
+
+/* IEEE-1284 device ID (printer-class GET_DEVICE_ID). MFG+MDL are chosen so the
+ * OS derives the genuine hardware ID; see model.h. The published strings of
+ * the genuine LabelWriter 450 end in "SERN:<serial>;" with the same digits as
+ * the USB serial (a CUPS report shows usb://DYMO/LabelWriter%20450?serial=
+ * 01010112345600 next to SERN:01010112345600), so the serial is appended here
+ * once it is known. */
+#define SERN_KEY "SERN:"
+static char     s_devid[sizeof(MODEL_IEEE_ID) - 1 + sizeof(SERN_KEY) - 1 + 12 + 1 + 1];
+static uint16_t s_devid_len;
+
+const char *usb_desc_device_id(uint16_t *len)
+{
+    *len = s_devid_len;
+    return s_devid;
+}
+
 void usb_desc_init_serial(void)
 {
     volatile uint32_t *uid = (volatile uint32_t*)UID_BASE;
@@ -83,12 +100,15 @@ void usb_desc_init_serial(void)
         str_serial[2 + i*2 + 1] = 0;
         v /= 10;
     }
-}
 
-/* IEEE-1284 device ID (used by the printer-class GET_DEVICE_ID). MFG+MDL are
- * chosen so the OS derives the genuine hardware ID; see model.h. */
-const char OP57_IEEE1284_ID[] = MODEL_IEEE_ID;
-const uint16_t OP57_IEEE1284_ID_LEN = sizeof(MODEL_IEEE_ID) - 1;
+    uint16_t n = 0;
+    for (const char *p = MODEL_IEEE_ID; *p; p++) s_devid[n++] = *p;
+    for (const char *p = SERN_KEY; *p; p++)      s_devid[n++] = *p;
+    for (int i = 0; i < 12; i++)                  s_devid[n++] = (char)str_serial[2 + i*2];
+    s_devid[n++] = ';';
+    s_devid[n] = 0;
+    s_devid_len = n;
+}
 
 int usb_desc_get(uint8_t type, uint8_t index, uint16_t lang,
                  const uint8_t **data, uint16_t *len)

@@ -1,0 +1,489 @@
+/* OpenDMOfw - host unit test for the USB device stack (src/usb/).
+ *
+ * Runs the real usb_core.c, usb_desc.c and usb_printer.c against a software
+ * model of the STM32F0 USB peripheral, and plays the host side of every
+ * transfer. Nothing here needs a board; what it proves is that the firmware's
+ * register handling, control-transfer state machine and descriptors behave as
+ * RM0091 and USB 2.0 require, so a first enumeration failure on hardware points
+ * at clock, wiring or PMA addressing rather than at this code.
+ *
+ * The peripheral model follows RM0091 (DocID018940) section 30.6.2, EPnR:
+ *   CTR_RX, CTR_TX              rc_w0  - writing 0 clears, 1 leaves unchanged
+ *   DTOG_RX, STAT_RX, DTOG_TX,
+ *   STAT_TX                     t      - writing 1 toggles, 0 leaves unchanged
+ *   SETUP                       r      - read only
+ *   EP_TYPE, EP_KIND, EA        rw
+ * and the transaction behaviour of 30.5.2: a completed reception copies the
+ * byte count into COUNTn_RX[9:0] leaving BL_SIZE/NUM_BLOCK alone, sets
+ * STAT_RX = NAK and CTR_RX; a completed transmission sets STAT_TX = NAK and
+ * CTR_TX; a SETUP is accepted whatever STAT_RX says and parks both directions
+ * at NAK; each ACKed transaction toggles the matching DTOG bit.
+ *
+ * Build/run (host compiler, see Makefile `test`):
+ *   cc -std=c11 -DOPENDMO_HOST_TEST -Isrc -o test_usb test/test_usb.c \
+ *      src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
+ */
+#include <stdio.h>
+#include <string.h>
+#include "mcu.h"
+#include "model.h"
+#include "pins.h"
+#include "usb/usb_core.h"
+#include "usb/usb_desc.h"
+#include "usb/usb_printer.h"
+
+/* ---- peripheral model --------------------------------------------------- */
+USB_Type host_usb;
+uint16_t host_pma[512];
+uint32_t host_uid[3] = { 0x12345678u, 0x9ABCDEF0u, 0x0F1E2D3Cu };
+
+void USB_IRQHandler(void);
+
+#define RW_BITS     (USB_EP_TYPE | USB_EP_KIND | USB_EP_EA)
+#define TOGGLE_BITS (USB_EP_DTOG_RX | USB_EP_STAT_RX | USB_EP_DTOG_TX | USB_EP_STAT_TX)
+#define CTR_BITS    (USB_EP_CTR_RX | USB_EP_CTR_TX)
+
+void host_epr_write(int n, uint16_t v)
+{
+    uint16_t old = (uint16_t)host_usb.EPR[n];
+    uint16_t nv  = (uint16_t)((v & RW_BITS)
+                 | (old & USB_EP_SETUP)
+                 | (old & v & CTR_BITS)
+                 | ((old ^ (v & TOGGLE_BITS)) & TOGGLE_BITS));
+    host_usb.EPR[n] = nv;
+}
+
+static uint16_t epr(int n)          { return (uint16_t)host_usb.EPR[n]; }
+static int stat_tx(int n)           { return (epr(n) >> 4) & 3; }
+static int stat_rx(int n)           { return (epr(n) >> 12) & 3; }
+static int dtog_tx(int n)           { return !!(epr(n) & USB_EP_DTOG_TX); }
+static int dtog_rx(int n)           { return !!(epr(n) & USB_EP_DTOG_RX); }
+/* Hardware-side register update (not subject to the write semantics). */
+static void hw_set(int n, uint16_t clear, uint16_t set)
+{
+    host_usb.EPR[n] = (uint16_t)((epr(n) & ~clear) | set);
+}
+static void hw_stat_rx(int n, int s) { hw_set(n, USB_EP_STAT_RX, (uint16_t)(s << 12)); }
+static void hw_stat_tx(int n, int s) { hw_set(n, USB_EP_STAT_TX, (uint16_t)(s << 4)); }
+
+static uint16_t bt_tx_addr(int n) { return host_pma[n * 4 + 0]; }
+static uint16_t bt_tx_cnt (int n) { return host_pma[n * 4 + 1]; }
+static uint16_t bt_rx_addr(int n) { return host_pma[n * 4 + 2]; }
+
+static void pma_put(uint16_t off, const uint8_t *d, uint16_t n)
+{
+    for (uint16_t i = 0; i < n; i++) {
+        uint16_t *w = &host_pma[(off + i) / 2];
+        if ((off + i) & 1) *w = (uint16_t)((*w & 0x00FF) | (d[i] << 8));
+        else               *w = (uint16_t)((*w & 0xFF00) | d[i]);
+    }
+}
+static void pma_get(uint16_t off, uint8_t *d, uint16_t n)
+{
+    for (uint16_t i = 0; i < n; i++) {
+        uint16_t w = host_pma[(off + i) / 2];
+        d[i] = (uint8_t)(((off + i) & 1) ? (w >> 8) : w);
+    }
+}
+
+static void irq(int ep, uint16_t flags)
+{
+    host_usb.ISTR = (uint16_t)(flags | (ep & USB_ISTR_EPID));
+    USB_IRQHandler();
+    host_usb.ISTR = 0;
+}
+
+/* RX capacity from COUNTn_RX: BL_SIZE=1 -> 32-byte blocks, NUM_BLOCK+1 blocks
+ * ... RM0091 encodes NUM_BLOCK blocks for BL_SIZE=1 as (NUM_BLOCK+1)*32. */
+static int rx_capacity(int n)
+{
+    uint16_t c = host_pma[n * 4 + 3];
+    int nb = (c >> 10) & 0x1F;
+    return (c & 0x8000) ? (nb + 1) * 32 : nb * 2;
+}
+
+#define NAK   (-1)
+#define STALL (-2)
+#define OVERRUN (-3)
+
+static int host_setup(const uint8_t s[8])
+{
+    uint16_t cnt = host_pma[0 * 4 + 3];
+    pma_put(bt_rx_addr(0), s, 8);
+    host_pma[0 * 4 + 3] = (uint16_t)((cnt & 0xFC00) | 8);
+    hw_stat_rx(0, USB_EP_STAT_NAK);
+    hw_stat_tx(0, USB_EP_STAT_NAK);
+    hw_set(0, 0, USB_EP_CTR_RX | USB_EP_SETUP | USB_EP_DTOG_RX | USB_EP_DTOG_TX);
+    irq(0, USB_ISTR_CTR);
+    hw_set(0, USB_EP_SETUP, 0);
+    return 0;
+}
+
+static int host_in(int ep, uint8_t *buf, int max)
+{
+    int st = stat_tx(ep);
+    if (st == USB_EP_STAT_STALL) return STALL;
+    if (st != USB_EP_STAT_VALID) return NAK;
+    int len = bt_tx_cnt(ep) & 0x3FF;
+    if (len > max) len = max;
+    pma_get(bt_tx_addr(ep), buf, (uint16_t)len);
+    hw_stat_tx(ep, USB_EP_STAT_NAK);
+    hw_set(ep, 0, USB_EP_CTR_TX);
+    host_usb.EPR[ep] ^= USB_EP_DTOG_TX;
+    irq(ep, USB_ISTR_CTR | USB_ISTR_DIR * 0);
+    return len;
+}
+
+static int host_out(int ep, const uint8_t *data, int len)
+{
+    int st = stat_rx(ep);
+    if (st == USB_EP_STAT_STALL) return STALL;
+    if (st != USB_EP_STAT_VALID) return NAK;
+    if (len > rx_capacity(ep)) return OVERRUN;
+    uint16_t cnt = host_pma[ep * 4 + 3];
+    pma_put(bt_rx_addr(ep), data, (uint16_t)len);
+    host_pma[ep * 4 + 3] = (uint16_t)((cnt & 0xFC00) | len);
+    hw_stat_rx(ep, USB_EP_STAT_NAK);
+    hw_set(ep, 0, USB_EP_CTR_RX);
+    host_usb.EPR[ep] ^= USB_EP_DTOG_RX;
+    irq(ep, USB_ISTR_CTR | USB_ISTR_DIR);
+    return 0;
+}
+
+static void mk_setup(uint8_t *s, uint8_t type, uint8_t req, uint16_t val,
+                     uint16_t idx, uint16_t len)
+{
+    s[0] = type; s[1] = req;
+    s[2] = (uint8_t)val; s[3] = (uint8_t)(val >> 8);
+    s[4] = (uint8_t)idx; s[5] = (uint8_t)(idx >> 8);
+    s[6] = (uint8_t)len; s[7] = (uint8_t)(len >> 8);
+}
+
+/* Control read: SETUP, IN data until short packet or wLength, OUT status ZLP.
+ * Returns bytes read, or STALL. */
+static int ctrl_in(uint8_t type, uint8_t req, uint16_t val, uint16_t idx,
+                   uint16_t wlen, uint8_t *buf)
+{
+    uint8_t s[8]; mk_setup(s, type, req, val, idx, wlen);
+    host_setup(s);
+    int total = 0;
+    for (;;) {
+        int r = host_in(0, buf + total, 64);
+        if (r == STALL) return STALL;
+        if (r < 0) return -100;               /* device never answered */
+        total += r;
+        if (r < 64 || total >= wlen) break;
+    }
+    if (host_out(0, 0, 0) != 0) return -101;  /* status stage not accepted */
+    return total;
+}
+
+/* Control write without data: SETUP, IN status ZLP. Returns 0 or STALL. */
+static int ctrl_nodata(uint8_t type, uint8_t req, uint16_t val, uint16_t idx)
+{
+    uint8_t s[8]; mk_setup(s, type, req, val, idx, 0);
+    host_setup(s);
+    uint8_t b[64];
+    int r = host_in(0, b, 64);
+    if (r == STALL) return STALL;
+    return r == 0 ? 0 : -102;
+}
+
+/* ---- stubs for the layers above and beside the USB stack ----------------- */
+static uint32_t g_ms;
+uint32_t millis(void)            { return g_ms++; }   /* advances, so waits end */
+void wdt_kick(void)              {}
+void delay_us(uint32_t us)       { (void)us; }
+void gpio_af(pin_t p, uint8_t a) { (void)p; (void)a; }
+
+static uint8_t g_rx[512];
+static int     g_rx_len;
+static int     g_resets;
+static int     g_hold_rx;                  /* simulate a full ring buffer */
+void protocol_feed(const uint8_t *d, uint16_t n)
+{
+    memcpy(g_rx + g_rx_len, d, n); g_rx_len += n;
+    if (!g_hold_rx) usb_ep_rx_ready(EP_DATA);
+}
+void protocol_reset(void) { g_resets++; }
+
+/* ---- checks ------------------------------------------------------------- */
+static int fails, checks;
+#define CHECK(c) do { checks++; if (c) printf("ok   %s\n", #c); \
+                      else { printf("FAIL %s  (line %d)\n", #c, __LINE__); fails++; } } while (0)
+
+static void bus_reset(void)
+{
+    irq(0, USB_ISTR_RESET);
+}
+
+static void enumerate(void)
+{
+    uint8_t b[256];
+    bus_reset();
+    ctrl_in(0x80, 6, 0x0100, 0, 64, b);
+    ctrl_nodata(0x00, 5, 7, 0);
+    ctrl_nodata(0x00, 9, 1, 0);
+}
+
+int main(void)
+{
+    uint8_t b[512];
+    int r;
+    usb_desc_init_serial();
+
+    /* 1) Bus reset: EP0 control, RX armed, TX NAK, address 0 with EF set. */
+    bus_reset();
+    CHECK((epr(0) & USB_EP_TYPE) == USB_EP_TYPE_CONTROL);
+    CHECK(stat_rx(0) == USB_EP_STAT_VALID && stat_tx(0) == USB_EP_STAT_NAK);
+    CHECK(host_usb.DADDR == USB_DADDR_EF);
+    CHECK(rx_capacity(0) == 64);
+
+    /* 2) Device descriptor, byte-identical to a genuine unit's `lsusb -v`
+     *    (bcdUSB 2.00, class 0, MPS0 64, VID 0922, bcdDevice 1.00, strings
+     *    1/2/3, one configuration) apart from the per-model PID. */
+    r = ctrl_in(0x80, 6, 0x0100, 0, 64, b);
+    {
+        const uint8_t want[18] = { 18, 1, 0x00, 0x02, 0, 0, 0, 64,
+            0x22, 0x09, (uint8_t)MODEL_PID, (uint8_t)(MODEL_PID >> 8),
+            0x00, 0x01, 1, 2, 3, 1 };
+        CHECK(r == 18 && memcmp(b, want, 18) == 0);
+    }
+    /* Windows asks for 8 bytes first on some stacks: honour wLength. */
+    r = ctrl_in(0x80, 6, 0x0100, 0, 8, b);
+    CHECK(r == 8 && b[7] == 64);
+
+    /* 3) SET_ADDRESS takes effect only after the status stage (USB 2.0 9.4.6). */
+    {
+        uint8_t s[8]; mk_setup(s, 0x00, 5, 0x25, 0, 0);
+        host_setup(s);
+        CHECK(host_usb.DADDR == USB_DADDR_EF);          /* not yet */
+        r = host_in(0, b, 64);
+        CHECK(r == 0);
+        CHECK(host_usb.DADDR == (USB_DADDR_EF | 0x25)); /* now */
+    }
+
+    /* 4) Configuration descriptor, short read then full: matches the genuine
+     *    0922:0028 dump - self-powered 4 mA, printer 7/1/2, 0x82 IN first. */
+    r = ctrl_in(0x80, 6, 0x0200, 0, 9, b);
+    CHECK(r == 9 && b[2] == 32 && b[3] == 0);
+    r = ctrl_in(0x80, 6, 0x0200, 0, 255, b);
+    {
+        const uint8_t want[32] = {
+            9, 2, 32, 0, 1, 1, 0, 0xC0, 0x02,
+            9, 4, 0, 0, 2, 7, 1, 2, 0,
+            7, 5, 0x82, 0x02, 64, 0, 0,
+            7, 5, 0x02, 0x02, 64, 0, 0 };
+        CHECK(r == 32 && memcmp(b, want, 32) == 0);
+    }
+
+    /* 5) Strings: language, manufacturer, product with vendor prefix, a
+     *    12-digit serial without a leading zero; unknown index stalls. */
+    r = ctrl_in(0x80, 6, 0x0300, 0, 255, b);
+    CHECK(r == 4 && b[2] == 0x09 && b[3] == 0x04);
+    r = ctrl_in(0x80, 6, 0x0302, 0x0409, 255, b);
+    {
+        char prod[40]; int n = (r - 2) / 2;
+        for (int i = 0; i < n && i < 39; i++) prod[i] = (char)b[2 + 2 * i];
+        prod[n < 39 ? n : 39] = 0;
+        CHECK(r == b[0] && strcmp(prod, MODEL_USB_PRODUCT) == 0);
+    }
+    r = ctrl_in(0x80, 6, 0x0303, 0x0409, 255, b);
+    {
+        int digits = 1;
+        for (int i = 0; i < 12; i++)
+            if (b[2 + 2 * i] < '0' || b[2 + 2 * i] > '9' || b[3 + 2 * i] != 0) digits = 0;
+        CHECK(r == 26 && digits && b[2] != '0');
+    }
+    CHECK(ctrl_in(0x80, 6, 0x0307, 0x0409, 255, b) == STALL);
+    /* EP0 recovers from that STALL at the next SETUP (RM0091 30.5.2). */
+    r = ctrl_in(0x80, 0, 0, 0, 2, b);
+    CHECK(r == 2 && b[0] == 0x01 && b[1] == 0x00);      /* self-powered */
+
+    /* 6) SET_CONFIGURATION opens EP2 as bulk: OUT armed with 64 bytes, IN NAK,
+     *    both data toggles at DATA0, class layer told (protocol_reset). */
+    g_resets = 0;
+    CHECK(ctrl_nodata(0x00, 9, 1, 0) == 0);
+    CHECK((epr(EP_DATA) & (USB_EP_TYPE | USB_EP_EA)) == (USB_EP_TYPE_BULK | EP_DATA));
+    CHECK(stat_rx(EP_DATA) == USB_EP_STAT_VALID && stat_tx(EP_DATA) == USB_EP_STAT_NAK);
+    CHECK(dtog_rx(EP_DATA) == 0 && dtog_tx(EP_DATA) == 0);
+    CHECK(rx_capacity(EP_DATA) == 64);
+    CHECK(g_resets == 1 && usb_is_configured());
+    r = ctrl_in(0x80, 8, 0, 0, 1, b);
+    CHECK(r == 1 && b[0] == 1);
+
+    /* 7) Bulk OUT reaches the parser, and the endpoint re-arms at full
+     *    capacity for a maximum-size packet. */
+    {
+        uint8_t pkt[64];
+        for (int i = 0; i < 64; i++) pkt[i] = (uint8_t)i;
+        g_rx_len = 0;
+        CHECK(host_out(EP_DATA, (const uint8_t *)"\x1b" "A\x00", 3) == 0);
+        CHECK(g_rx_len == 3 && g_rx[0] == 0x1B && g_rx[1] == 'A');
+        CHECK(host_out(EP_DATA, pkt, 64) == 0);
+        CHECK(g_rx_len == 67 && g_rx[3 + 63] == 63);
+        CHECK(dtog_rx(EP_DATA) == 0);                   /* two packets: 0->1->0 */
+    }
+
+    /* 8) Flow control: while the parser holds the endpoint, the host is NAKed
+     *    and nothing is lost; usb_ep_rx_ready() re-opens it. */
+    g_hold_rx = 1; g_rx_len = 0;
+    CHECK(host_out(EP_DATA, (const uint8_t *)"abc", 3) == 0);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"def", 3) == NAK);
+    g_hold_rx = 0;
+    usb_ep_rx_ready(EP_DATA);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"def", 3) == 0);
+    CHECK(g_rx_len == 6 && memcmp(g_rx, "abcdef", 6) == 0);
+
+    /* 9) Bulk IN: a reply is collected intact; a second reply while the first
+     *    is uncollected is refused rather than overwriting it. */
+    {
+        uint8_t rep[32];
+        for (int i = 0; i < 32; i++) rep[i] = (uint8_t)(0xA0 + i);
+        CHECK(usbp_send_reply(rep, 32) == 32);
+        CHECK(usbp_send_reply((const uint8_t *)"XX", 2) == 0);   /* busy */
+        r = host_in(EP_DATA, b, 64);
+        CHECK(r == 32 && memcmp(b, rep, 32) == 0);
+        CHECK(host_in(EP_DATA, b, 64) == NAK);
+        CHECK(usbp_send_reply((const uint8_t *)"OK", 2) == 2);
+        r = host_in(EP_DATA, b, 64);
+        CHECK(r == 2 && b[0] == 'O');
+        CHECK(dtog_tx(EP_DATA) == 0);                   /* two packets */
+    }
+
+    /* 10) Register discipline: changing one STAT field must not clear a
+     *     pending CTR flag of the other direction, nor flip a DTOG. */
+    hw_set(EP_DATA, 0, USB_EP_CTR_TX | USB_EP_DTOG_TX);
+    g_hold_rx = 1;
+    host_out(EP_DATA, (const uint8_t *)"z", 1);          /* RX now NAK */
+    hw_set(EP_DATA, 0, USB_EP_CTR_TX);                   /* re-assert pending TX */
+    usb_ep_rx_ready(EP_DATA);
+    CHECK(epr(EP_DATA) & USB_EP_CTR_TX);
+    CHECK(stat_rx(EP_DATA) == USB_EP_STAT_VALID);
+    CHECK(dtog_tx(EP_DATA) == 1);
+    g_hold_rx = 0;
+    hw_set(EP_DATA, USB_EP_CTR_TX | USB_EP_DTOG_TX, 0);
+
+    /* 11) Printer class GET_DEVICE_ID: 2-byte big-endian length including
+     *     itself, then MODEL_IEEE_ID; spans two control packets; a short
+     *     wLength truncates. */
+    r = ctrl_in(0xA1, 0, 0, 0, 1023, b);
+    {
+        /* 450-family layout: the model string, then SERN:<USB serial>; */
+        char want[200], serial[13];
+        uint8_t sd[64];
+        ctrl_in(0x80, 6, 0x0303, 0x0409, 255, sd);
+        for (int i = 0; i < 12; i++) serial[i] = (char)sd[2 + 2 * i];
+        serial[12] = 0;
+        snprintf(want, sizeof want, "%sSERN:%s;", MODEL_IEEE_ID, serial);
+        r = ctrl_in(0xA1, 0, 0, 0, 1023, b);
+        int len = (b[0] << 8) | b[1];
+        int idl = (int)strlen(want);
+        CHECK(r == idl + 2 && len == idl + 2 && r > 64);
+        CHECK(memcmp(b + 2, want, (size_t)idl) == 0);
+    }
+    r = ctrl_in(0xA1, 0, 0, 0, 2, b);
+    CHECK(r == 2);
+
+    /* 12) GET_PORT_STATUS: select + no-error; paper-empty bit when out. */
+    r = ctrl_in(0xA1, 1, 0, 0, 1, b);
+    CHECK(r == 1 && b[0] == 0x18);
+    usbp_set_paper_present(0);
+    r = ctrl_in(0xA1, 1, 0, 0, 1, b);
+    CHECK(r == 1 && b[0] == 0x38);
+    usbp_set_paper_present(1);
+
+    /* 13) SOFT_RESET, both recipients (0x21 per spec, 0x23 as Linux sends):
+     *     queued IN reply dropped, parser reset, data toggles untouched. */
+    {
+        int rec[2] = { 0x21, 0x23 };
+        for (int k = 0; k < 2; k++) {
+            CHECK(usbp_send_reply((const uint8_t *)"stale", 5) == 5);
+            host_usb.EPR[EP_DATA] |= USB_EP_DTOG_TX;      /* mid-stream toggle */
+            g_resets = 0;
+            CHECK(ctrl_nodata((uint8_t)rec[k], 2, 0, 0) == 0);
+            CHECK(g_resets == 1);
+            CHECK(host_in(EP_DATA, b, 64) == NAK);
+            CHECK(dtog_tx(EP_DATA) == 1);
+            host_usb.EPR[EP_DATA] &= ~USB_EP_DTOG_TX;
+        }
+    }
+
+    /* 14) ENDPOINT_HALT on 0x82: SET_FEATURE stalls IN, GET_STATUS reports it,
+     *     CLEAR_FEATURE un-stalls and resets the toggle to DATA0. */
+    CHECK(usbp_send_reply((const uint8_t *)"a", 1) == 1);
+    host_in(EP_DATA, b, 64);                             /* DTOG_TX -> 1 */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(host_in(EP_DATA, b, 64) == STALL);
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 1);
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x82) == 0);
+    CHECK(host_in(EP_DATA, b, 64) == NAK && dtog_tx(EP_DATA) == 0);
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 0);
+    /* same for OUT 0x02 */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x02) == 0);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"q", 1) == STALL);
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x02) == 0);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"q", 1) == 0);
+
+    /* 15) A SOFT_RESET clears a host-set IN stall (Printer Class 1.1 4.2.3). */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);
+    CHECK(host_in(EP_DATA, b, 64) == NAK);
+
+    /* 16) Re-configuration resets both toggles to DATA0 (RM0091 30.6.2). */
+    host_usb.EPR[EP_DATA] |= USB_EP_DTOG_TX | USB_EP_DTOG_RX;
+    CHECK(ctrl_nodata(0x00, 9, 1, 0) == 0);
+    CHECK(dtog_tx(EP_DATA) == 0 && dtog_rx(EP_DATA) == 0);
+    host_usb.EPR[EP_DATA] |= USB_EP_DTOG_TX | USB_EP_DTOG_RX;
+    CHECK(ctrl_nodata(0x00, 11, 0, 0) == 0);            /* SET_INTERFACE */
+    CHECK(dtog_tx(EP_DATA) == 0 && dtog_rx(EP_DATA) == 0);
+
+    /* 17) Unsupported requests stall, and an unsupported control WRITE keeps
+     *     its data stage stalled instead of ACKing and dropping the data. */
+    CHECK(ctrl_in(0x80, 0x33, 0, 0, 8, b) == STALL);
+    {
+        uint8_t s[8]; mk_setup(s, 0x21, 0x09, 0, 0, 4);  /* class OUT, 4 bytes */
+        host_setup(s);
+        CHECK(stat_rx(0) == USB_EP_STAT_STALL);
+        CHECK(host_out(0, (const uint8_t *)"data", 4) == STALL);
+    }
+    CHECK(ctrl_in(0xC0, 0x01, 0, 0, 8, b) == STALL);     /* vendor request */
+    r = ctrl_in(0x80, 0, 0, 0, 2, b);                    /* and EP0 recovers */
+    CHECK(r == 2 && b[0] == 0x01);
+
+    /* 18) Control IN of exactly one full packet with a larger wLength ends
+     *     with a zero-length packet (USB 2.0 5.5.3). */
+    {
+        static uint8_t full[64];
+        memset(full, 0x5A, sizeof full);
+        uint8_t s[8]; mk_setup(s, 0xC0, 0x7F, 0, 0, 255);
+        host_setup(s);                                   /* stalls ... */
+        usb_ctrl_send(full, 64, 255);                    /* ... then send manually */
+        CHECK(host_in(0, b, 64) == 64 && b[63] == 0x5A);
+        CHECK(host_in(0, b, 64) == 0);                   /* the ZLP */
+        CHECK(host_in(0, b, 64) == NAK);
+        usb_ctrl_send(full, 64, 64);                     /* exact wLength: no ZLP */
+        CHECK(host_in(0, b, 64) == 64);
+        CHECK(host_in(0, b, 64) == NAK);
+    }
+
+    /* 19) A bus reset drops the configuration: bulk writes are refused. */
+    bus_reset();
+    CHECK(!usb_is_configured());
+    CHECK(usbp_send_reply((const uint8_t *)"x", 1) == 0);
+    CHECK(host_usb.DADDR == USB_DADDR_EF);
+    enumerate();
+    CHECK(usb_is_configured() && host_usb.DADDR == (USB_DADDR_EF | 7));
+
+    /* 20) Suspend / wake-up toggle FSUSP. */
+    irq(0, USB_ISTR_SUSP);
+    CHECK(host_usb.CNTR & USB_CNTR_FSUSP);
+    irq(0, USB_ISTR_WKUP);
+    CHECK(!(host_usb.CNTR & USB_CNTR_FSUSP));
+
+    printf(fails ? "\n%d of %d USB check(s) FAILED\n" : "\nALL %d USB CHECKS PASSED\n",
+           fails ? fails : checks, checks);
+    return fails ? 1 : 0;
+}

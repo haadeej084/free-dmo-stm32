@@ -107,6 +107,12 @@ These retire the remaining protocol entries in DECISIONS D12. Mail the hex to
 **Required**
 
 - A genuine **LabelWriter 550 or 5XL**, opened, mainboard exposed.
+  **Read the main MCU's marking before anything else.** This firmware is for an
+  **STM32F072CB**. The USB-only 550 carries one; the FCC photos of the network
+  models (5XL, 550 Turbo) show a much larger (~14 mm, 100-pin-class) ST chip
+  next to the LAN jack instead, and no 48-pin F072 was visible (DECISIONS D24).
+  If your board's print-engine MCU is not an F072CB, stop and report the
+  marking — that report alone is valuable.
 - A **multimeter** with a continuity buzzer and DC volts. Fine-tipped probes or
   a pair of sewing needles — LQFP48 pads are 0.5 mm apart.
 - This repo checked out, so you can read `src/pins.h` while measuring.
@@ -232,11 +238,12 @@ short list of things that are already pinned down, so you can skip them.
   **command set + status-struct layout** — sourced from the tech ref and a live
   capture of a genuine 550.
 
-> **Not** established, despite living in the same protocol: the `ESC U` CRC
-> polynomial and the `ESC V` version strings are *assumptions* (DECISIONS D12).
-> They are informational fields and D.MO Connect appears to tolerate them, but if
-> the host ever rejects the roll with a plausible SKU configured, these are the
-> first suspects. See measurement 7.
+> **What D.MO Connect actually checks** (decompiled, DECISIONS D24): it never
+> sends `ESC U`, so the record's CRC and geometry cannot upset it. Roll state
+> comes from the `ESC A` status only — bay status byte 10 (8 = OK, 10 =
+> counterfeit), the 12-byte SKU and the label count — and the SKU must be in
+> Connect's catalog for the install's region, or the roll shows as empty. The
+> `ESC V` version strings remain our own values (D12). See measurement 7.
 
 ### What the silicon already rules out
 
@@ -268,7 +275,9 @@ the honest reason this document exists.
 Goal: prove the chip runs your image and the host sees a printer. Nothing can be
 damaged in this step.
 
-1. **Establish you may program the chip.** Connect SWD and try to read the IDCODE
+1. **Establish you may program the chip — and that it is the right chip.**
+   `st-info --probe` must report an **STM32F07x** (chip ID `0x448`); anything
+   else means this image does not fit the board. Connect SWD and try to read the IDCODE
    (`st-info --probe`, or OpenOCD `targets`). On a stock printer this is
    expected to fail if the part really is at RDP2, which disables SWD entirely —
    not a wiring fault. **If it does return an IDCODE**, the part is at RDP0/1,
@@ -527,7 +536,11 @@ Section 3. Nothing below can be interpreted before this is done.
 
 ### 2. Motor µsteps per line — *the motor is now identified; the gearing is not*
 The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
-~35 mm can, ~6.5 Ω/phase. That confirms the 4-phase drive mode the firmware
+~35 mm can, ~6.5 Ω/phase (the marking "35BY412-339 6.5Ω" is legible in the FCC
+photos of both the 550 and the 5XL), 7.5° per step = 48 steps/rev. One full
+step per line is the estimate that fits the rated speed (DECISIONS D24), and it
+is what `MOTOR_STEPS_PER_LINE` holds; the measurement below confirms or
+corrects it in one feed. That confirms the 4-phase drive mode the firmware
 defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
 is the drive train between motor and platen.
 Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
@@ -651,9 +664,11 @@ With a plausible SKU configured, does **D.MO Connect** show a valid roll and
 print end to end?
 **How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
 (550), then drive it from D.MO Connect.
-**If the roll shows as empty/JOKER:** try the `pc-patch/` tool; if the patch is
-what makes it work, that tells us the `ESC U` record (CRC or geometry) is being
-validated after all — which is exactly the open question in DECISIONS D12.
+**If the roll shows as empty/JOKER:** Connect decides that from the status
+struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
+`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
+Connect's catalog for your region (an EU install hides US-only SKUs as
+"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
 **Report:** what Connect displayed, before and after the patch.
 
 ---

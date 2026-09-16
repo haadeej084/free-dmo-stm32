@@ -73,6 +73,14 @@ void head_init(void)
 {
     /* All head signals are plain GPIO outputs, idle state:
      * CLK/DI low, LAT high (HOLD), strobes high (off - STB is active-low). */
+#if HEAD_SHIFT_SAME_PORT
+    /* pins.h promises one port for the shift lines; a remap that breaks that
+     * would make the fast shift loop drive the wrong pins. Stop here, before
+     * any head output is configured - the watchdog then resets visibly
+     * instead of printing garbage with the heat rail live. */
+    if (PIN_HEAD_DI1.port != PIN_HEAD_CLK.port || PIN_HEAD_DI2.port != PIN_HEAD_CLK.port)
+        for (;;) {}
+#endif
     gpio_mode(PIN_HEAD_CLK,   GPIO_OUT);  gpio_set(PIN_HEAD_CLK, 0);
     gpio_mode(PIN_HEAD_DI1,   GPIO_OUT);  gpio_set(PIN_HEAD_DI1, 0);
     gpio_mode(PIN_HEAD_DI2,   GPIO_OUT);  gpio_set(PIN_HEAD_DI2, 0);
@@ -173,8 +181,40 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
     const uint32_t d1 = 1u << PIN_HEAD_DI1.pin;
     const uint32_t d2 = 1u << PIN_HEAD_DI2.pin;
     const uint32_t ck = 1u << PIN_HEAD_CLK.pin;
-#if (HEAD_DI1_DOTS == HEAD_DI2_DOTS) && (HEAD_DI1_DOTS % 8 == 0)
-    /* Fast path: equal, byte-aligned halves (both models as assumed). */
+#if (HEAD_DI1_DOTS == HEAD_DI2_DOTS) && (HEAD_DI1_DOTS % 8 == 0) && HEAD_SHIFT_SAME_PORT
+    /* Fastest path: equal byte-aligned halves, CLK/DI1/DI2 on one port.
+     * Two BSRR writes per dot: (a) both data bits plus CLK low in one atomic
+     * write, (b) CLK high. Data therefore changes on the falling edge and is
+     * stable for the whole low phase before the rising edge that samples it;
+     * the high phase lasts until the next write (a) - several instructions,
+     * far above the head's ~100 ns class minimum. Measured in Renode on the
+     * 1248-dot build this roughly halves the instructions per line compared
+     * with the four-write loop below (DECISIONS D24). */
+    (void)pdi1; (void)pdi2;
+    const uint16_t hb = (uint16_t)(HEAD_DI1_DOTS / 8);   /* bytes per half */
+    /* The four possible "data + CLK low" words, indexed by (DI1 << 1) | DI2,
+     * computed once per line so the inner loop does no constant building. */
+    uint32_t word[4];
+    for (unsigned i = 0; i < 4; i++) {
+        uint32_t set = ((i & 2u) ? d1 : 0u) | ((i & 1u) ? d2 : 0u);
+        word[i] = set | ((set ^ (d1 | d2)) << 16) | (ck << 16);
+    }
+    volatile uint32_t *bsrr = &pclk->BSRR;
+
+    for (uint16_t b = 0; b < hb; b++) {
+        /* DI1 byte in bits 15..8, DI2 byte in 7..0: after k left shifts bit 15
+         * is DI1 bit 7-k and bit 7 is DI2 bit 7-k; DI2's bits only reach bit
+         * 15 after eight shifts, when the byte is done. */
+        uint32_t w = (uint32_t)(((b < nbytes) ? bits[b] : 0u) << 8)
+                   | (((uint16_t)(hb + b) < nbytes) ? bits[hb + b] : 0u);
+        for (unsigned k = 0; k < 8; k++, w <<= 1) {
+            *bsrr = word[((w >> 14) & 2u) | ((w >> 7) & 1u)];
+            *bsrr = ck;
+        }
+    }
+    *bsrr = ck << 16;                                /* park CLK low */
+#elif (HEAD_DI1_DOTS == HEAD_DI2_DOTS) && (HEAD_DI1_DOTS % 8 == 0)
+    /* Fast path: equal, byte-aligned halves, pins on different ports. */
     const uint16_t hb = (uint16_t)(HEAD_DI1_DOTS / 8);   /* bytes per half */
 
     for (uint16_t b = 0; b < hb; b++) {

@@ -21,14 +21,15 @@ carries replies (status, SKU record, version).
 | Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
 | Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
 | Endpoints | bulk IN `0x82` (listed first), bulk OUT `0x02` | same |
-| IEEE-1284 ID | `MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;` | same with `550` |
+| IEEE-1284 ID | `MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;SERN:<USB serial>;` | same with `550` |
 
 The `MFG`+`MDL` pair is what makes Windows derive the hardware ID
 `USBPRINT\<MFG+MDL, spaces to underscores, cut to 20><4-char OS CRC>`, here
 `USBPRINT\DYMOLabelWriter_5XLB920` / `...550C80D` - exactly the IDs DYMO's own
 `DYMO_LW5xx.inf` binds (that INF has no compatible IDs, so the other 1284 keys
-cannot affect binding). The key layout follows the published LabelWriter 450
-family string; the genuine 550/5XL string has not been captured. Microsoft
+cannot affect binding). The key layout, including the trailing `SERN` equal to
+the USB serial, follows the published LabelWriter 450 string (apple/cups#5821,
+michaelrsweet/pappl#396); the genuine 550/5XL string has not been captured. Microsoft
 warns its CRC "may not match ... any other CRC algorithm", so the bench check is
 `setupapi.dev.log` (FIELDWORK section 5). Head widths (1248 / 672 dots) come from the tech reference and
 the driver GPDs' `MaxPrintableWidth`.

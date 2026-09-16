@@ -835,6 +835,57 @@ int main(void){
         CHECK(g_reply[5] == 5);
     }
 
+    /* 58) Every fixed-length command in the genuine language consumes exactly
+     *     its own argument bytes. The lengths come from the stock port
+     *     monitor's own DPL iterator, which carries a byte length per opcode.
+     *     Getting one wrong desynchronises the parser into reading raster data
+     *     as commands: the old "unknown byte after ESC eats one argument" rule
+     *     was wrong for ESC l, ESC t (4 bytes), ESC X (5) and ESC H, ESC m,
+     *     ESC b (2).
+     *
+     *     The probe is built so BOTH directions fail loudly. The arguments end
+     *     in 0x1B, so a command that eats too FEW leaves an ESC pending and the
+     *     following GS D is swallowed as its opcode - no reply. A command that
+     *     eats too MANY swallows the GS itself - also no reply. */
+    {
+        static const struct { unsigned char op; int args; } cmds[] = {
+            { '#', 1 },   /* SetNumberOfCopies    */
+            { 'p', 1 },   /* DoCutLabel           */
+            { 'P', 0 },   /* GetEthernetPhyState  */
+            { 'x', 0 },   /* GetPrintEngineParams */
+            { 'H', 2 },   /* SetHorzResolution    */
+            { 'm', 2 },   /* GetSensorsValues     */
+            { 'b', 2 },   /* PrintEngineStatusTwin*/
+            { 'l', 4 },   /* SetLabelLeader       */
+            { 't', 4 },   /* SetLabelTrailer      */
+            { 'X', 5 },   /* SetPrintEngineParams */
+            { 'T', 1 },   /* SetFeedSpeed         */
+            { 'q', 1 },   /* SelectRoll           */
+            { 'C', 1 },   /* SetPrintDensity      */
+            { 'A', 1 },   /* PrintEngineStatus    */
+            { 'n', 2 },   /* SetLabelIndex        */
+            { 's', 4 },   /* StartPrintJob        */
+            { 'M', 8 },   /* SetMediaType         */
+        };
+        int bad = 0;
+        for (unsigned k = 0; k < sizeof cmds / sizeof cmds[0]; k++) {
+            unsigned char buf[24];
+            int n = 0;
+            reset_state();
+            buf[n++] = 0x1B; buf[n++] = cmds[k].op;
+            for (int i = 0; i < cmds[k].args; i++)
+                buf[n++] = (unsigned char)((i == cmds[k].args - 1) ? 0x1B : 0x77);
+            buf[n++] = 0x1D; buf[n++] = 'D'; buf[n++] = 0x05;   /* build id, replies */
+            protocol_feed(buf, n); protocol_task();
+            if (g_reply_len < 3 || g_reply[0] != 'D' || g_reply[1] != 0x05) {
+                printf("     ESC %c (%d args): no build-id reply - out of step\n",
+                       cmds[k].op, cmds[k].args);
+                bad++;
+            }
+        }
+        CHECK(bad == 0);
+    }
+
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;
 }

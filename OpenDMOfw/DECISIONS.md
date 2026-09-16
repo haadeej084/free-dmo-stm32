@@ -145,7 +145,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **138 checks / 59 scenarios, both models**. Note that
+  compiled + run natively; **139 checks / 60 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -899,3 +899,68 @@ law (it fails on the old linear-in-code taper), the 70/56 °C latch, the
 median-of-three's rejection of a single outlier in both directions, the 20 ms
 cache, and that no density/temperature combination can exceed the energy
 ceiling.
+
+## D29 — A sibling firmware image exists, and DYMO's own driver is the better oracle
+
+### The image
+
+"No DYMO firmware image is published" was true of the **550** and false of the
+family. The LabelWriter 450 / 450 Turbo updater (`LW450Updater.exe`, still
+served by DYMO and byte-identical to a 2015 archive copy) carries the printer
+firmware as a plain const array: 20 480 bytes, unencrypted, an ARM Cortex-M0
+image for an **NXP LPC11Uxx** at load address `0x2000` (an 8 KB boot loader sits
+below it). It disassembles cleanly.
+
+What it shows, and what it does **not** settle for us:
+
+* the 450 drives the head's shift register from **hardware SPI** (SSP1 at
+  PCLK/4, 8-bit frames), not bit-banged GPIO — a datapoint for our own
+  two-write BSRR shift, not an argument against it;
+* compressed rasters on the 450 are a simple run length: a count byte `n < 0x80`
+  emits `n + 1` zero bits, `n >= 0x80` emits `n − 0x7F` one bits, bit-banged
+  with the SPI function temporarily disabled;
+* its `ESC V` reply is ten ASCII bytes chosen from four constants
+  (`1750110f0J`, `1750111f0J`, `1750283f0J`, `1750284f0J`) selected by two
+  bytes in a config page above the application — a different format from the
+  550's 34-byte `FWAP`/`FWBL` record, so it does not answer our `ESC V`;
+* its `ESC A` reply is a **single byte** with only bits 0, 1, 5 and 7 used;
+* it uses **no I2C at all**: no NFC frontend, no roll tag. The 450 predates the
+  550's roll DRM, which is consistent with the owner's report that a 450 board
+  in a 550 simply prints;
+* it reads three ADC channels and compares one against 10-bit thresholds 176
+  and 232 with hysteresis. Which channel is head thermistor, supply sense or
+  gap sensor is **not** established, so those numbers stay out of `thermal.c`.
+
+The 450 is a different MCU, a different generation and a different command
+dialect. Its value is as corroboration and as a worked example of how a real
+LabelWriter is built — not as a source of constants for this firmware.
+
+### The better oracle
+
+The stock Windows port monitor (`lw5xxmon.dll`, the DPL engine) turned out to
+be the authoritative source for the 550 language, and it settles more than the
+tech reference does:
+
+* the **complete opcode table** (38 commands) and, separately, the **exact byte
+  length of every command** — see the PROTOCOL.md appendix. Six commands take
+  more arguments than our default rule assumed; `protocol.c` now consumes all of
+  them correctly and scenario 58 pins it.
+* `ESC o` (`0x6F`) and `ESC $` (`0x24`) are **not commands** in the genuine
+  language; both land in its Unknown case. The real copy count is `ESC #`
+  (`0x23`) and the real factory reset is `ESC *` (`0x2A`). We keep `ESC o` and
+  `ESC $` as our own accepted aliases, now labelled as such.
+* the `ESC V` record is **load-bearing**: `FWAP`/`FWBL` must match exactly, the
+  major and minor fields must parse base-10 as non-zero, and the PID in the
+  reply overrides the host's idea of the model — which in turn selects whether
+  it expects a 32-byte or a 70-byte `ESC A` reply.
+* `ESC D`'s header (`BPP`, `Align`, u32 lines, u32 dots) is confirmed byte for
+  byte by both the driver's builder and its parser; the `MainBayStatus` 0–10
+  enum and `ErrorID` at byte 23 are confirmed from the driver's own decoder,
+  and only values 6, 7 and 8 are non-error.
+* the IEEE-1284 `MFG`+`MDL` halves are proven rather than derived: DYMO's INF
+  binds `USBPRINT\DYMOLabelWriter_550C80D` and `...5XLB920`, so those CRC
+  suffixes no longer need a bench check. Only the optional keys (`CMD`,
+  `CLASS`, `DESCRIPTION`, `SERN`) remain unobserved.
+
+Recorded so nobody re-derives it: the tables come from `lw5xxmon.dll` version
+1.1.0.266, with the opcode names at one jump table and the lengths at another.

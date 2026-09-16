@@ -151,7 +151,7 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (138 checks / 59 scenarios). This is the regression test: it links and runs
+  (139 checks / 60 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB

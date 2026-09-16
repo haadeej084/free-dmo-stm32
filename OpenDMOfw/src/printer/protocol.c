@@ -35,6 +35,13 @@
  *   ESC q <roll>         select roll/tray, ASCII '0'-'3' (Twin Turbo only);
  *                         accepted, ignored
  *   ESC ESC ...          a run of bare ESC bytes collapses to one pending ESC
+ *   ESC # <n>            set number of copies (1 arg, consumed)
+ *   ESC H <2>, ESC m <2>, ESC b <2>, ESC l <4>, ESC t <4>, ESC X <5>,
+ *   ESC p <1>, ESC P, ESC x  the rest of the genuine command set: consumed
+ *                         with the argument counts from the stock port
+ *                         monitor's own length table, so a command meant for
+ *                         a cutter, twin-roll or network model cannot
+ *                         desynchronise the parser
  *   ESC W len dir objid  control-command framing; len counts the 4 header
  *                         bytes after ESC W plus the payload (decompiled
  *                         ControlCommand: len = payload + 6 - 2); payload
@@ -791,6 +798,27 @@ void protocol_task(void)
             case 'c': set_density(75);  s_state = S_CMD; break;  /* Light   75 %   */
             case 'd': set_density(88);  s_state = S_CMD; break;  /* Medium  87.5 % */
             case 'g': set_density(113); s_state = S_CMD; break;  /* Dark   112.5 % */
+            /* The rest of the genuine command set, with the argument counts
+             * from the stock port monitor's own length table (its DPL iterator
+             * knows the exact fixed byte length of every command). We do not
+             * act on these - they are for the cutter, the twin-roll and the
+             * network models, or they query things we have no model for - but
+             * consuming the RIGHT number of bytes is what keeps the parser in
+             * step. The old "unknown byte after ESC eats one argument" rule was
+             * wrong for six of them: ESC l and ESC t take four argument bytes,
+             * ESC X takes five, ESC H / ESC m / ESC b take two. A four-byte
+             * command read as a one-byte one desynchronises by three bytes, and
+             * the next raster block is then parsed as commands. */
+            case '#': s_arg1 = '#'; s_state = S_ARG1; break;    /* SetNumberOfCopies */
+            case 'p': s_arg1 = 'p'; s_state = S_ARG1; break;    /* DoCutLabel (cutter) */
+            case 'P':                                           /* GetEthernetPhyState */
+            case 'x': s_state = S_CMD; break;                   /* GetPrintEngineParams */
+            case 'H':                                           /* SetHorzResolution */
+            case 'm':                                           /* GetSensorsValues */
+            case 'b': s_w_payload = 2; s_state = S_SKIP; break; /* PrintEngineStatusTwin */
+            case 'l':                                           /* SetLabelLeader */
+            case 't': s_w_payload = 4; s_state = S_SKIP; break; /* SetLabelTrailer */
+            case 'X': s_w_payload = 5; s_state = S_SKIP; break; /* SetPrintEngineParams */
             case 'D': s_hcnt = 0; s_state = S_ESC_D; break;     /* raster header */
             /* ESC Z = CompressedPrintData in lw5xxmon.dll's opcode table, the
              * compressed sibling of ESC D. The monitor emits it only when the
@@ -836,7 +864,9 @@ void protocol_task(void)
             case 'A': send_status(); break;
             case 'C': set_density(c); break;
             case 'o': store_get_mut()->label_count = c; store_save(); break;
-            /* 'T' speed, 'q' tray, '?': accept and ignore */
+            /* 'T' speed, 'q' roll, '#' copies, 'p' cut, '?': accept and ignore.
+             * Copies are a host-side concept here: the driver sends each copy
+             * as its own label, and we print exactly the rasters we are given. */
             }
             s_state = S_CMD;
             break;

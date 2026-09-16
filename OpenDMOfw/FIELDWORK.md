@@ -102,8 +102,10 @@ Those are three of the last five entries in DECISIONS D12. Mail the hex to
 
 - A **logic analyzer** (an 8-channel clone is enough) or a scope. Sections 6–8
   are guesswork without one.
-- An **F072 you are allowed to program** — a bare STM32F072CBT6 board, or a
-  printer whose RDP has already been lowered. See section 5.
+- An **F072 you are allowed to program**. Cheapest path: desolder the stock
+  chip and fit a **blank STM32F072CBT6** (LQFP48, a few dollars — new chips
+  ship RDP Level 0 with SWD enabled). A bare F072 dev board or a printer whose
+  RDP was already lowered also works. See section 5.
 
 **Optional**
 

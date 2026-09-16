@@ -42,6 +42,13 @@ the driver GPDs' `MaxPrintableWidth`.
 | 1 | GET_PORT_STATUS | IN (`0xA1`) | 1 byte: bit3 no-error, bit4 select, bit5 paper-out |
 | 2 | SOFT_RESET | OUT (`0x21`, `0x23` also accepted) | reset the print pipeline, drop a queued bulk-IN reply and clear an IN stall (DTOG untouched) |
 
+Standard requests with an **endpoint recipient** (`GET_STATUS`, `SET_FEATURE`,
+`CLEAR_FEATURE`) are honoured only for the two endpoints that exist, `0x02` and
+`0x82`; any other `wIndex` is a Request Error and is stalled. `HALT` on the
+default control pipe is refused for `SET_FEATURE` and acknowledged without
+touching a register for `CLEAR_FEATURE` (USB 2.0 9.4.5: Halt on the default
+pipe "is neither required nor recommended").
+
 ## Data commands (bulk OUT)
 
 Multi-byte fields are little-endian unless noted — **`ESC L` is the exception and
@@ -52,9 +59,10 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 73` + JobID(u32) | **ESC s** | Start of print job (mandatory; ID echoed in status) | tech ref p.11 |
 | `1B 4C` + len(**u16 BE**) | **ESC L** | "Sets the print engine mode between normal label stock and continuous label stock" (tech ref p.11 — it gives no parameter table). We take a u16 **MSB-first**: `0` = die-cut (roll sets the pitch, clears any override), a plain dot length is the feed pitch. Three independent sources for the byte order: DYMO's own CUPS driver writes `(v>>8)` then `v&0xff` and pins it in a unit test; Microsoft's GPD rule makes `<1B>L<0867>` emit bytes `08 67` in that order; and read big-endian, 12 of 14 LW5XX.GPD entries are exactly `height_dots + 300` where byte-swapped they are noise | CUPS driver `SendLabelLength`; GPD; LW5XX.GPD |
 | `1B 68` / `1B 69` | **ESC h / i** | Text / graphics output mode | tech ref p.11 |
-| `1B 54` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high. The tech ref prints `1B 74`, a typo: `0x74` is `t`; the driver GPD sends `<1B>T` | tech ref p.11; LW5XX.GPD |
+| `1B 54` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high. The tech ref prints `1B 74`, a typo: the driver GPD sends `<1B>T` (`0x54`), and `0x74` is a different command in the engine's own table (`SetLabelTrailer`) | tech ref p.11; LW5XX.GPD; lw5xxmon.dll |
 | `1B 6E` + idx(u16) | **ESC n** | Set label index (echoed in status) | tech ref p.12 |
 | `1B 44` + BPP Align W(u32) H(u32) + data | **ESC D** | Start of label print data: **W = number of lines**, **H = number of dots**; then `W × ⌈H·BPP/8⌉` bytes. Driver sends `BPP=1, Align=2` (2 = bottom, the only value the manual documents, and what genuine driver captures carry). MSB of the first byte = leftmost dot | tech ref p.12 |
+| `1B 5A` + 15 B header + payload | **ESC Z** | **Compressed print data** — the compressed sibling of `ESC D`. Header: scheme byte, payload length u32 LE, then `ESC D`'s own 10 bytes (BPP, Align, W, H); then exactly that many compressed bytes. The stock port monitor emits it only when `LabelCompressMode` is set under `HKLM\Software\DYMO\LW5xx`. We consume the header and the payload exactly and print nothing: the compression format is not established (the monitor statically links zlib), and letting the body reach the parser would turn every stray `0x1B` in it into a command | lw5xxmon.dll opcode table + its emitter |
 | `1B 47` | **ESC G** | Feed to print head (short form feed, between labels) | tech ref p.13 |
 | `1B 45` | **ESC E** | Feed to tear position (long form feed) | tech ref p.13 |
 | `1B 51` | **ESC Q** | End of print job (releases the lock) | tech ref p.13 |
@@ -64,7 +72,7 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes); always sent by the driver, consumed + ignored | decompiled driver |
 | `1B 55` | **ESC U** | Get SKU info → 63-byte consumable record (below) | tech ref p.16 |
 | `1B 56` | **ESC V** | Get version → 34-byte reply (below) | tech ref p.20 |
-| `1B 24` | **ESC $** | Restore factory settings (config back to defaults). `1B 2A` (`ESC *`) is accepted as an alias | tech ref p.20 |
+| `1B 2A` | **ESC *** | Restore factory settings (config back to defaults). `0x2A` is the opcode the stock port monitor dispatches as `RestoreFactorySettings`; it has no entry for `0x24`, which lands in its Unknown handler. The tech ref prints `1B 24` — the mnemonic is right and the hex is the typo — so we accept `1B 24` as an alias. The reset never clears `OP_FLAG_VH_INHIBIT`: the heat-rail interlock is not a setting a host may switch off | lw5xxmon.dll opcode table; tech ref p.20 |
 | `1B 6F` + count(u8) | **ESC o** | Set label count. **One** argument byte: the tech ref's table is `Byte 0 1 2 / 'ESC' 'o' Count`, three bytes total, where `ESC n`/`ESC L` get explicit two-byte tables. If a host does send a u16, its `0x00` high byte is ignored as a stray rather than eaten as a command — the safe direction. Use `GS C` for counts above 255 | tech ref p.20 |
 | `1B 71` + ID | **ESC q** | "Select output tray" on the 550 ("will be supported by LW550 Twin Turbo"). On the 450 the same opcode is "Select Roll (Twin Turbo only)" with an **ASCII digit** argument: `0x30` '0' automatic, `0x31` '1' left, `0x32` '2' right - not binary 0/1/2. One roll here, so the byte is accepted and ignored under either encoding | tech ref p.5; LW450 tech ref p.16 |
 | `1B 79` / `1B 7A` | **ESC y / z** | 400-series "set print resolution" 300x300 / 203x300. **Zero-argument**; accepted and ignored - this family is 300x300 in every mode, so the only point is not to eat the next command | LW400 tech ref p.19 |
@@ -251,3 +259,61 @@ and for continuous stock a second `ESC L FF FF`.
 
 `tools/opsend.py` sends the same command set (plus `ESC M` with 8 zero bytes,
 as the decompiled driver does) and can send a test pattern or a PNG.
+
+## Appendix — the engine's own opcode table (recovered)
+
+The stock Windows port monitor `lw5xxmon.dll` dispatches print-engine opcodes
+through a jump table, with a byte index table based at opcode `0x23`. Decoding
+both tables gives the list below. The names are the monitor's own; an entry here
+means the monitor knows the opcode, not that a 550 accepts it (the table is
+shared across the LW5xx family, so some entries are for the Twin Turbo, the
+cutter models or the network models). Anything not in the table lands in its
+Unknown handler.
+
+| Opcode | Char | Name in the monitor | Us |
+|--------|------|---------------------|----|
+| `0x23` | `#` | SetNumberOfCopies | not implemented |
+| `0x2A` | `*` | RestoreFactorySettings | yes (and `0x24` as the manual's typo) |
+| `0x40` | `@` | RestartPrintEngine | yes |
+| `0x41` | `A` | PrintEngineStatus | yes |
+| `0x43` | `C` | SetPrintDensity | yes |
+| `0x44` | `D` | LabelPrintData | yes |
+| `0x45` | `E` | FeedToCutPosition | yes |
+| `0x47` | `G` | FeedToPrintHead | yes |
+| `0x48` | `H` | SetHorzResolution | not implemented |
+| `0x4C` | `L` | SetMaxLabelLen | yes |
+| `0x4D` | `M` | SetMediaType | yes (consumed) |
+| `0x50` | `P` | GetEthernetPhyState | network models |
+| `0x51` | `Q` | EndPrintJob | yes |
+| `0x52` | `R` | UpdateRequest | yes (refused) |
+| `0x53` | `S` | StatusResponse | printer → host |
+| `0x54` | `T` | SetFeedSpeed | yes (consumed) |
+| `0x55` | `U` | GetSkuInfo | yes |
+| `0x56` | `V` | PrintEngineVer | yes |
+| `0x57` | `W` | ControlRequest | yes (consumed) |
+| `0x58` | `X` | SetPrintEngineParams | not implemented |
+| `0x5A` | `Z` | CompressedPrintData | consumed, not decompressed |
+| `0x62` | `b` | PrintEngineStatusTwin | Twin Turbo |
+| `0x63` | `c` | Light | yes |
+| `0x64` | `d` | Medium | yes |
+| `0x65` | `e` | Normal | yes |
+| `0x67` | `g` | Dark | yes |
+| `0x68` | `h` | SelectTextOutMode | yes |
+| `0x69` | `i` | SelectGraphOutMode | yes |
+| `0x6C` | `l` | SetLabelLeader | not implemented |
+| `0x6D` | `m` | GetSensorsValues | not implemented |
+| `0x6E` | `n` | SetLabelIndex | yes |
+| `0x70` | `p` | DoCutLabel | cutter models |
+| `0x71` | `q` | SelectRoll | yes (consumed) |
+| `0x72` | `r` | UpdateResponse | printer → host (our `ESC r 01`) |
+| `0x73` | `s` | StartPrintJob | yes |
+| `0x74` | `t` | SetLabelTrailer | not implemented |
+| `0x77` | `w` | ControlResponse | printer → host |
+| `0x78` | `x` | GetPrintEngineParams | not implemented |
+
+The commands we do not implement are all "accepted and ignored" by the parser's
+one-argument default path, except the ones with a payload; those would
+desynchronise it, which is why `ESC Z` is parsed properly rather than ignored.
+`SetLabelLeader`, `SetLabelTrailer`, `GetSensorsValues`, `SetPrintEngineParams`
+and `GetPrintEngineParams` are the interesting unknowns: their argument layouts
+are not in any manual we have.

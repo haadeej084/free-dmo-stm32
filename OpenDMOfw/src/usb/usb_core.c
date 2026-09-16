@@ -230,6 +230,22 @@ static void handle_get_descriptor(const usb_setup_t *s)
         usb_ctrl_stall();
 }
 
+/* Which endpoint addresses a host may name in an endpoint-recipient request.
+ * Only the bulk pair exists on this device. Without this check a SET_FEATURE
+ * with wIndex 0x81 wrote EP1R - a register that was never given an address, so
+ * per RM0091 30.6.2 (EA: "a value must be written before enabling the
+ * corresponding endpoint") two endpoint registers would claim address 0 and a
+ * STALLed EP1R could answer endpoint-0 IN tokens - and wIndex 0x08..0x0F
+ * indexed past the eight-entry EPR array entirely. */
+static int ep_addr_valid(uint16_t w)
+{
+    uint8_t a = (uint8_t)w;
+    return s_configured && (a == EP_DATA || a == (uint8_t)(0x80 | EP_DATA));
+}
+/* The default control pipe. USB 2.0 9.4.5: Halt "is neither required nor
+ * recommended" for it, and our own code would undo it one line later anyway. */
+static int ep_addr_is_ctrl(uint16_t w) { return (uint8_t)w == 0x00 || (uint8_t)w == 0x80; }
+
 static void handle_standard_setup(const usb_setup_t *s)
 {
     switch (s->bRequest) {
@@ -270,8 +286,13 @@ static void handle_standard_setup(const usb_setup_t *s)
         static uint8_t st[2];
         uint8_t recip = s->bmRequestType & 0x1F;
         st[0] = 0; st[1] = 0;
-        if (recip == 0)      st[0] = 0x01;       /* device: bit0 = self-powered */
-        else if (recip == 2) st[0] = ep_is_halted((uint8_t)s->wIndex) ? 1 : 0;
+        if (recip == 0) {
+            st[0] = 0x01;                        /* device: bit0 = self-powered */
+        } else if (recip == 2) {
+            if (ep_addr_valid(s->wIndex))      st[0] = ep_is_halted((uint8_t)s->wIndex) ? 1 : 0;
+            else if (ep_addr_is_ctrl(s->wIndex)) st[0] = 0;   /* never halted */
+            else { usb_ctrl_stall(); break; }    /* no such endpoint */
+        }
         /* recipient = interface: always {0,0} */
         usb_ctrl_send(st, 2, s->wLength);
         break; }
@@ -287,13 +308,19 @@ static void handle_standard_setup(const usb_setup_t *s)
         usb_ctrl_ack();
         break;
     case 1: /* CLEAR_FEATURE: clear ENDPOINT_HALT (feature 0) */
-        if ((s->bmRequestType & 0x1F) == 2 && s->wValue == 0)
-            ep_halt((uint8_t)s->wIndex, 0);
+        if ((s->bmRequestType & 0x1F) == 2 && s->wValue == 0) {
+            if (ep_addr_valid(s->wIndex))        ep_halt((uint8_t)s->wIndex, 0);
+            else if (!ep_addr_is_ctrl(s->wIndex)) { usb_ctrl_stall(); break; }
+            /* EP0: acknowledge without touching a register. Forcing the control
+             * endpoint's toggle mid-transfer would desynchronise it. */
+        }
         usb_ctrl_ack();
         break;
     case 3: /* SET_FEATURE: set ENDPOINT_HALT */
-        if ((s->bmRequestType & 0x1F) == 2 && s->wValue == 0)
+        if ((s->bmRequestType & 0x1F) == 2 && s->wValue == 0) {
+            if (!ep_addr_valid(s->wIndex)) { usb_ctrl_stall(); break; }
             ep_halt((uint8_t)s->wIndex, 1);
+        }
         usb_ctrl_ack();
         break;
     default:

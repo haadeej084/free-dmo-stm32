@@ -34,6 +34,10 @@ DOTS = {"OP104": 1248, "OP57": 672}[MODEL]
 HALF = DOTS // 2
 BUDGET_MS = {"OP104": 1.08, "OP57": 0.92}[MODEL]
 CLK, DI1, DI2 = 5, 6, 7            # pins.h: PA5, PA6, PA7
+VH = 8                             # pins.h: PIN_HEAD_VH = PA8, HEAD_VH_ON_LEVEL = 0
+CFG_FLAGS_OFF = 31                 # op_config_t: magic u32 + sku[24] + count u16 + density u8
+FLAG_PAPER_FORCE = 0x01
+FLAG_VH_INHIBIT = 0x02
 BUF = 0x20000B00                   # unused heap area of the image
 DWELL_US = 270 * 2                 # HEAD_BASE_DWELL_US at density 8, two segments
 
@@ -44,7 +48,7 @@ def pattern(nbytes):
     return bytes(((i * 73 + 41) ^ (i >> 1)) & 0xFF for i in range(nbytes))
 
 
-def run(sent):
+def run(sent, poke=(), window=0.005):
     syms = elf_symbols(ELF)
     hpl = symbol(syms, "head_print_line")
     dly = symbol(syms, "delay_us")
@@ -73,11 +77,14 @@ def run(sent):
         f'cpu AddHook {dly:#x} "self.WarningLog(\'@@DELAY \' + str(self.ExecutedInstructions))"',
         'sysbus SetHookBeforePeripheralWrite sysbus.gpioPortA '
         '"self.WarningLog(\'@@W \' + str(offset) + \' \' + str(value)) if offset in (0x14, 0x18) else None"',
+        *[f"sysbus WriteByte {addr:#x} {val:#x}" for addr, val in poke],
+        "sysbus ReadDoubleWord 0x48000014",   # GPIOA ODR: the level before the call
         f"cpu SetRegisterUnsafe 0 {BUF:#x}",
         f"cpu SetRegisterUnsafe 1 {sent}",
         f"cpu SetRegisterUnsafe 14 {symbol(syms, 'Default_Handler') | 1:#x}",
         f"cpu PC {hpl:#x}",
-        'emulation RunFor "0.005"',
+        f'emulation RunFor "{window}"',
+        f"sysbus ReadDoubleWord {symbol(syms, 's_vh_on'):#x}",
         "quit",
     ]
     with tempfile.NamedTemporaryFile("w", suffix=".resc", delete=False) as f:
@@ -130,6 +137,63 @@ def check(sent):
     return fails, int(delay.group(1)) - int(enter.group(1))
 
 
+def vh_odr_trace(out, seed):
+    """Rebuild PA8's level over every GPIOA write after head_print_line() was
+    entered. Returns (levels, latched) where latched is True once the latch
+    pulse (first delay_us) has been seen."""
+    body = out[out.index("@@ENTER"):] if "@@ENTER" in out else out
+    first_delay = body.index("@@DELAY") if "@@DELAY" in body else len(body)
+    odr, trace = seed & 0xFFFF, []
+    for m in re.finditer(r"@@W (\d+) (\d+)", body):
+        off, v = int(m.group(1)), int(m.group(2))
+        if off == 0x18:
+            odr = (odr | (v & 0xFFFF)) & ~((v >> 16) & ~(v & 0xFFFF)) & 0xFFFF
+        else:
+            odr = v & 0xFFFF
+        trace.append(((odr >> VH) & 1, m.start() < first_delay))
+    return trace
+
+
+def check_interlock():
+    """The 24 V interlock is the only thing protecting an irreplaceable head, and
+    until now it was only ever exercised against a mock that reimplemented it.
+    Run the real head.c both ways."""
+    syms = elf_symbols(ELF)
+    cfg = symbol(syms, "s_cfg") + CFG_FLAGS_OFF
+    sent = DOTS // 8
+    fails = []
+
+    # A. interlock clear: VH must go low (= on) exactly once, and only after the
+    #    latch - never while the line is still being shifted in.
+    _, out = run(sent, poke=[(cfg, FLAG_PAPER_FORCE)], window=0.02)
+    vals = [int(v, 16) for v in re.findall(r"^\s*(0x[0-9A-Fa-f]+)\s*$", out, re.M)]
+    if len(vals) < 2:
+        return ["could not read the emulator state (ODR seed / s_vh_on)"]
+    trace = vh_odr_trace(out, vals[0])
+    on_during_shift = [lvl for lvl, before_latch in trace if before_latch and lvl == 0]
+    turned_on = [i for i in range(1, len(trace)) if trace[i][0] == 0 and trace[i - 1][0] == 1]
+    vh_on = vals
+    if on_during_shift:
+        fails.append("the heat rail was switched on during the shift phase")
+    if len(turned_on) != 1:
+        fails.append(f"the heat rail was switched on {len(turned_on)} times, expected once")
+    if not vh_on or vh_on[-1] != 1:
+        fails.append("head.c did not record the rail as on (s_vh_on)")
+
+    # B. interlock set: no write may ever drive PA8 low, and s_vh_on stays 0.
+    _, out = run(sent, poke=[(cfg, FLAG_PAPER_FORCE | FLAG_VH_INHIBIT)], window=0.02)
+    vals = [int(v, 16) for v in re.findall(r"^\s*(0x[0-9A-Fa-f]+)\s*$", out, re.M)]
+    if len(vals) < 2:
+        return fails + ["could not read the emulator state (inhibited pass)"]
+    trace = vh_odr_trace(out, vals[0])
+    vh_on = vals
+    if any(lvl == 0 for lvl, _ in trace):
+        fails.append("OP_FLAG_VH_INHIBIT was set and the heat rail still went on")
+    if not vh_on or vh_on[-1] != 0:
+        fails.append("s_vh_on was set while the interlock was armed")
+    return fails
+
+
 def main():
     if not os.path.exists(ELF):
         sys.exit(f"{ELF} missing - build first")
@@ -144,6 +208,13 @@ def main():
             print(f"ok   {MODEL} sent={sent}: {HALF} clocks, DI1/DI2 streams exact")
             if sent == DOTS // 8:
                 cost = n
+    f = check_interlock()
+    if f:
+        total += 1
+        print(f"FAIL {MODEL} VH interlock: " + "; ".join(f))
+    else:
+        print(f"ok   {MODEL} VH interlock: rail only after the latch, and never while inhibited")
+
     if cost:
         lo, hi = cost * 1.2 / 48e6 * 1e3, cost * 2.0 / 48e6 * 1e3
         print(f"shift cost {MODEL}: {cost} instructions = {lo:.2f}-{hi:.2f} ms "

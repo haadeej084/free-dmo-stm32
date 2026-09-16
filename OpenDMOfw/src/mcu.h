@@ -169,6 +169,7 @@ typedef struct {
 #define ADC1 ((ADC_Type*)0x40012400u)
 #define ADC_CR_ADEN    (1u<<0)
 #define ADC_CR_ADSTART (1u<<2)
+#define ADC_CR_ADSTP   (1u<<4)
 #define ADC_CR_ADCAL   (1u<<31)
 #define ADC_ISR_ADRDY  (1u<<0)
 #define ADC_ISR_EOC    (1u<<2)

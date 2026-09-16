@@ -151,17 +151,17 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (126 checks / 55 scenarios). This is the regression test: it links and runs
+  (138 checks / 59 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB
   peripheral, with a scripted host: enumeration, descriptors, bulk transfers,
-  printer-class requests, HALT/STALL handling (91 checks per model).
+  printer-class requests, HALT/STALL handling (102 checks per model).
 - `test/test_e2e.c` — the USB stack, printer class and protocol parser together
   against the same peripheral model: a 120-line job pushed as 64-byte bulk
   packets with the main loop running only on NAK (the ring buffer fills and
   pauses the endpoint), status/SKU/version replies through bulk IN, SOFT_RESET
-  mid-raster, and a refused firmware update (26 checks per model).
+  mid-raster, and a refused firmware update (29 checks per model).
 - `test/test_protocol_wire.py` — a hand transcription of the reply generators,
   checked against the live capture and the decompiled driver structs. It does
   **not** execute the C; keep it in sync when `protocol.c` changes.

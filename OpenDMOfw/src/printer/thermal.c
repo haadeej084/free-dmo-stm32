@@ -97,12 +97,31 @@ void thermal_init(void)
     s_over_temp = 0;
 }
 
-static uint16_t adc_sample(void)
+/* Convert one channel. The channel is selected here, per conversion: a single
+ * shared "select the thermistor" line at the top of this function silently
+ * overrode the per-channel selection made by thermal_scan_adc(), so the scan
+ * reported the thermistor ten times and could identify nothing.
+ *
+ * On a timeout the conversion is stopped and any stale result drained. RM0091
+ * 13.5 allows writing CHSELR only while ADSTART is 0 and warns there is "no
+ * hardware protection preventing software from making write operations
+ * forbidden"; leaving a conversion running would make every later channel
+ * selection land in that window and bring the same symptom back in a subtler
+ * form. */
+static uint16_t adc_sample_ch(uint8_t ch)
 {
-    ADC1->CHSELR = (1u << ADC_HEAD_TEMP_CH);
+    ADC1->CHSELR = (1u << ch);
     ADC1->CR |= ADC_CR_ADSTART;
     uint32_t guard = 100000;
-    while (!(ADC1->ISR & ADC_ISR_EOC) && --guard) {}
+    while (!(ADC1->ISR & ADC_ISR_EOC) && --guard) { }
+    if (!guard) {
+        ADC1->CR |= ADC_CR_ADSTP;
+        uint32_t stop = 100000;
+        while ((ADC1->CR & ADC_CR_ADSTP) && --stop) { }
+        (void)ADC1->DR;                     /* drain, clears EOC */
+        wdt_kick();
+        return 0;
+    }
     return (uint16_t)ADC1->DR;
 }
 
@@ -112,7 +131,9 @@ static uint16_t adc_sample(void)
  * averaging filter would add. */
 static uint16_t sample_median3(void)
 {
-    uint16_t a = adc_sample(), b = adc_sample(), c = adc_sample(), t;
+    uint16_t a = adc_sample_ch(ADC_HEAD_TEMP_CH),
+             b = adc_sample_ch(ADC_HEAD_TEMP_CH),
+             c = adc_sample_ch(ADC_HEAD_TEMP_CH), t;
     if (a > b) { t = a; a = b; b = t; }
     if (b > c) { t = b; b = c; c = t; }
     if (a > b) { t = a; a = b; b = t; }
@@ -165,10 +186,11 @@ void thermal_scan_adc(uint16_t out[10])
         uint32_t sh = (uint32_t)p.pin * 2u;
         uint32_t save = p.port->MODER;
         p.port->MODER = (save & ~(3u << sh)) | ((uint32_t)GPIO_ANALOG << sh);
-        ADC1->CHSELR = (1u << ch);
-        out[ch] = adc_sample();
+        out[ch] = adc_sample_ch(ch);
         p.port->MODER = save;      /* restore mode; the output level is untouched */
     }
+    /* Cosmetic: every conversion selects its own channel now, so this only
+     * leaves the register in its resting state. */
     ADC1->CHSELR = (1u << ADC_HEAD_TEMP_CH);
     s_have_raw = 0;                /* the cached thermistor reading is stale now */
 }

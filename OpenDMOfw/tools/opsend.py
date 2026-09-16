@@ -55,7 +55,7 @@ def cmd_form_feed():                return b"\x1b\x45"              # ESC E (to 
 def cmd_end_job():                  return b"\x1b\x51"              # ESC Q
 def cmd_status_query(lock=0):       return b"\x1b\x41" + bytes([lock])  # ESC A
 def cmd_restart():                  return b"\x1b\x40"              # ESC @ (pipeline reset)
-def cmd_factory_reset():            return b"\x1b\x24"              # ESC $ (0x24)
+def cmd_factory_reset():            return b"\x1b\x2a"              # ESC * (0x2A), the genuine opcode
 def cmd_version():                  return b"\x1b\x56"              # ESC V
 def cmd_sku_info():                 return b"\x1b\x55"              # ESC U
 # Backdoor (never sent by the stock host; config + driver-less bring-up):

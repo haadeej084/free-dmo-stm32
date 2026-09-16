@@ -237,6 +237,20 @@ int main(void)
         CHECK(g_lines == 5);                         /* nothing printed after the reset */
     }
 
+    /* 4b) The printer-class SOFT_RESET must also clear the job id, or DYMO's
+     *     language monitor can never re-acquire the lock after a host crash. */
+    {
+        const uint8_t job[] = { 0x1B, 's', 0x78, 0x56, 0x34, 0x12 };
+        const uint8_t q[] = { 0x1B, 'A', 0x00 };
+        send_stream(job, sizeof job);
+        send_stream(q, sizeof q);
+        CHECK(read_reply(r) == 32 && r[0] == 1 && r[1] == 0x78);
+        CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);
+        send_stream(q, sizeof q);
+        CHECK(read_reply(r) == 32 && r[0] == 0 && r[1] == 0 && r[2] == 0 &&
+              r[3] == 0 && r[4] == 0);
+    }
+
     /* 5) Backdoor over the same path: GS D 0x05 build id. */
     {
         const uint8_t d[] = { 0x1D, 'D', 0x05 };

@@ -25,10 +25,12 @@
  *                         accepted and ignored (this family is 300x300 only)
  *   ESC U                get SKU info -> 63-byte consumable record
  *   ESC V                get version -> 34-byte reply
- *   ESC $                restore factory settings (config back to defaults).
- *                         0x24 is the byte in the tech ref and the one the host
- *                         tool sends; 0x2A ('*') is accepted as an alias because
- *                         earlier revisions of this firmware only had that one.
+ *   ESC *                restore factory settings (config back to defaults).
+ *                         0x2A is the genuine opcode: the stock Windows port
+ *                         monitor lw5xxmon.dll dispatches 0x2A as
+ *                         RestoreFactorySettings and has no entry for 0x24.
+ *                         The tech ref prints 0x24, so that spelling is
+ *                         accepted as an alias.
  *   ESC o <count u8>     set label count (one argument byte, tech ref p.20)
  *   ESC q <roll>         select roll/tray, ASCII '0'-'3' (Twin Turbo only);
  *                         accepted, ignored
@@ -90,6 +92,7 @@ typedef enum {
     S_ESC_D,        /* ESC D: BPP, Align, W(4), H(4) then raster */
     S_RASTER,       /* consuming raster lines for one label */
     S_ESC_W,        /* ESC W / ESC R: 4 header bytes then len-4 payload bytes */
+    S_ESC_Z,        /* ESC Z: 15 header bytes, then a u32 compressed payload */
     S_ESC_F,        /* ESC f: sub-command byte then one argument byte */
     S_SKIP,         /* consume s_w_payload raw bytes (ESC M media type) */
     S_AFTER_GS,     /* saw 0x1D (backdoor config commands) */
@@ -104,7 +107,7 @@ static uint8_t  s_arg1, s_arg2, s_arg4[4];
 static uint8_t  s_diag_sub;        /* GS D subcommand */
 static uint8_t  s_diag_args[3];    /* GS D argument bytes */
 static uint8_t  s_diag_argn, s_diag_argi;
-static uint8_t  s_hdr[10];            /* ESC D header (10 B) / ESC W header (4 B) */
+static uint8_t  s_hdr[15];            /* ESC D (10 B) / ESC W (4 B) / ESC Z (15 B) */
 static uint8_t  s_hcnt;
 static uint16_t s_bpl;               /* raster bytes per line ON THE WIRE */
 static uint16_t s_use;               /* bytes of that line the head can print */
@@ -112,7 +115,9 @@ static uint16_t s_lines_left;        /* lines still to print for this label */
 static uint16_t s_line_rx;           /* bytes received for the current line */
 static uint8_t  s_line[HEAD_BYTES];
 static uint16_t s_xoff;              /* left padding (bytes) to center narrow rasters */
-static uint16_t s_w_payload;         /* ESC W payload bytes still to consume */
+static uint32_t s_w_payload;         /* framed payload bytes still to consume.
+                                      * u32 because an ESC Z body can exceed
+                                      * 64 KB; ESC W caps at 251 and ESC M at 8. */
 static uint8_t  s_w_cmd;             /* 'W' or 'R': which framed command */
 static int      s_refuse_update;     /* answer ESC r 01 once the skip ends */
 
@@ -146,18 +151,54 @@ void protocol_init(void)
     s_head = s_tail = 0; s_rx_paused = 0;
     s_state = S_CMD;
     s_job_active = 0; s_label_index = 0; s_job_id = 0;
+    s_refuse_update = 0; s_w_payload = 0; s_w_cmd = 0;
     s_density_pct = 100;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
     s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
 }
 
+/* protocol_reset() runs in USB interrupt context (SOFT_RESET and
+ * SET_CONFIGURATION both reach it from USB_IRQHandler), while protocol_task()
+ * is in the middle of reading the ring. Zeroing the indices there raced
+ * ring_getc()'s read-modify-write of s_tail: the ISR wrote s_tail = 0 between
+ * the main loop's read and its write-back, so the parser resumed with
+ * s_tail = old + 1 and s_head = 0 and then chewed through ~2000 bytes of
+ * pre-reset ring content - exactly the data a SOFT_RESET exists to discard
+ * (USB Printer Class 1.1 section 4.2.3), including raster bytes that would
+ * re-enter the raster state and fire the head.
+ *
+ * So the ISR only records the request and makes the head safe immediately;
+ * the state is cleared by the main loop, between bytes, where nothing else
+ * can be halfway through touching it. */
+static volatile uint8_t  s_reset_req;
+static volatile uint16_t s_reset_mark;   /* discard everything queued before this */
+
 void protocol_reset(void)
 {
-    s_head = s_tail = 0;
+    /* Record how far the producer had got: everything already in the ring is
+     * pre-reset data and must go, everything the host sends after this point
+     * is a new job and must survive. Only the interrupt writes s_head and
+     * s_reset_mark, only the main loop writes s_tail, so neither side ever
+     * has to modify the other's index. */
+    s_reset_mark = s_head;
+    s_reset_req = 1;
+    head_reset();           /* stop heating now; GPIO writes only, ISR-safe */
+}
+
+static void protocol_reset_apply(void)
+{
+    s_tail = s_reset_mark;
     s_state = S_CMD; s_hcnt = 0; s_lines_left = 0; s_line_rx = 0;
-    s_job_active = 0; s_label_index = 0;
+    s_job_active = 0; s_label_index = 0; s_job_id = 0;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
     s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
+    /* Framed-command state (ESC W / ESC R / ESC M / ESC Z). s_refuse_update is
+     * the load-bearing one: a firmware-update handshake interrupted before its
+     * 128 header bytes arrived would otherwise stay armed across the reset and
+     * fire a stray "ESC r 01" at the end of the next job's ESC M skip - three
+     * bytes of garbage in the middle of the host's reply stream. The other two
+     * are belt-and-braces; every entry into those states assigns them. */
+    s_refuse_update = 0; s_w_payload = 0; s_w_cmd = 0;
     /* Dropping the ring also drops the reason bulk-OUT was throttled. The
      * un-pause in ring_getc() only fires when a byte is actually read, so an
      * empty ring would leave the endpoint NAKing forever after a SOFT_RESET
@@ -165,6 +206,39 @@ void protocol_reset(void)
     s_rx_paused = 0;
     if (usb_is_configured()) usb_ep_rx_ready(EP_DATA);
     head_reset();
+}
+
+/* Take a pending reset, with the USB interrupt masked just long enough to
+ * claim the flag. Called from protocol_task() before every byte, so a reset
+ * that lands mid-drain still discards the rest. */
+/* Mask the USB interrupt just long enough to claim the flag. On the host test
+ * build there is no interrupt and no inline assembly, so both halves compile
+ * away. Saving PRIMASK (rather than a bare cpsie) keeps this safe if it is ever
+ * called from an interrupt itself - the same discipline as usb_core.c. */
+#if defined(__arm__) || defined(__ARM_ARCH)
+static inline uint32_t reset_crit_enter(void)
+{
+    uint32_t pm;
+    __asm volatile("mrs %0, primask" : "=r"(pm));
+    if (pm == 0u) __asm volatile("cpsid i" ::: "memory");
+    return pm;
+}
+static inline void reset_crit_exit(uint32_t pm)
+{
+    if (pm == 0u) __asm volatile("cpsie i" ::: "memory");
+}
+#else
+static inline uint32_t reset_crit_enter(void) { return 0u; }
+static inline void reset_crit_exit(uint32_t pm) { (void)pm; }
+#endif
+
+static void protocol_reset_poll(void)
+{
+    uint32_t pm = reset_crit_enter();
+    uint8_t req = s_reset_req;
+    s_reset_req = 0;
+    reset_crit_exit(pm);
+    if (req) protocol_reset_apply();
 }
 
 void protocol_feed(const uint8_t *data, uint16_t len)
@@ -581,7 +655,13 @@ static void factory_reset(void)
     cfg->sku[i] = 0;
     cfg->label_count = MODEL_DEFAULT_COUNT;
     cfg->density = 8;
-    cfg->flags = OP_FLAG_PAPER_FORCE;
+    /* Keep OP_FLAG_VH_INHIBIT if it is set. store.h promises that while that
+     * bit is set "no sequence of commands can heat the head", and ESC $ is a
+     * command like any other - a host (or a stray byte pair) could otherwise
+     * disarm the one interlock protecting the head during bring-up. The
+     * assignment is monotone: it never sets the bit either, so a finished
+     * printer that has it clear stays that way. */
+    cfg->flags = (uint8_t)(OP_FLAG_PAPER_FORCE | (cfg->flags & OP_FLAG_VH_INHIBIT));
     store_save();
     set_density(100);
 }
@@ -658,8 +738,10 @@ void protocol_task(void)
         usbp_set_paper_present(gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
 
     int ci;
+    protocol_reset_poll();
     while ((ci = ring_getc()) >= 0) {
         uint8_t c = (uint8_t)ci;
+        if (s_reset_req) { protocol_reset_poll(); break; }
         switch (s_state) {
         case S_CMD:
             if (c == 0x1B)       s_state = S_AFTER_ESC;
@@ -710,6 +792,17 @@ void protocol_task(void)
             case 'd': set_density(88);  s_state = S_CMD; break;  /* Medium  87.5 % */
             case 'g': set_density(113); s_state = S_CMD; break;  /* Dark   112.5 % */
             case 'D': s_hcnt = 0; s_state = S_ESC_D; break;     /* raster header */
+            /* ESC Z = CompressedPrintData in lw5xxmon.dll's opcode table, the
+             * compressed sibling of ESC D. The monitor emits it only when the
+             * registry value LabelCompressMode under Software\DYMO\LW5xx asks
+             * for it; the header is 17 bytes (ESC Z, a scheme byte, a u32 LE
+             * payload length, then ESC D's own 10-byte header) followed by
+             * exactly that many compressed bytes. We cannot decompress it - the
+             * monitor statically links zlib, but the payload format is not
+             * established - so we consume it exactly and print nothing rather
+             * than letting the body run through the command parser, where every
+             * stray 0x1B would start a bogus command. */
+            case 'Z': s_hcnt = 0; s_state = S_ESC_Z; break;     /* compressed raster */
             case 'W':                                           /* control cmd   */
             case 'R': s_hcnt = 0; s_w_cmd = c; s_state = S_ESC_W; break; /* update */
             case 'M': s_w_payload = 8; s_state = S_SKIP; break; /* media type +8B */
@@ -718,7 +811,14 @@ void protocol_task(void)
             case 'G': feed_next_label(0); s_state = S_CMD; break;  /* short feed  */
             case 'E': feed_next_label(1); s_state = S_CMD; break;  /* tear feed   */
             case 'Q':                                 /* end of job / unlock     */
-                s_job_active = 0; s_label_index = 0;
+                /* The job id MUST go back to zero here. DYMO's published
+                 * language monitor takes the print lock only when the status
+                 * struct reports an idle engine AND job id 0
+                 * (LW5xx_Linux/src/lw/LabelWriterLanguageMonitorV2.cpp,
+                 * CheckLock(): "if(peStatus == 0 && jobID == 0) return true").
+                 * Leaving the previous id there meant the genuine driver could
+                 * never acquire the lock again after the first job. */
+                s_job_active = 0; s_label_index = 0; s_job_id = 0;
                 s_raster_dots = 0;   /* no printed height carries into the next job */
                 s_state = S_CMD; break;
             case 'e': set_density(100); s_state = S_CMD; break;  /* Normal 100 % */
@@ -872,6 +972,20 @@ void protocol_task(void)
             if (s_hcnt >= 2) {
                 if (s_hdr[0] == 1) motor_step_lines(s_hdr[1]);
                 s_state = S_CMD;
+            }
+            break;
+
+        case S_ESC_Z:
+            /* [0] scheme, [1..4] payload length u32 LE, [5] BPP, [6] Align,
+             * [7..10] width u32 LE, [11..14] height u32 LE - the last ten
+             * bytes are a verbatim copy of the ESC D header. We keep none of
+             * it: a compressed label is skipped whole, so the feed math and
+             * the label counter are left exactly as they were. */
+            s_hdr[s_hcnt++] = c;
+            if (s_hcnt == 15) {
+                s_w_payload = (uint32_t)s_hdr[1] | ((uint32_t)s_hdr[2] << 8)
+                            | ((uint32_t)s_hdr[3] << 16) | ((uint32_t)s_hdr[4] << 24);
+                s_state = (s_w_payload ? S_SKIP : S_CMD);
             }
             break;
 

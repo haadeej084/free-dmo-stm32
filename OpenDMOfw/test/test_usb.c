@@ -272,6 +272,25 @@ int main(void)
     CHECK(ctrl_nodata(0x02, 1, 0, 0x02) == 0);
     CHECK(host_out(EP_DATA, (const uint8_t *)"q", 1) == 0);
 
+    /* 14b) An endpoint-recipient request may only name an endpoint that exists.
+     *      EPR[] has eight entries and an endpoint that was never given an
+     *      address would answer for endpoint 0 (RM0091 30.6.2, EA), so a bad
+     *      wIndex is a Request Error, not something to act on. USB 2.0 9.4.5
+     *      also says Halt is not recommended for the default control pipe. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x81) == STALL);    /* no such endpoint */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x03) == STALL);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x0F) == STALL);    /* would index past EPR[] */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x81) == STALL);
+    CHECK(ctrl_in(0x82, 0, 0, 0x81, 2, b) == STALL);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x00) == STALL);    /* halt on EP0: refused */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x80) == 0);        /* clear on EP0: harmless ack */
+    r = ctrl_in(0x82, 0, 0, 0x00, 2, b);
+    CHECK(r == 2 && b[0] == 0);                       /* EP0 is never halted */
+    /* the bulk pair still works, and the endpoints are untouched by the above */
+    CHECK(host_out(EP_DATA, (const uint8_t *)"z", 1) == 0);
+    CHECK(usbp_send_reply((const uint8_t *)"y", 1) == 1);
+    CHECK(host_in(EP_DATA, b, 64) == 1);
+
     /* 15) A SOFT_RESET clears a host-set IN stall (Printer Class 1.1 4.2.3). */
     CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
     CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);

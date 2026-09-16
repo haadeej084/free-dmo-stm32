@@ -101,13 +101,22 @@ static void step_once(void)
 static uint32_t s_last_step_ms;
 static int      s_energised;
 
+/* A long feed is the one loop in this firmware that can outlast the watchdog:
+ * protocol.c caps a feed at MAX_FEED_DOTS (4000) lines, and at MOTOR_STEP_US
+ * (800 us) per step that is 3.2 s of uninterrupted stepping, against an IWDG
+ * timeout of 128*1251/f_LSI = 3.2 s at the datasheet's maximum LSI of 50 kHz
+ * (4.0 s typical). With MOTOR_DRIVE_STEPDIR, step_pulse() adds another half
+ * period per step and a full feed reaches 4.8 s, past even the typical timeout.
+ * So the kick belongs in the loop body, not around the call. */
 void motor_step_lines(uint16_t lines)
 {
     motor_enable(1);
     s_energised = 1;
-    for (uint16_t l = 0; l < lines; l++)
+    for (uint16_t l = 0; l < lines; l++) {
+        wdt_kick();
         for (int s = 0; s < MOTOR_STEPS_PER_LINE; s++)
             step_once();
+    }
     s_last_step_ms = millis();
     /* Holding torque stays on; motor_idle_tick() drops it once feeding stops.
      * Cutting it right after every call would de-energise the coils between the

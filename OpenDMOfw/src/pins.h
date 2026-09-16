@@ -109,6 +109,33 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * the other valid pair.
  * CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to whichever
  * pair D.mo used, then set these two macros + AF2 in store.c. */
+/* The pins that can put heat into the head: the 24 V rail gate and the heat
+ * strobes actually fitted on this model. The diagnostic pin-toggle (GS D 0x07)
+ * refuses them - it drives a pin low for a millisecond at a time and cannot
+ * know a pin's polarity, which on the active-low VH gate means switching the
+ * rail on, and on a strobe means an unmetered heat pulse outside the thermal
+ * gate. The rail and the head have their own commands (GS D 0x08, GS D 0x01).
+ * The spare strobes (PB2/PB3) stay toggleable: finding them is the point. */
+static inline int pin_is_head_hot(GPIO_Type *port, uint8_t pin)
+{
+    const pin_t hot[1 + HEAD_STROBE_SEGMENTS] = {
+        PIN_HEAD_VH,
+        PIN_HEAD_STROBE,
+#if HEAD_STROBE_SEGMENTS > 1
+        PIN_HEAD_STROBE2,
+#endif
+#if HEAD_STROBE_SEGMENTS > 2
+        PIN_HEAD_STROBE3,
+#endif
+#if HEAD_STROBE_SEGMENTS > 3
+        PIN_HEAD_STROBE4,
+#endif
+    };
+    for (unsigned i = 0; i < sizeof hot / sizeof hot[0]; i++)
+        if (hot[i].port == port && hot[i].pin == pin) return 1;
+    return 0;
+}
+
 #define PIN_I2C_SCL         ((pin_t){GPIOB, 8})   /* I2C1_SCL AF2            */
 #define PIN_I2C_SDA         ((pin_t){GPIOB, 9})   /* I2C1_SDA AF2            */
 #define EEPROM_I2C_ADDR     0x50                    /* 7-bit                  */

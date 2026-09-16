@@ -145,7 +145,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **126 checks / 55 scenarios, both models**. Note that
+  compiled + run natively; **138 checks / 59 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -168,6 +168,10 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
   Status/JobID/Index/Count in the reply are LE.
 - **`ESC @`** = "restart print engine" → implemented as a full **pipeline reset**
   (not an MCU reboot), so the host recovers without losing USB configuration.
+- **Factory reset is `ESC *` (`1B 2A`).** The stock port monitor's opcode table
+  dispatches `0x2A` as `RestoreFactorySettings` and has no entry for `0x24`; the
+  tech ref's `1B 24` is a hex typo next to the right mnemonic. Both spellings are
+  accepted here, and `tools/opsend.py` now sends the genuine one.
 - **`ESC o`** = set label count (`ESC o <count u8>`, one argument byte per tech ref
   p.20): writes the remaining-label count and **persists it to EEPROM**
   (`store_save()`), so a host-set value survives a power cycle and is echoed in the
@@ -747,3 +751,67 @@ words from a four-entry table built once per line: 11 898 instructions
   a deliberately broken flow control (never pausing the endpoint when the ring
   is full) fails 11 of its 26 checks, so it does watch the seam it was written
   for.
+
+## D27 — First audit cycle: safety, host acceptance and framing
+
+Findings from a multi-lens audit of the whole stack, each one independently
+verified before it was acted on.
+
+**Safety (the heat rail).**
+- `ESC *` / `ESC $` cleared `OP_FLAG_VH_INHIBIT`: `factory_reset()` assigned
+  `flags` instead of merging, so a single host command disarmed the interlock
+  that `store.h` promises no command sequence can defeat. The assignment is now
+  monotone — it keeps the bit if it is set and never sets it by itself.
+- `GS D 0x07` (toggle a pin) could drive `PIN_HEAD_VH` and the fitted strobes.
+  The gate is active-low, so "drive it low for a millisecond" is exactly how the
+  24 V rail is switched on, and on a strobe it is an unmetered heat pulse
+  outside the thermal gate. Those pins are now refused (`pin_is_head_hot()` in
+  `pins.h`); the spare strobes stay toggleable, since finding them is the point.
+  The same function also restored `MODER` while leaving the pin driving low —
+  it now restores the output level too.
+- The interlock itself had never been executed by a test: both C suites replace
+  `head.c` with a mock that reimplements the check. `test/renode/head_shift.py`
+  now runs the real image twice — rail clear and rail inhibited — and asserts
+  that `PIN_HEAD_VH` is driven only after the latch, exactly once, and never at
+  all while the interlock is armed. Deleting the check in `head.c` fails it.
+
+**Host acceptance.**
+- `ESC Q` left the job id in the status struct. DYMO's own published language
+  monitor takes the print lock only when the engine is idle **and** the job id is
+  zero (`LabelWriterLanguageMonitorV2.cpp`, `CheckLock()`), so the genuine driver
+  could never have printed a second job. `ESC Q` and every reset path now clear
+  it.
+- `ESC Z` (`CompressedPrintData`) was unknown to the parser, which ate one byte
+  and then ran the compressed body through the command state machine. It is now
+  consumed exactly, using the 17-byte header layout recovered from the port
+  monitor.
+- An interrupted firmware-update handshake left `s_refuse_update` armed across a
+  reset, so the next job's `ESC M` skip emitted a stray `ESC r 01` into the
+  reply stream.
+
+**Robustness.**
+- `protocol_reset()` runs in USB interrupt context and zeroed the ring indices
+  under a running parser, racing `ring_getc()`'s read-modify-write of the tail:
+  the parser could resume against a stale tail and chew through ~2000 bytes of
+  exactly the data the reset exists to discard. The interrupt now only records a
+  discard mark (`s_head`, which only it writes) and makes the head safe; the
+  main loop applies the reset between bytes. Data that arrives after the reset
+  is preserved, which a plain "clear everything" would have dropped.
+- `motor_step_lines()` never kicked the watchdog. A maximum feed is 4000 lines
+  at 800 us = 3.2 s against an IWDG timeout of 3.2 s at the datasheet's fastest
+  LSI (4.0 s typical) — and 4.8 s with `MOTOR_DRIVE_STEPDIR`. It now kicks per
+  dot line, like every other long loop in the tree.
+- Endpoint-recipient standard requests took any `wIndex`. `EPR[]` has eight
+  entries and an endpoint that was never given an address answers for endpoint 0
+  (RM0091 30.6.2), so `SET_FEATURE(HALT, 0x81)` could wedge the control pipe.
+  Only `0x02` and `0x82` are honoured now; the control pipe follows USB 2.0
+  9.4.5.
+- `thermal_scan_adc()` reported the thermistor ten times: `adc_sample()` always
+  re-selected `ADC_HEAD_TEMP_CH`, overriding the per-channel selection. The
+  channel is now a parameter, and a timed-out conversion is stopped and drained
+  so that later channel selections do not land in the window RM0091 13.5 forbids.
+
+**Provenance.** The engine's own opcode table was recovered from the stock port
+monitor's dispatch tables and is now an appendix to PROTOCOL.md. It also settles
+`ESC *` vs `ESC $` (see D18) and names five commands nobody has documented
+argument layouts for.

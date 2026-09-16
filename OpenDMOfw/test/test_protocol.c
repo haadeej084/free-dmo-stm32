@@ -742,6 +742,99 @@ int main(void){
         CHECK(g_vh_on == 0);                                  /* heat rail dropped */
     }
 
+    /* 54) ESC Q must clear the job id. DYMO's own language monitor only takes
+     *     the print lock when the status reports an idle engine AND job id 0
+     *     (LabelWriterLanguageMonitorV2.cpp, CheckLock), so a stale id meant
+     *     the genuine driver could never print a second job. */
+    reset_state();
+    {
+        unsigned char job[] = { 0x1B, 's', 0x44, 0x33, 0x22, 0x11 };
+        unsigned char endj[] = { 0x1B, 'Q' };
+        protocol_feed(job, sizeof job); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[0] == 1 && g_reply[1] == 0x44 && g_reply[4] == 0x11);
+        protocol_feed(endj, sizeof endj); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[0] == 0 && g_reply[1] == 0 && g_reply[2] == 0 &&
+              g_reply[3] == 0 && g_reply[4] == 0);
+        /* and the same through the out-of-band reset (SOFT_RESET / ESC @) */
+        protocol_feed(job, sizeof job); protocol_task();
+        protocol_reset();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[1] == 0 && g_reply[4] == 0);
+    }
+
+    /* 55) ESC * / ESC $ must not disarm the 24 V interlock. store.h promises
+     *     that while OP_FLAG_VH_INHIBIT is set no command sequence can heat the
+     *     head; a factory reset is a command like any other. */
+    reset_state();
+    {
+        unsigned char fr[] = { 0x1B, '*' };
+        g_cfg.flags = OP_FLAG_VH_INHIBIT;
+        protocol_feed(fr, sizeof fr); protocol_task();
+        CHECK(g_cfg.flags == (OP_FLAG_PAPER_FORCE | OP_FLAG_VH_INHIBIT));
+        /* everything else still resets, and the bit is never set by itself */
+        g_cfg.flags = 0;
+        protocol_feed(fr, sizeof fr); protocol_task();
+        CHECK(g_cfg.flags == OP_FLAG_PAPER_FORCE);
+    }
+
+    /* 56) An interrupted firmware-update handshake must not leave the refusal
+     *     armed: the next job's ESC M skip would end in the same state and fire
+     *     a stray ESC r 01 into the host's reply stream. */
+    reset_state();
+    {
+        unsigned char up[] = { 0x1B, 'R', 0x00, 0x01, 0x00, 0xF1 };
+        unsigned char partial[10];
+        memset(partial, 0xAA, sizeof partial);
+        protocol_feed(up, sizeof up); protocol_task();
+        protocol_feed(partial, sizeof partial); protocol_task();
+        CHECK(g_reply_len == -1);                 /* header not complete yet */
+        protocol_reset();
+        g_reply_len = -1;
+        unsigned char escm[10] = { 0x1B, 'M', 0, 0, 0, 0, 0, 0, 0, 0 };
+        protocol_feed(escm, sizeof escm); protocol_task();
+        CHECK(g_reply_len == -1);                 /* no spurious ESC r */
+        unsigned char idx[] = { 0x1B, 'n', 31, 0 };
+        protocol_feed(idx, sizeof idx); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 31);                  /* and the parser is in step */
+    }
+
+    /* 57) ESC Z (CompressedPrintData, from lw5xxmon.dll's opcode table): the
+     *     17-byte header plus exactly the declared payload is consumed, nothing
+     *     is printed or fed, and the next command still parses. */
+    reset_state();
+    {
+        unsigned char z[2 + 15 + 40];
+        int k = 0;
+        z[k++] = 0x1B; z[k++] = 'Z';
+        z[k++] = 0x03;                              /* scheme */
+        z[k++] = 40; z[k++] = 0; z[k++] = 0; z[k++] = 0;   /* payload u32 LE */
+        z[k++] = 1; z[k++] = 2;                     /* BPP, Align */
+        z[k++] = 10; z[k++] = 0; z[k++] = 0; z[k++] = 0;   /* W = lines */
+        z[k++] = (unsigned char)(HEAD_DOTS & 0xFF);
+        z[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+        z[k++] = 0; z[k++] = 0;                     /* H = dots */
+        for (int i = 0; i < 40; i++) z[k++] = (i & 1) ? 0x1B : 'A';  /* hostile body */
+        protocol_feed(z, sizeof z); protocol_task();
+        CHECK(g_lines == 0 && g_feed == 0);         /* consumed, nothing printed */
+        CHECK(g_reply_len == -1);                   /* body never became commands */
+        unsigned char idx[] = { 0x1B, 'n', 27, 0 };
+        protocol_feed(idx, sizeof idx); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 27);
+        /* a zero-length body returns to the command state directly */
+        reset_state();
+        unsigned char z0[2 + 15 + 4];
+        memcpy(z0, z, 17);
+        z0[3] = z0[4] = z0[5] = z0[6] = 0;
+        z0[17] = 0x1B; z0[18] = 'n'; z0[19] = 5; z0[20] = 0;
+        protocol_feed(z0, sizeof z0); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 5);
+    }
+
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;
 }

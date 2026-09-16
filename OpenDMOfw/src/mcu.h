@@ -112,7 +112,12 @@ typedef struct {
 
 /* The head is bit-banged GPIO (see pins.h / head.c), so there is deliberately
  * no SPI register map here. If you ever move the shift to SPI1, add it then -
- * an unused register map only reads as "this is wired up" when it is not. */
+ * an unused register map only reads as "this is wired up" when it is not.
+ * A move to SPI/DMA that overlaps the shift with the strobe must keep a quiet
+ * gap between the end of one line's strobe and the next latch: other thermal
+ * heads specify one (Seiko LTP02-245-13, Table 3-10: "/LAT wait time" 8000 ns
+ * min, else "Vp voltage fluctuations"). Today the bit-banged shift itself fills
+ * that gap (hundreds of us); the KF3002 figure is not in our notes. */
 
 /* ---- I2C (v2, config EEPROM) -------------------------------------------- */
 typedef struct {
@@ -175,7 +180,12 @@ typedef struct {
     __IO uint32_t BCDR;       /* @ 0x58 */
 } USB_Type;
 #define USB ((USB_Type*)0x40005C00u)
-/* Packet Memory Area: STM32F0x2 uses 1:1 access (1024 bytes). */
+/* Packet Memory Area: 1024 B at 0x40006000 with 1:1 CPU addressing. RM0091
+ * Rev 9 gives the scheme as "2 x 16 bits / word" for STM32F072, and its Table 1
+ * maps exactly 1 KB of "USB/CAN SRAM" at 0x40006000-0x400063FF, which only a 1:1
+ * layout fits (ST's LL driver agrees: PMA_ACCESS 1U). Byte or halfword accesses
+ * only - 32-bit accesses are not allowed. If RCC_APB1ENR.CANEN is ever set, CAN
+ * takes the last 256 B; our buffers end at 0x13F, inside the first 768 B. */
 #define USB_PMA_BASE 0x40006000u
 
 #define USB_CNTR_FRES   (1u<<0)

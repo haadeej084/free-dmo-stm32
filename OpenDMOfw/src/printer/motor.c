@@ -9,7 +9,7 @@
  *
  * Two wiring variants (select MOTOR_DRIVE):
  *   MOTOR_DRIVE_4PHASE  : direct 4-phase drive (A1/A2/B1/B2) — the EXPECTED
- *                         mode: a small dual-H-bridge (TB6612/MP6500 class) or
+ *                         mode: a 24 V-capable driver (MP6500-class chopper) or
  *                         discrete H-bridge on 24 V drives IN1-IN4 directly, no
  *                         separate STEP/DIR chip.
  *   MOTOR_DRIVE_STEPDIR : STEP/DIR/ENABLE to an external driver IC (fallback).

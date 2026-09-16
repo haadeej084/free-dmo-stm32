@@ -20,8 +20,9 @@
 > [`FIELDWORK.md`](FIELDWORK.md) lists exactly what to measure — reach out at
 > **opendymofw@secret.fyi**.
 >
-> **Stock 550/5XL MCUs ship at RDP Level 2.** SWD debug and the system bootloader
-> are disabled; `st-flash write` will not take until RDP has already been lowered
+> **Stock 550 MCUs are reported to ship at RDP Level 2** (assumed likewise for the
+> 5XL; see DECISIONS D13 for the evidence). SWD debug and the system bootloader
+> are then disabled; `st-flash write` will not take until RDP has already been lowered
 > (that mass-erases flash). This image is for an F072 you are already allowed to
 > program (replacement chip, or a chip whose RDP was lowered). A factory printer
 > still uses the Bluepill I2C tag-emulator path until then.
@@ -45,7 +46,7 @@ build name `OP104` refers to the 104 mm printable width of the biggest 5XL roll.
 
 Both present themselves as the real device — VID `0x0922`, per-model PID, `DYMO` /
 `LabelWriter 5XL|550` strings, and an IEEE-1284 device ID that makes Windows derive the
-exact driver-model match ID D.mo's own driver package expects. A unique serial number is
+exact hardware ID D.mo's own driver package expects. A unique serial number is
 taken from the MCU's 96-bit UID.
 
 ## What the D.mo DRM actually is

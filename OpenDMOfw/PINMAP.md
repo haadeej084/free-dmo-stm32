@@ -7,8 +7,8 @@ reasoning and the **confidence** per choice.
 > signals exist, latch polarity, thermistor spec) is sourced from the ROHM
 > KF3002 head datasheet — see "Thermal head identification" below. The
 > board-level pin *routing* (which MCU pin D.mo wired each signal to) is still
-> an assumption: no board dump was used (the reference MCU is RDP-protected
-> against read-out). Measure each pin before you power the head or motor.
+> an assumption: no board dump was used (the stock MCU is reported to be at
+> RDP2, see DECISIONS D13). Measure each pin before you power the head or motor.
 
 ## Thermal head identification (sourced)
 
@@ -18,7 +18,7 @@ The D.mo LabelWriter 550 series is a refresh of the 450 series (same 57 mm /
 
 | Model  | Head (ROHM)                              | D.mo assembly | Source |
 |--------|------------------------------------------|---------------|--------|
-| 57 mm  | SHEC 3C56-9638 / GK11C308 / **KF3002-GK11C** | PRTA05412 | Replacement-head listings (eBay/Amazon) for the 400/400 Turbo/450 Turbo, which shares this head |
+| 57 mm  | SHEC 3C56-9638 / GK11C308 / **KF3002-GK11C** | PRTA05412 | Marking **3C56-9638** sourced from three FCC internal-photo exhibits (RGDLW550 5092158 Fig 16; RGDLW550T 5092072 Fig 16; RGDLW550 5387314 Fig 15) — same part on 550 and 550 Turbo. The GK11C / PRTA05412 equivalence is from replacement-head listings only |
 | 105.7 mm | **TE3004-TP1W00A** class (1248 dots @ 300 dpi, 105.706 mm) | — | ROHM official catalog SF2024_EN_Thermal_Printheads.pdf (exact dot count) |
 
 The public sibling datasheet **KF3002-GL50A** (ROHM, "Thick Film Thermal
@@ -40,10 +40,12 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
 - **Calibration curves:** Fig.3 maximum energy (SLT ms/line vs TON), Fig.4
   density vs energy (mJ/dot) — reference material for dwell/density tuning.
 
-**Confirmed:** `STB` is **active-low** (Low = heat on); DI1/DI2 are driven **in
-parallel**; VH = **24 V**. **Still verify on hardware:** exact part marking on the
-550/5XL boards (GK11C vs a newer revision; TE3004-TP1W00A vs a custom variant), and
-the thermistor divider R_p / direction (one 25 °C reading pins it).
+**Confirmed:** `STB` is **active-low** (Low = heat on); VH = **24 V**.
+**Assumed:** DI1/DI2 clocked **in parallel**, each carrying half the dots
+(`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h`). **Still verify on hardware:**
+the ROHM equivalence of the 550's 3C56-9638 marking (the marking itself is
+FCC-sourced), the 5XL head marking (TE3004-TP1W00A vs a custom variant), and the
+thermistor divider R_p / direction (one 25 °C reading pins it).
 
 ## Board-level facts
 
@@ -61,7 +63,12 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   Rev E = smaller Atmel **AT24C01D/02D** (8 B page, 1-byte addressing), same
   address. `store.c` detects the scheme at init and works on both.
 - **NFC front-end:** SLRC610 on the same I2C bus @ **0x28** — a different device
-  address; our firmware ignores it (no tag emulation in scope).
+  address; our firmware ignores it (no tag emulation in scope). It sits on a
+  **separate RFID board** joined by a 6-pin 1.25 mm JST-GH cable (free-dmo
+  README). Besides SCL/SDA the link carries a power-down line (printer → reader)
+  and an interrupt line (reader → printer) (free-dmo `Inc/main.h`; those pin
+  numbers are Bluepill pins and say nothing about F072 routing). The two other
+  conductors are presumed 3V3 and GND.
 - **Feed motor: identified.** A **LEILI 35BY412-339**, two-phase bipolar PM
   stepper, 4 leads, ~35 mm can, ~6.5 Ω per phase, can marked "Caution Hot
   Surface". A 4-lead bipolar motor is driven by two H-bridges on IN1–IN4, which
@@ -86,7 +93,7 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   between labels, with the engine counting motor steps between holes (550
   reference p.7). So it is an emitter/detector pair, the detector may be analog,
   and the emitter may need its own drive pin — none of which `pins.h` models yet.
-- **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
+- **Head interface:** STB **active-low**, DI1/DI2 assumed driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **VH enable needs an external pull to OFF.** The MCU's GPIOs are floating
   inputs during and after reset, so whatever holds the load-switch gate in that
@@ -279,7 +286,8 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 > default motor mode (`MOTOR_DRIVE_4PHASE`) uses PB4/PB5/**PB6/PB7** as A1/A2/
 > B1/B2. Moving I2C to PB6/PB7 means the motor phases must move too. There is
 > room: PB10/PB11 are free (PB10 is only used as motor ENABLE in the STEPDIR
-> fallback), as are PB12–PB15 and PA9/PA10/PA15. Resolve this **before** powering
+> fallback), as are PB12–PB15 and PA9/PA10/PA15 — but two unidentified GPIOs
+> carry the NFC PWDN and IRQ lines, so the real free-pin budget is two smaller. Resolve this **before** powering
 > the head or the motor — driving a phase pin while the I2C pull-ups hold the
 > line is the kind of mistake that takes a board with it.
 
@@ -296,7 +304,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Head STROBE 3/4    | PB2 / PB3     | GPIO out (spare, wider heads) | low        | Only if the wide head has >2 heat lines |
 | Paper sensor       | PA0           | GPIO in / or ADC        | low        | Reflection/transmission sensor; may be analog rather than digital |
 | Head thermistor    | PA1           | ADC_IN1                 | medium     | Built into the head (TM pin, 30 kOhm B3950 NTC — sourced); measure the board's divider topology |
-| Motor STEP         | PB4           | GPIO / TIM3_CH1 (AF1)   | low        | Driver IC likely a small dual-H-bridge (TB6612/MP6500 class) on 24 V; count µsteps/line by scoping the phase pins during one ESC D line |
+| Motor STEP         | PB4           | GPIO / TIM3_CH1 (AF1)   | low        | Driver IC unidentified but must be 24 V-capable (MP6500-class chopper or a discrete bridge; not TB6612/DRV8834/DRV8846/A3906); count µsteps/line by scoping the phase pins during one ESC D line |
 | Motor DIR          | PB5           | GPIO                    | low        | same |
 | Motor ENABLE       | PB10          | GPIO, active-low        | low        | STEPDIR mode only (PB8 is I2C SCL) |
 | Motor 4-phase A1..B2 | PB4/5/6/7   | GPIO                    | low        | Only for direct phase drive (`MOTOR_DRIVE_4PHASE`) |
@@ -306,6 +314,8 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Status LED         | PA2           | GPIO                    | low        | Follow the LED (not PC6 — unbonded on LQFP48) |
 | Button (feed/power)| PA3           | GPIO in, pull-up        | low        | Follow the button (not PC7 — unbonded on LQFP48) |
 | USB D+/D-          | PA12 / PA11   | fixed (USB peripheral)  | high       | Fixed on the F0; internal pull-up via `USB->BCDR` |
+| NFC PWDN           | unknown       | GPIO out to reader board | —         | Present on the board, not mapped by us. Do not mistake it for a motor phase |
+| NFC IRQ            | unknown       | GPIO in from reader board | —        | Same |
 
 ## Head geometry (per model, in `src/model.h`)
 
@@ -332,7 +342,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 
 ## Bring-up order (safe)
 
-1. **Writable F072 only** (stock chips are RDP2). Head connector disconnected.
+1. **Writable F072 only** (stock chips are reported to be RDP2). Head connector disconnected.
    Flash, confirm the MCU boots and enumerates as a USB printer (`lsusb` shows
    `0922:002a` for 5XL / `0922:0028` for 550, `make MODEL=OP57`).
 2. Scope the CLK/DI1/DI2/LAT/STB lines during a test print job; confirm the

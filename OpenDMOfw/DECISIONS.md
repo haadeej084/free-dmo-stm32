@@ -18,7 +18,7 @@ D.mo on the wire.)
 
 `src/model.h` / `usb_desc.c` present VID `0x0922`, PID `0x002A` (5XL) /
 `0x0028` (550), `DYMO` / `LabelWriter 5XL|550` strings, and an IEEE-1284 device
-ID whose `MFG`+`MDL` makes Windows derive the exact driver-model match ID D.mo's
+ID whose `MFG`+`MDL` makes Windows derive the exact hardware ID D.mo's
 own driver package expects. The serial number is 12 decimal digits from the MCU
 UID (unique per chip). To target a different identity, edit `model.h`.
 
@@ -37,6 +37,12 @@ build with `-DOPENDMO_CLOCK_HSE12=1`.
 It stays **opt-in, not the default**, for one reason: bring-up step A happens on
 a bare F072 that may have no crystal at all, and waiting on `HSERDY` there would
 hang before USB ever comes up. HSI48 needs nothing from the board.
+
+**Constraint on any future clock change:** keep the AHB/APB prescalers at /1.
+RM0091 Rev 9 section 30 requires the APB clock to be at least 10 MHz while USB
+runs ("to avoid data overrun/underrun problems"), `delay_us()` (the strobe
+dwell) is derived from SYSCLK, and ES0223 2.9.4-2.9.6 need APB above twice the
+IWDG clock.
 
 ## D4 — USB stack: hand-rolled instead of TinyUSB
 
@@ -95,7 +101,10 @@ Two paths, two policies — deliberately:
 ## D8 — Hardware bring-up items (NOT verified without a board)
 
 Reasoned but not tested on silicium — verify before production:
-1. **PMA access** is 1:1 (STM32F0x2, 1024 B). Confirm with a single EP0 echo.
+1. **PMA access is 1:1, 1024 B at 0x40006000 — settled on paper**, no longer an
+   open item: RM0091 Rev 9 gives "2 x 16 bits / word" for STM32F072 and maps
+   exactly 1 KB of USB/CAN SRAM there (Table 1). Byte/halfword accesses only.
+   An EP0 echo stays a useful smoke test.
 2. **EPnR STAT/CTR** (`usb_core.c`) use TinyUSB's keep-mask + XOR-STAT (STAT/DTOG
    are toggle bits; CTR is rc_w0). Confirm enumeration with a USB analyzer.
 3. **Pinmap** (`pins.h`) — see PINMAP.md, which now carries the complete 48-pin
@@ -103,7 +112,8 @@ Reasoned but not tested on silicium — verify before production:
    packages). GPIO alternate-functions verified
    against the F072 datasheet (DocID025004 **Rev 2**, Table 14): I2C1 is **AF2**
    and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9**. USB DM/DP = PA11/PA12
-   AF2. SWD = PA13/PA14 (pads 34/37). LED/button are PA2/PA3 (PC6/PC7 are not
+   are *additional* functions (Table 13, enabled through the USB registers, not
+   AFR); the AF2 write in `usb_init()` is ST's optional "user guidance" habit. SWD = PA13/PA14 (pads 34/37). LED/button are PA2/PA3 (PC6/PC7 are not
    bonded on LQFP48). VH enable is PA8 (assumed). The board-level pin *routing*
    is still an assumption (no board dump) — measure each pin on hardware.
 4. **I2C `TIMINGR`** (`store.c`) is a start value for ~100 kHz @ 48 MHz.
@@ -134,7 +144,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **111 checks / 49 scenarios, both models**. Note that
+  compiled + run natively; **117 checks / 52 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -157,14 +167,18 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
   Status/JobID/Index/Count in the reply are LE.
 - **`ESC @`** = "restart print engine" → implemented as a full **pipeline reset**
   (not an MCU reboot), so the host recovers without losing USB configuration.
-- **`ESC o`** = set label count (`ESC o <count u16 LE>`): writes the remaining-label
-  count and **persists it to EEPROM** (`store_save()`), so a host-set value survives a
-  power cycle and is echoed in the status struct (bytes 27–28) and the ESC U record. The
-  u16 width matches the driver's counter field. Normal printing decrements the count per
+- **`ESC o`** = set label count (`ESC o <count u8>`, one argument byte per tech ref
+  p.20): writes the remaining-label count and **persists it to EEPROM**
+  (`store_save()`), so a host-set value survives a power cycle and is echoed in the
+  status struct (bytes 27–28) and the ESC U record. Counts above 255 go through
+  `GS C`. Normal printing decrements the count per
   label and wraps to `MODEL_DEFAULT_COUNT` at zero (fresh-roll behaviour).
-- **`ESC L`** = max label length (dots); `0` = die-cut. For die-cut the feed pitch
-  comes from the configured/default paper height + a fixed gap (there is no NFC tag
-  to read the true pitch).
+- **`ESC L`** = label length (dots, u16 big-endian). A value in `paper.h` selects
+  that paper; `0` clears any override (die-cut, pitch from the default paper);
+  `0x7F00` (custom size) and `0xFFFF` (continuous) take the pitch from the raster
+  height just printed; any other plausible value is used as the pitch directly
+  (the CUPS driver sends the raw page height). The feed adds a fixed gap (there is
+  no NFC tag to read the true pitch).
 
 ## D12 — Assumptions (what is genuinely still unknown)
 
@@ -182,10 +196,11 @@ out of this list. What is left:
 - **Density-to-dwell mapping:** `ESC C` duty is 0–200 % (sourced, p.16) and the
   status echoes it; how that percentage maps to microseconds of strobe depends
   on the head's energy curve and the rail voltage. Calibrate.
-- **Paper table:** `paper.h` codes are keyed on the `ESC L` values in the driver
-  GPDs. The driver sends `0` for die-cut, so the table is a fallback (feed pitch
-  + ESC U mm) rather than the primary path. Raster geometry always comes from
-  `ESC D`.
+- **Paper table:** `paper.h` is keyed on the `ESC L` values in the driver GPDs,
+  now complete for LW5XX.GPD (550) and lw4xl.gpd (5XL). The Windows driver never
+  sends `0`; it always sends one of those values or a sentinel. Several papers
+  share a value (it is a length, not an id), so the table resolves pitch and the
+  ESC U geometry, while raster geometry always comes from `ESC D`.
 
 Resolved since the previous revision, with sources, so nobody re-measures them:
 thermal limits (70 °C / 56 °C, LW450 p.7), the ESC V field structure (p.20),
@@ -199,8 +214,23 @@ The firmware has **no flash-write path** (it cannot reflash itself) and an IWDG
 watchdog, so a bad config/loop resets instead of hanging forever. It does **not**
 program option bytes: RDP is left as the programmer set it. Do **not** raise the
 chip to RDP level 2 from this image (one-way door, brick risk on the next
-reflash). Stock 550/5XL parts already ship at RDP2 — this firmware cannot be
-installed over SWD until that is lowered (mass-erase).
+reflash). Stock 550 parts are reported to ship at RDP2 (assumed likewise for
+the 5XL) — this firmware cannot be installed over SWD until that is lowered
+(mass-erase). The report is a UART/boot-button null result on one 550 plus a
+forum diagnosis (EEVblog, "Dymo 550 Thermal Printer DRM Hacking", replies
+#27–#28, 8 Mar 2022), consistent with AN2606 section 4.1 ("When readout
+protection Level2 is activated, the MCU does not boot on system memory"): RDP2
+explains the silence, the silence does not prove RDP2.
+
+Footnote on RDP1: ES0223 Rev 6 section 2.1.4 ("RDP Level 1 issue", graded P on
+revisions Z/B/Y,1) says a debugger "may access one data in the Flash memory
+after power up" through a race with the protection logic; ST's only workaround
+is RDP2. That reinforces D13 rather than changing it — RDP1 would not have
+protected a converted printer, and RDP2 is the door this firmware refuses to
+walk through. It is no route to a stock image either: one datum per power-up,
+and public SWD bus-race dumpers such as `racerxdl/stm32f0-pico-dump` state they
+"only work for Level 1". (Voltage glitching is a documented bench attack on
+other STM32 parts; nothing here depends on it.)
 
 ## D14 — Roll state is pure config; paper sensor does not gate the host view
 
@@ -241,11 +271,12 @@ To reverse: delete `diagnose()` and the `S_DIAG_SUB`/`S_DIAG_ARG` states plus th
 
 Sourced identification:
 
-- **57 mm (550 class):** ROHM **SHEC 3C56-9638 / GK11C308 / KF3002-GK11C**, D.mo
-  assembly **PRTA05412** — from replacement-head listings for the LabelWriter
-  400/400 Turbo/450 Turbo, which share this 57 mm / 672-dot / 300 dpi head (both
-  the 450-series and 550-series tech references state 672 dots @ 300 dpi; the 550
-  series is a refresh of the 450 series).
+- **57 mm (550 class):** head bar marking **3C56-9638** is sourced from three FCC
+  internal-photo exhibits (RGDLW550 5092158 Fig 16; RGDLW550T 5092072 Fig 16;
+  RGDLW550 5387314 Fig 15) — the same part on the 550 and 550 Turbo, 2021 and
+  2022 builds. The equivalence to ROHM **GK11C308 / KF3002-GK11C**, D.mo assembly
+  **PRTA05412**, is still sourced only from replacement-head listings for the
+  400/450 generation.
 - **4" / 1248-dot (5XL class):** ROHM **TE3004-TP1W00A** class — the official ROHM
   catalog (SF2024_EN_Thermal_Printheads.pdf) lists exactly **1248 dots @ 300 dpi,
   105.706 mm**, matching the 5XL spec.
@@ -254,16 +285,22 @@ Sourced identification:
   half), LAT (High=HOLD / Low=THROUGH), STB1/STB2 (heat strobe per half), VH
   (24 V family standard), VDD (3.13–5.25 V), TM (built-in NTC **30 kΩ, B=3950**);
   no MISO (DO1/DO2 are daisy-chain outs). Calibration curves: Fig.3 max energy,
-  Fig.4 density vs mJ/dot.
+  Fig.4 density vs mJ/dot. Fig.2 timing chart: strobe-to-driver-output delay
+  "Max.10us" per edge (SHEC G56 class: 3.5 us) — a shift of the heat pulse, not
+  a stretch.
 
 `model.h` sets **both models to 2 strobe segments** (the 57 mm head is also
 two-half: 2×336); `head.c` bit-bangs the two-half shift with a sequential per-half
 strobe; `thermal.c` documents the sourced NTC spec.
 
-**Still verify on hardware:** exact part marking (GK11C vs a newer revision;
-TE3004-TP1W00A vs a custom variant); the thermistor divider R_p / direction
-(one 25 °C reading pins it). **Confirmed:** STB is **active-low** (Low fires
-the heat driver), DI1/DI2 driven **in parallel**, VH = **24 V**.
+**Still verify on hardware:** the ROHM equivalence of the 550's 3C56-9638
+marking, and the 5XL head marking (TE3004-TP1W00A vs a custom variant); the
+register split per data input (`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS`, assumed two
+equal halves — `head.c` handles unequal ones too); the thermistor divider R_p /
+direction (one 25 °C reading pins it); the shortest strobe that still heats
+(sweep dwell down from 50 us on the bench). **Confirmed:** STB is
+**active-low** (Low fires the heat driver), VH = **24 V**. **Assumed:** DI1/DI2
+clocked in parallel on one CLK.
 
 ## D17 — Board-level facts
 
@@ -280,13 +317,21 @@ the heat driver), DI1/DI2 driven **in parallel**, VH = **24 V**.
   and uses the matching page size — one firmware works on both revisions.
 - **NFC front-end:** SLRC610 @ I2C **0x28** on the same bus — a different address,
   ignored (tag emulation is out of scope).
-- **Feed motor driver:** not named in public teardowns; likely a small dual-H-bridge
-  (TB6612/MP6500 class) or a discrete 4-transistor H-bridge on 24 V, driving the four
+- **Feed motor driver:** not named in public teardowns; a 24 V-capable driver —
+  a constant-current chopper (MP6500 class, 4.5–35 V with current limiting) or a
+  discrete 4-transistor H-bridge — on 24 V, driving the four
   phases directly (`MOTOR_DRIVE_4PHASE`; STEP/DIR kept as fallback). µsteps per dot
   line are not in the TRM — count them by scoping the phase pins during one ESC D line.
+  The familiar dual bridges are all under 24 V and ruled out if the motor sits on
+  VH: TB6612 15 V, DRV8846 18 V, DRV8834 10.8 V, A3906 9 V.
 - **STB polarity = active-low** (Low = heat driver on), from the ROHM KF3002 timing
-  chart; `head.c` fires low. DI1/DI2 are driven in parallel (two shift-register banks,
-  one CLK).
+  chart; `head.c` fires low. DI1/DI2 are assumed driven in parallel (two
+  shift-register banks, one CLK) — the per-input dot counts live in `model.h`.
+- **NFC link:** the SLRC610 sits on a separate RFID board, joined by a 6-pin
+  1.25 mm JST-GH cable (free-dmo README). Besides SCL/SDA it carries a power-down
+  line (printer → reader) and an interrupt line (reader → printer) (free-dmo
+  `Inc/main.h`); the other two conductors are presumed 3V3/GND. Two unidentified
+  F072 GPIOs therefore carry NFC PWDN/IRQ — do not mistake them for motor phases.
 - **NTC curve:** 30 kΩ @ 25 °C, B=3950; R(T) = 30000·exp(3950·(1/T − 1/298.15))
   (25 °C ≈ 30 kΩ, 45 °C ≈ 13.4 kΩ, 60 °C ≈ 7.8 kΩ). One 25 °C ADC reading pins the
   divider R_p.
@@ -490,3 +535,38 @@ genuine 0922:0028: `iProduct` carries the vendor prefix, "DYMO LabelWriter 550".
 The feed motor is a **LEILI 35BY412-339** two-phase bipolar PM stepper (~35 mm
 can, ~6.5 Ω/phase), which independently validates `MOTOR_DRIVE_4PHASE` — a
 4-lead bipolar motor is exactly two H-bridges driven IN1–IN4.
+
+## D23 — Third pass: wire edge cases, USB endpoint layout, paper tables
+
+Behaviour changes, each with a regression test where the parser is involved:
+
+- **`ESC L` sentinels.** `7F 00` (custom size) and `FF FF` (continuous) were read
+  as 32 512 / 65 535-dot lengths. They now take the pitch from the raster height.
+  The Windows driver never sends `0`; the CUPS driver sends the raw page height.
+- **ESC runs.** DYMO's CUPS driver opens every document with a run of bare `ESC`
+  bytes (156 in the code, 100 in its unit test). The parser ate them in groups of
+  three and could lose the following command; a run now collapses to one ESC.
+- **`ESC y` / `ESC z`** (400-series resolution) are zero-argument and no longer
+  swallow the next byte.
+- **Endpoints `0x82` IN / `0x02` OUT**, IN listed first — the layout of a published
+  `lsusb -v` of a genuine 0922:0028. EP number 2 is also the EPnR index.
+- **SOFT_RESET** now also drops a queued bulk-IN reply and clears an IN stall
+  (Printer Class 1.1 §4.2.3), without touching DTOG.
+- **EP0 after a STALL** is no longer re-armed to VALID on the RX side, so an
+  unsupported control-OUT request stays stalled instead of ACKing its data.
+- **IEEE-1284 ID** uses the LabelWriter 450 family key layout
+  (`MFG;CMD;MDL;CLASS;DESCRIPTION`); the unsourced `CID` is gone. Binding is
+  unaffected: `DYMO_LW5xx.inf` matches on MFG+MDL only.
+- **Paper tables** complete for LW5XX.GPD and lw4xl.gpd (4x10 = `0xB80B`, A6 =
+  `0xB009`; the old `0x7F00` row was the custom-size sentinel, not a paper).
+- **Head data inputs** are sized by `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` (assumed
+  equal halves); `head.c` also handles an unequal split.
+- **`opsend.py`** sent `ESC L` without its `ESC` byte in `cmd_label_length`
+  (stored as a raw control character) — now explicit.
+
+Documentation-only: ES0223 2.15.2 (resume/ESOF, unreachable without remote
+wakeup), 2.9.x (IWDG, unreachable), 2.1.4 (RDP1 race, reinforces D13), 2.2.1
+(I2C analog filter vs AF); RM0091 PMA addressing and the 10 MHz APB floor; the
+PA11/PA12 additional-function note; strobe propagation delay; the NFC board's
+PWDN/IRQ lines; the 3C56-9638 head marking from FCC photos; motor-driver voltage
+classes; the RDP2 evidence and its limits.

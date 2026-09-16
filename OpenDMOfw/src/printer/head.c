@@ -28,7 +28,14 @@
  * shift-register halves driven in parallel (DI1||DI2), STB polarity
  * (Low = fires the heat driver), built-in NTC thermistor (30 kOhm B=3950 on TM).
  * ASSUMPTIONS (verify on hardware, see PINMAP.md / DECISIONS D16): which MCU
- * pin D.mo wired each signal to, and the base dwell.
+ * pin D.mo wired each signal to, the DI1/DI2 split (model.h), and the base dwell.
+ *
+ * STROBE PROPAGATION. The head's driver ICs add a strobe-to-driver-output delay
+ * on each edge: max 10 us in ROHM KF3002-GL50A Fig.2, max 3.5 us (TpLH/TpHL)
+ * for the SHEC G56 class. Both edges are specified together, so the heat pulse
+ * is expected to shift rather than stretch; the residual edge skew is
+ * unspecified and matters only at the lowest densities. Do not add a minimum
+ * dwell cut-off for it: density 1-6 % must still print (tech ref p.16).
  */
 #include "head.h"
 #include "thermal.h"
@@ -52,8 +59,9 @@ static int      s_vh_on;
 static uint32_t s_vh_ms;
 static uint32_t s_last_strobe_us;
 
-/* HEAD_DOTS must split into two whole-byte halves for the shift loop below. */
-typedef char head_dots_split_into_bytes[(HEAD_DOTS % 16 == 0) ? 1 : -1];
+/* The two data inputs must cover the head exactly. */
+typedef char head_di_split_covers_head[(HEAD_DI1_DOTS + HEAD_DI2_DOTS == HEAD_DOTS) ? 1 : -1];
+typedef char head_di_split_nonzero[(HEAD_DI1_DOTS > 0 && HEAD_DI2_DOTS > 0) ? 1 : -1];
 
 /* The heat lines, in segment order. head_print_line uses the first
  * HEAD_STROBE_SEGMENTS of them (from model.h). */
@@ -165,7 +173,9 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
     const uint32_t d1 = 1u << PIN_HEAD_DI1.pin;
     const uint32_t d2 = 1u << PIN_HEAD_DI2.pin;
     const uint32_t ck = 1u << PIN_HEAD_CLK.pin;
-    const uint16_t hb = (uint16_t)(HEAD_DOTS / 16);   /* bytes per half */
+#if (HEAD_DI1_DOTS == HEAD_DI2_DOTS) && (HEAD_DI1_DOTS % 8 == 0)
+    /* Fast path: equal, byte-aligned halves (both models as assumed). */
+    const uint16_t hb = (uint16_t)(HEAD_DI1_DOTS / 8);   /* bytes per half */
 
     for (uint16_t b = 0; b < hb; b++) {
         uint8_t v1 = (b < nbytes) ? bits[b] : 0u;
@@ -178,6 +188,25 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
             pclk->BSRR = ck << 16;
         }
     }
+#else
+    /* Unequal halves: clock max(DI1, DI2) times. The shorter register keeps
+     * only its LAST n bits, so it is fed leading zeros first. */
+    const uint16_t n1 = HEAD_DI1_DOTS, n2 = HEAD_DI2_DOTS;
+    const uint16_t nc = n1 > n2 ? n1 : n2;
+    const uint32_t have = (uint32_t)nbytes * 8u;
+    for (uint16_t i = 0; i < nc; i++) {
+        int o1 = (int)i - (int)(nc - n1);        /* dot index within half 1 */
+        int o2 = (int)i - (int)(nc - n2);        /* dot index within half 2 */
+        uint32_t k1 = (uint32_t)o1, k2 = (uint32_t)n1 + (uint32_t)o2;
+        int b1 = o1 >= 0 && k1 < have && (bits[k1 >> 3] & (0x80u >> (k1 & 7u)));
+        int b2 = o2 >= 0 && k2 < have && (bits[k2 >> 3] & (0x80u >> (k2 & 7u)));
+        pdi1->BSRR = b1 ? d1 : (d1 << 16);
+        pdi2->BSRR = b2 ? d2 : (d2 << 16);
+        pclk->BSRR = ck;
+        __asm volatile("nop");
+        pclk->BSRR = ck << 16;
+    }
+#endif
 
     /* 2) latch: Low = THROUGH (datasheet timing chart) */
     gpio_set(PIN_HEAD_LATCH, 0);

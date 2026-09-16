@@ -6,7 +6,10 @@
 
 /* Endpoint layout (see PROTOCOL.md). */
 #define EP_CTRL   0
-#define EP_DATA   1          /* bulk: OUT = print data, IN = status/reply */
+/* Bulk pair on endpoint NUMBER 2, as on the genuine 550: a published
+ * `lsusb -v` of 0922:0028 lists 0x82 (IN) first, then 0x02 (OUT). The number
+ * is both the EPnR register index and the address, so it moves together. */
+#define EP_DATA   2          /* bulk: OUT = print data, IN = status/reply */
 #define EP_MAXPKT 64
 
 typedef struct __attribute__((packed)) {
@@ -28,6 +31,9 @@ void usb_ctrl_ack(void);        /* zero-length status IN */
 int  usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len);
 /* Reopen bulk OUT reception after a packet has been processed. */
 void usb_ep_rx_ready(uint8_t ep);
+/* Drop a queued-but-uncollected bulk IN reply and clear an IN-side STALL.
+ * Used by the printer-class SOFT_RESET. */
+void usb_ep_flush_in(uint8_t ep);
 
 int  usb_is_configured(void);
 

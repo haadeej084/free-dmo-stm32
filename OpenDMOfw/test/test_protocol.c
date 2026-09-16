@@ -632,6 +632,52 @@ int main(void){
     protocol_feed(g, sizeof g); protocol_task();
     CHECK(g_feed == 100 + 20);                     /* override 100 + gap */
 
+    /* 48) ESC L sentinels: 7F 00 (custom size) and FF FF (continuous) are not
+     *     lengths. With no raster printed yet the pitch is 0, so ESC G feeds
+     *     only the gap - never 32512 or 65535 dots. */
+    {
+        unsigned char s1[] = { 0x1B, 'L', 0x7F, 0x00 };
+        unsigned char s2[] = { 0x1B, 'L', 0xFF, 0xFF };
+        reset_state();
+        protocol_feed(s1, sizeof s1); protocol_task();
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed == 20);
+        reset_state();
+        protocol_feed(s2, sizeof s2); protocol_task();
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed == 20);
+        /* a later real length clears the sentinel again */
+        protocol_feed(lbe, sizeof lbe); protocol_task();
+        g_feed = 0;
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed == 100 + 20);
+    }
+
+    /* 49) A run of ESC bytes (the driver pads with them) must not swallow the
+     *     command that follows: 100 and 156 ESCs, then ESC n 42. */
+    {
+        static const int runs[2] = { 100, 156 };
+        for (int r = 0; r < 2; r++) {
+            unsigned char buf[200];
+            int n = 0;
+            for (int i = 0; i < runs[r]; i++) buf[n++] = 0x1B;
+            buf[n++] = 0x1B; buf[n++] = 'n'; buf[n++] = 42; buf[n++] = 0;
+            reset_state();
+            protocol_feed(buf, n); protocol_task();
+            protocol_feed(q, sizeof q); protocol_task();
+            CHECK(g_reply[5] == 42);
+        }
+    }
+
+    /* 50) ESC y / ESC z are zero-argument: the next command must still parse. */
+    {
+        unsigned char yz[] = { 0x1B, 'y', 0x1B, 'z', 0x1B, 'n', 7, 0 };
+        reset_state();
+        protocol_feed(yz, sizeof yz); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 7);
+    }
+
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;
 }

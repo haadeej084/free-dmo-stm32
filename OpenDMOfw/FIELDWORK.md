@@ -18,8 +18,8 @@ responds, with the 24 V heat rail locked out in firmware while you do it. They
 end in the same place. Read **section 7c (risk factors)** either way — it is
 short, and it is the part that names what cannot be undone.
 
-**Flashing a factory board:** the stock F072 is **RDP Level 2**. SWD is off until
-RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
+**Flashing a factory board:** the stock F072 is reported to be at **RDP Level 2**
+(DECISIONS D13). SWD is then off until RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
 printer. A 550 build is `make MODEL=OP57` (PID `0x0028`); the default `make` is 5XL.
 
 ---
@@ -78,6 +78,9 @@ python tools/opsend.py sku              # prints the reply as hex
 
 # 3. the 34-byte version reply
 python tools/opsend.py version
+
+# 4. the IEEE-1284 device ID string (printer-class GET_DEVICE_ID)
+python -c "import usb.core as u; d=u.find(idVendor=0x0922); r=d.ctrl_transfer(0xA1,0,0,0,1023); print(bytes(r[2:]))"
 ```
 
 (On Windows `opsend.py` needs a WinUSB binding via Zadig, and that detaches the
@@ -88,11 +91,12 @@ What each one closes:
 
 | Capture | Settles |
 |---|---|
-| Descriptor dump | Our clone's `bcdDevice`, string layout and endpoint details, against the real thing rather than against the LW450's published dump |
-| `ESC U` hex | The **CRC position and polynomial** — the tech ref's own table is self-contradictory here — plus every geometry field as a real roll fills them in |
+| Descriptor dump | Our clone's `bcdDevice` and string layout against the real thing (the 550's endpoint order `0x82`/`0x02` is already known from a published dump) |
+| `ESC U` hex | That the printer sends the roll tag's record on the wire as we reconstruct it from 37 genuine tag dumps: CRC-32 at bytes 4–7, geometry in 0.1 mm, plus the three trailing date/time bytes the tag does not carry |
 | `ESC V` hex | The real hardware/firmware version strings, of which we currently only know the documented *shape* |
+| Device ID | The genuine 550/5XL IEEE-1284 string byte for byte — ours follows the LabelWriter 450 family layout, including its `CMD:` key, which has never been checked on a 550 |
 
-Those are three of the last five entries in DECISIONS D12. Mail the hex to
+These retire the remaining protocol entries in DECISIONS D12. Mail the hex to
 **opendymofw@secret.fyi**.
 
 ---
@@ -265,16 +269,25 @@ Goal: prove the chip runs your image and the host sees a printer. Nothing can be
 damaged in this step.
 
 1. **Establish you may program the chip.** Connect SWD and try to read the IDCODE
-   (`st-info --probe`, or OpenOCD `targets`). On a stock printer this fails: RDP2
-   disables SWD entirely. That is expected, not a wiring fault. Continue on an
-   F072 you are allowed to program.
+   (`st-info --probe`, or OpenOCD `targets`). On a stock printer this is
+   expected to fail if the part really is at RDP2, which disables SWD entirely —
+   not a wiring fault. **If it does return an IDCODE**, the part is at RDP0/1,
+   not RDP2: report that, it settles an open question. A second check that
+   needs no probe: hold BOOT0 (pad 44) high with USB attached and look for a
+   DFU device `0483:df11` (AN2606: the F072 bootloader offers USB DFU); at RDP2
+   nothing appears. Continue on an F072 you are allowed to program.
 2. **Flash** with the head connector and motor disconnected:
    `make flash` (5XL) or `make MODEL=OP57 flash`.
 3. **Enumeration.** Plug USB into a PC. Expect `0922:002a` (5XL, default) or
    `0922:0028` (550). On Linux: `lsusb`. Report the exact VID:PID line.
 4. **Device ID.** The printer class returns the IEEE-1284 string via
-   GET_DEVICE_ID; on Windows the driver-model match ID derives from its MFG+MDL.
-   Report whether Windows binds D.mo's own driver package without a prompt.
+   GET_DEVICE_ID; on Windows the hardware ID derives from its MFG+MDL.
+   Report whether Windows binds D.mo's own driver package without a prompt. If
+   it does not, read the OS-generated hardware ID out of
+   `%windir%\inf\setupapi.dev.log` and compare it with
+   `USBPRINT\DYMOLabelWriter_550C80D` / `...5XLB920` — Microsoft names that log as
+   the way to retrieve it. Also run `lsusb -v` (Linux) and report the endpoint
+   list: it should show `0x82` IN before `0x02` OUT, as on a genuine 550.
 5. **The LED tells you the state** (from `main.c`): solid = configured and ready;
    1 Hz blink = enumerated but not configured; 5 Hz = head over temperature;
    double-blink every ~1.2 s = paper out. If the LED pin is wrong you will see
@@ -517,8 +530,16 @@ The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
 ~35 mm can, ~6.5 Ω/phase. That confirms the 4-phase drive mode the firmware
 defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
 is the drive train between motor and platen.
-Assumed a small dual-H-bridge (TB6612/MP6500 class) or a discrete bridge on 24 V,
+Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
 driven **IN1–IN4 directly** (`MOTOR_DRIVE_4PHASE`), `MOTOR_STEPS_PER_LINE = 1`.
+
+> ⚠ **Measure the winding before the first `diag 2`.** Put an ohmmeter across
+> each phase pair of the motor lead. `k_phase[]` is two-phase-on full-step, so
+> both windings carry current for the whole feed. At a few ohms on 24 V behind a
+> plain bridge that is several amps — a thermal failure within seconds, not a
+> shoot-through. A chopper driver limits it; a high-resistance winding needs no
+> limiting. Report the reading and the driver marking, keep bursts short until
+> both are known, and feel the motor and driver IC after each burst.
 **How:** identify the IC first (report the marking). Then scope the phase pins
 during `diag 2 300` and measure how far the paper actually moved.
 One raster line must equal 1/300 inch = **0.08467 mm**, so:
@@ -617,7 +638,11 @@ simply never marks the paper.
 
 ### 6. Half-2 dot order — *assumption, easiest to spot in print*
 `head.c` sends dot `i` to DI1 and dot `half + i` to DI2 on the same clock. Some
-two-half heads shift the second bank in the opposite direction.
+two-half heads shift the second bank in the opposite direction. The split itself
+is assumed too: `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h` say 336 + 336
+(550) and 624 + 624 (5XL). **Report the head's part marking** (the 550 head bar
+reads `3C56-9638`; the 5XL one is unknown) — if its datasheet gives a different
+register split, change those two numbers; `head.c` handles unequal halves.
 **How:** print `opsend.py testpattern`. If the right half of the pattern is
 mirrored, reverse the DI2 index in `head_print_line()`.
 
@@ -638,7 +663,7 @@ validated after all — which is exactly the open question in DECISIONS D12.
 | Symptom | Most likely cause | Where to look |
 |---------|-------------------|---------------|
 | No USB device at all | clock / D+ pull-up | `system.c` SystemInit, `usb_init()` BCDR |
-| Enumerates, Windows won't bind D.mo's driver | IEEE-1284 MFG/MDL string | `model.h` `MODEL_IEEE_ID` |
+| Enumerates, Windows won't bind D.mo's driver | IEEE-1284 MFG/MDL string | `model.h` `MODEL_IEEE_ID`; hardware ID in `setupapi.dev.log` |
 | `diag 4` thermistor raw is 0 or 4095 | wrong ADC pin, or NTC not on PA1 | measurement 3 |
 | `diag 3` always false | I2C pair wrong, or WP tied high | section 3 (I2C pair), section 4 (EEPROM) |
 | `diag 2` does nothing | motor pins or drive mode wrong | measurement 2, `MOTOR_DRIVE` |

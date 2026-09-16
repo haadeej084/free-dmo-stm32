@@ -70,7 +70,7 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 > not set RDP1 or RDP2).
 >
 > Linker script: `linker/stm32f072xb.ld` (128 KB flash / 16 KB RAM — the **B**
-> density of F072CBT6; `x8` would be the 64 KB part).
+> density of the F072CB; `x8` would be the 64 KB part).
 
 ## Testing enumeration (no head connected)
 

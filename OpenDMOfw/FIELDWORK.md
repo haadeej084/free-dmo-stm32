@@ -12,6 +12,12 @@ the per-line time budget. Section 4 lists what is settled so you do not measure
 it again. What is left is **seven measurements**, plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
 
+**Two routes.** Sections 3–7 are the careful one: measure first, then power.
+Section **7b** is the fast one: let the firmware drive pins and watch what
+responds, with the 24 V heat rail locked out in firmware while you do it. They
+end in the same place. Read **section 7c (risk factors)** either way — it is
+short, and it is the part that names what cannot be undone.
+
 **Flashing a factory board:** the stock F072 is **RDP Level 2**. SWD is off until
 RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
 printer. A 550 build is `make MODEL=OP57` (PID `0x0028`); the default `make` is 5XL.
@@ -28,7 +34,10 @@ printer. A 550 build is `make MODEL=OP57` (PID `0x0028`); the default `make` is 
    perfectly well with no head attached.
 3. **You cannot brick the F072 with this firmware.** It has no flash-write path
    and never touches option bytes. What you *can* brick is the print head, the
-   motor driver, or your own ST-Link — hence rules 1 and 2.
+   motor driver, or your own ST-Link — hence rules 1 and 2. Full list in
+   **section 7c**, including the one that surprises people: flashing this at all
+   is a one-way conversion, because the stock firmware is behind RDP2 and cannot
+   be backed up first.
 
 **Time budget.** The continuity work (section 3) is one to two hours with a
 multimeter. That alone, reported by email, is the single most valuable
@@ -97,15 +106,19 @@ Those are three of the last five entries in DECISIONS D12. Mail the hex to
 - A **multimeter** with a continuity buzzer and DC volts. Fine-tipped probes or
   a pair of sewing needles — LQFP48 pads are 0.5 mm apart.
 - This repo checked out, so you can read `src/pins.h` while measuring.
+- Fine-tipped probes really do matter here: the MCU is a leadless QFN, so you
+  will be probing the 22 Ω series resistors rather than the chip (7c).
 
 **Strongly recommended**
 
 - A **logic analyzer** (an 8-channel clone is enough) or a scope. Sections 6–8
   are guesswork without one.
 - An **F072 you are allowed to program**. Cheapest path: desolder the stock
-  chip and fit a **blank STM32F072CBT6** (LQFP48, a few dollars — new chips
-  ship RDP Level 0 with SWD enabled). A bare F072 dev board or a printer whose
-  RDP was already lowered also works. See section 5.
+  chip and fit a blank **STM32F072CB** (a few dollars — new chips ship RDP
+  Level 0 with SWD enabled). **Match the footprint**: the Rev K board appears to
+  be the leadless **UFQFPN48** (`...CBU6`), not LQFP48 (`...CBT6`), and a QFN
+  swap wants hot air rather than an iron. A bare F072 dev board or a printer
+  whose RDP was already lowered also works. See section 5.
 
 **Optional**
 
@@ -170,8 +183,10 @@ it "no connection".
 Not everything that *could* be measured still needs to be. This section is the
 short list of things that are already pinned down, so you can skip them.
 
-- **MCU = STM32F072CBT6**, LQFP48, 128 K flash / 16 K RAM — confirmed on the Rev K
-  motherboard.
+- **MCU = STM32F072CB**, 48 pins, 128 K flash / 16 K RAM. On the Rev K board it
+  looks like the **UFQFPN48** part (`...CBU6`) rather than LQFP48 (`...CBT6`).
+  That does not change the pin map — ST's Table 13 uses one shared
+  `LQFP48/UFQFPN48` column — but it does change how you probe: see 7c.
 - **Complete physical pin map** (pad → GPIO), extracted from datasheet Table 13 —
   see `PINMAP.md`. Use it to find each pad.
 - **Head interface** = ROHM KF3002-family module: built-in shift registers + latch
@@ -337,6 +352,155 @@ The test pattern is designed to expose exactly the failures you are hunting: a
 border that is cut off on one side means the dot offset is wrong, a mirrored
 right half means measurement 6, and diagonals that come out as stairsteps of
 uneven height mean measurement 2.
+
+---
+
+## 7b. Fast route — use the firmware as the probe
+
+The route above is written for someone who wants a *measured* map and does not
+want to redo work. If you would rather find the map by driving pins and watching
+what happens, this section is for you. It is not reckless — it is the same job
+done by search instead of by survey, with the one genuinely destructive step
+fenced off in firmware rather than in prose.
+
+**Why it is safe to just try things.** Almost every wrong guess here fails
+harmlessly:
+
+| Wrong guess | What actually happens |
+|---|---|
+| Wrong motor pin | 3.3 V logic into a logic input. Nothing moves. |
+| Wrong I2C pair, LED, button, sensor pin | Nothing. |
+| Wrong CLK / DI / LAT on the head | You clock nonsense into a shift register. Harmless **as long as VH is off**. |
+| Wrong strobe pin **with VH on** | Heat elements destroyed in seconds. Not recoverable. |
+
+So the danger is not "wrong pin". It is "wrong pin **and** 24 V behind it". Split
+those two and the caution collapses to a single rule.
+
+**The firmware enforces that rule.** Build the exploration image:
+
+```sh
+make clean && make CFLAGS_EXTRA=-DOPENDMO_SAFE_BRINGUP=1     # or edit store.c
+```
+
+`OP_FLAG_VH_INHIBIT` then starts **set**, and `head.c` refuses to enable the heat
+rail for any command whatsoever. It is a persisted config bit, not a habit:
+`opsend.py vh off` sets it, `opsend.py vh on` clears it, and `diag 4` / `diag 6`
+report its state. You clear it once, deliberately, at step 5 below.
+
+### The loop
+
+1. **Enumerate first, on the real board.** Flash, plug in USB, check for
+   `0922:002a` / `0922:0028` and run `opsend.py status`. Ten minutes, and the
+   whole USB stack and protocol layer are validated — the largest block of
+   unknowns, with no measurement at all.
+
+2. **Find the sensors by scanning, not tracing.**
+   ```sh
+   python tools/opsend.py diag 6                 # baseline
+   # warm the print head gently (hairdryer, low, ~20 s)
+   python tools/opsend.py diag 6                 # diff the ADC columns
+   ```
+   The channel that moved is the thermistor. Repeat with a label blocking the
+   top-of-form sensor to find the photocell. The scan covers every ADC-capable
+   pin on the part (PA0–PA7, PB0, PB1), so the answer is in the table by
+   construction.
+
+3. **Find the motor by driving it.** `opsend.py diag 2 30`. If nothing moves,
+   permute: other pin group, other drive mode, or poke single pins with
+   `diag 7 <port> <pin> <n>` while watching the driver IC's outputs. Failures
+   here cost nothing.
+
+4. **Get the head's logic right with the rail still locked.** `diag 1 8` shifts,
+   latches and strobes exactly as a real print would, but with VH inhibited
+   nothing can heat. Scope CLK / DI1 / DI2 / LAT / STB: you want a burst of
+   `HEAD_DOTS/2` clocks, one latch pulse, then one strobe pulse per half.
+   Iterate `pins.h` until that picture is right.
+
+5. **Only now unlock the rail.** Before you do, confirm on the scope that
+   **every** strobe line idles **high**. Then `opsend.py vh on`, and go straight
+   to `diag 1 1` — a single line — with paper in the path. If a mark appears,
+   you are done with the dangerous part.
+
+6. **Calibrate** as in section 7.
+
+### What you give up
+
+A map you *inferred*, not one you *measured*. You will know PB4 makes the motor
+turn without knowing whether there is a series resistor in the way or which
+driver input it reaches. Fine for your own board; the measured map in section 3
+is the better thing to publish. Both routes end at the same place.
+
+And neither route gets around **RDP2** — you still need an F072 you are allowed
+to program.
+
+---
+
+## 7c. Risk factors — read before you open anything
+
+Most of this project fails softly. These are the parts that do not.
+
+### Irreversible
+
+- **Flashing this firmware converts the printer permanently.** The stock DYMO
+  firmware is behind RDP Level 2 and **cannot be read out first**. Lowering RDP
+  mass-erases it. There is no backup, no restore, and no image to put back. You
+  are not experimenting with a printer, you are converting one. Use a spare, or
+  a replacement F072, or accept that outcome before you start.
+- **The print head.** A strobe held low with 24 V on the rail destroys elements
+  in seconds and a 550-series head is not a part you casually re-order. This is
+  the single reason for the VH interlock and the 70 °C limit. Do not disable
+  either "just to see".
+- **Firing the head with no paper under it.** The elements then rub directly on
+  the rubber platen — DYMO's own 450 manual mentions that friction — and you
+  wear both. Always have stock in the path before `diag 1` or a test print.
+- **Raising RDP.** This firmware never writes option bytes, and neither should
+  you. RDP2 is a one-way door.
+
+### Damaging, but replaceable
+
+- **Motor driver.** A wrong phase pattern can leave two phases of an H-bridge on
+  at once. On 24 V that is a shoot-through. Keep `diag 2` bursts short until you
+  have confirmed the drive mode, and touch the driver IC to check it is not
+  getting hot.
+- **The head flex connector.** ZIF connectors on these mechanisms are rated for
+  a handful of insertions. Plan your probing so you open it as few times as
+  possible.
+- **ESD.** A bare mainboard and an exposed head flex are both static-sensitive,
+  and the head's drivers sit right behind the connector. Strap up, or at least
+  keep one hand on a grounded surface.
+
+### Easy to underestimate
+
+- **The QFN package.** The MCU on the Rev K board appears to be **UFQFPN48**
+  (`STM32F072CBU6`), not the LQFP48 (`...CBT6`) the docs originally assumed. The
+  pin *numbering* is identical — ST's Table 13 uses a single shared
+  `LQFP48/UFQFPN48` column, so the pad map in `PINMAP.md` stands — but there are
+  **no protruding leads to probe**. Pads are 0.5 mm pitch and flush with the
+  body, and a probe tip bridges two of them easily. A slipped probe across two
+  powered pins can take the MCU with it.
+  **Do not probe the MCU directly.** Use the **22 Ω series resistors** instead:
+  every head and motor line goes through one, each is an accessible 0402/0603
+  pad, and electrically it *is* the MCU pin. Trace from there.
+- **Heat you can touch.** A head at its 70 °C limit will mark direct-thermal
+  paper from a fingertip and is unpleasant to touch. It also stays hot after the
+  rail is cut.
+- **24 V is not a "safe low voltage" for the board.** It will not hurt you, but
+  a shorted probe on that rail will happily vaporise a trace.
+- **Mains.** The brick is a sealed 24 V supply. Do not open it, and do not probe
+  on the primary side of anything.
+- **The EEPROM's original contents.** On first boot this firmware writes its
+  config into the EEPROM, and on a 1-byte (Rev E) part it also disturbs the
+  first few bytes. If the stock contents might ever matter to you, dump the
+  EEPROM before the first boot.
+- **Unattended operation.** Do not leave a board powered with the rail unlocked
+  and no one watching, especially during calibration.
+
+### Reassuringly harmless
+
+You cannot brick the F072 with this image: it has no flash-write path and never
+touches option bytes. Wrong pins on the motor, the sensors, the LED, the button
+or the I2C bus do nothing but fail to work. And with `OP_FLAG_VH_INHIBIT` set,
+no command sequence in the protocol can heat the head at all.
 
 ---
 

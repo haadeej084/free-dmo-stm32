@@ -7,6 +7,13 @@
 
 /* Config flags (op_config_t.flags). */
 #define OP_FLAG_PAPER_FORCE (1u<<0)  /* always report paper present to the host (default) */
+/* Hard interlock on the 24 V heat rail: while this is set, head.c will not
+ * enable VH for any reason, so no sequence of commands can heat the head. It is
+ * the one thing in this firmware that protects an irreplaceable part, so it is
+ * a persisted config bit rather than a discipline the operator has to remember.
+ * Build with -DOPENDMO_SAFE_BRINGUP=1 to have it set in the compiled defaults;
+ * a finished printer ships with it clear. Toggle at runtime with GS D 0x08. */
+#define OP_FLAG_VH_INHIBIT  (1u<<1)
 
 typedef struct {
     uint32_t magic;                 /* validity marker */

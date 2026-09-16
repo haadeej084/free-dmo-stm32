@@ -35,6 +35,18 @@ void motor_step_line_after(unsigned int us){ (void)us; g_feed += 1; }
 void motor_idle_tick(unsigned int ms){ (void)ms; }
 unsigned int head_last_strobe_us(void){ return 0; }
 void head_idle_tick(unsigned int ms){ (void)ms; }
+static int g_vh_on = 0;
+int  head_vh_is_on(void){ return g_vh_on; }
+void head_vh_off(void){ g_vh_on = 0; }
+static unsigned short g_adc[10] = {10,20,30,40,50,60,70,80,90,100};
+void thermal_scan_adc(unsigned short *out){ for (int i=0;i<10;i++) out[i]=g_adc[i]; }
+static unsigned short g_idr[3] = {0x1111, 0x2222, 0x4444};
+unsigned short sys_port_idr(unsigned char port){ return port < 3 ? g_idr[port] : 0; }
+static int g_toggle_port = -1, g_toggle_pin = -1, g_toggle_n = -1;
+int sys_pin_toggle(unsigned char port, unsigned char pin, unsigned char n){
+    if (port > 2 || pin > 15) return 0;
+    if (port == 0 && (pin == 11 || pin == 12 || pin == 13 || pin == 14)) return 0;
+    g_toggle_port = port; g_toggle_pin = pin; g_toggle_n = n; return 1; }
 void thermal_init(void){}
 unsigned short thermal_read_raw(void){ return 0; }
 static int g_thermal_ok = 1;       /* flip to exercise the D7 thermal gate */
@@ -63,7 +75,8 @@ static int fails;
                      else printf("ok   %s\n", #c); }while(0)
 
 static void reset_state(void){ g_lines=0; g_feed=0; g_density=-1; g_reply_len=-1;
-                               g_thermal_ok=1; g_paper_present=1;
+                               g_thermal_ok=1; g_paper_present=1; g_vh_on=0;
+                               g_toggle_port=-1; g_toggle_pin=-1; g_toggle_n=-1;
                                memset(&g_cfg,0,sizeof g_cfg); protocol_init(); }
 
 /* Feed one byte at a time with a task round between: forces underflow resume. */
@@ -523,6 +536,45 @@ int main(void){
         protocol_self_test();
         CHECK(g_feed == before && g_lines == lines_before);
     }
+
+    /* 42) GS D 0x06 scan: 29-byte reply with all ten ADC channels (u16 BE) and
+     *     the input levels of ports A/B/C (u16 LE), and the rail is dropped
+     *     first because sampling floats pins. */
+    reset_state(); g_vh_on = 1;
+    unsigned char sc[] = { 0x1D, 'D', 0x06 };
+    protocol_feed(sc, sizeof sc); protocol_task();
+    CHECK(g_reply_len == 29);
+    CHECK(g_reply[0] == 'D' && g_reply[1] == 0x06);
+    CHECK(((g_reply[2] << 8) | g_reply[3]) == 10);
+    CHECK(((g_reply[20] << 8) | g_reply[21]) == 100);
+    CHECK((g_reply[22] | (g_reply[23] << 8)) == 0x1111);
+    CHECK((g_reply[26] | (g_reply[27] << 8)) == 0x4444);
+    CHECK(g_vh_on == 0);
+
+    /* 43) GS D 0x07 toggle: three argument bytes, and the pins that carry this
+     *     very command are refused instead of ending the session. */
+    reset_state();
+    unsigned char tg[] = { 0x1D, 'D', 0x07, 1, 4, 20 };
+    protocol_feed(tg, sizeof tg); protocol_task();
+    CHECK(g_reply_len == 3 && g_reply[1] == 0x07 && g_reply[2] == 1);
+    CHECK(g_toggle_port == 1 && g_toggle_pin == 4 && g_toggle_n == 20);
+    reset_state();
+    unsigned char tgu[] = { 0x1D, 'D', 0x07, 0, 12, 5, 0x1B, 'n', 31, 0 };
+    protocol_feed(tgu, sizeof tgu); protocol_task();
+    CHECK(g_reply[2] == 0 && g_toggle_port == -1);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 31);
+
+    /* 44) GS D 0x08 VH interlock: persisted in the config, and setting it drops
+     *     the rail immediately. */
+    reset_state(); g_vh_on = 1;
+    unsigned char vh1[] = { 0x1D, 'D', 0x08, 1 };
+    protocol_feed(vh1, sizeof vh1); protocol_task();
+    CHECK(g_reply_len == 3 && (g_cfg.flags & OP_FLAG_VH_INHIBIT));
+    CHECK(g_vh_on == 0);
+    unsigned char vh0[] = { 0x1D, 'D', 0x08, 0 };
+    protocol_feed(vh0, sizeof vh0); protocol_task();
+    CHECK(!(g_cfg.flags & OP_FLAG_VH_INHIBIT));
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;

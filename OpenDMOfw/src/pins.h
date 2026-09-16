@@ -8,9 +8,10 @@
  *
  * Notation: {port, pin number}. Port is a GPIO_Type* from mcu.h.
  *
- * PHYSICAL PIN MAP: the F072CBT6 LQFP48 package pin numbers (1-48, counter-
+ * PHYSICAL PIN MAP: the F072CB 48-pin package numbers (1-48, counter-
  * clockwise from the corner dimple) are documented in PINMAP.md, section
- * "F072CBT6 LQFP48 physical pin map" — extracted from datasheet Table 13. Use
+ * "F072CB 48-pin physical pin map" — extracted from datasheet Table 13, whose
+ * LQFP48/UFQFPN48 column covers both packages the board may carry. Use
  * it to trace a GPIO name to the actual pad when probing the board. SWD flash
  * points: SWDIO = PA13 (pad 34), SWCLK = PA14 (pad 37); GND = any VSS pad
  * (23/35/47), power = VDD pad (24 or 48).
@@ -82,7 +83,7 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 #define HEAD_VH_ON_LEVEL    0
 
 /* ---- UI -----------------------------------------------------------------
- * F072CBT6 LQFP48 bonds only PC13/PC14/PC15 on port C. PC6/PC7 exist on the
+ * The 48-pin F072CB bonds only PC13/PC14/PC15 on port C. PC6/PC7 exist on the
  * LQFP64 (F072RB) only — do not use them here. PA2/PA3 are unused in the
  * assumed head/motor map (pads 12/13). */
 #define PIN_LED             ((pin_t){GPIOA, 2})

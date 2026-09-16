@@ -98,8 +98,9 @@ Reasoned but not tested on silicium — verify before production:
 1. **PMA access** is 1:1 (STM32F0x2, 1024 B). Confirm with a single EP0 echo.
 2. **EPnR STAT/CTR** (`usb_core.c`) use TinyUSB's keep-mask + XOR-STAT (STAT/DTOG
    are toggle bits; CTR is rc_w0). Confirm enumeration with a USB analyzer.
-3. **Pinmap** (`pins.h`) — see PINMAP.md, which now carries the complete F072CBT6
-   LQFP48 physical pad→GPIO map (Table 13). GPIO alternate-functions verified
+3. **Pinmap** (`pins.h`) — see PINMAP.md, which now carries the complete 48-pin
+   physical pad→GPIO map (Table 13, whose `LQFP48/UFQFPN48` column covers both
+   packages). GPIO alternate-functions verified
    against the F072 datasheet (DocID025004 **Rev 2**, Table 14): I2C1 is **AF2**
    and exists only on PB6/PB7 or PB8/PB9 — we use **PB8/PB9**. USB DM/DP = PA11/PA12
    AF2. SWD = PA13/PA14 (pads 34/37). LED/button are PA2/PA3 (PC6/PC7 are not
@@ -133,7 +134,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **85 checks / 43 scenarios, both models**. Note that
+  compiled + run natively; **99 checks / 46 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -294,9 +295,9 @@ the heat driver), DI1/DI2 driven **in parallel**, VH = **24 V**.
 - **Feed contract:** one raster line = 1/300 inch = **0.08467 mm**; µsteps/line =
   (N_steps/rev · microstep · gear) / (π · D_roller_mm · 11.811). The drive-train
   constants are unpublished — count phase pulses per ESC D line.
-- **Board part IDs** (from a rev E board photo, not bundled): **STM32F072CBT6**
-  (LQFP48, 128 K / 16 K), **24C02A** EEPROM (256 B, 1-byte), **SLRC610** NFC front-end
-  — confirming the two-EEPROM model above.
+- **Board part IDs** (from a rev E board photo, not bundled): **STM32F072CB**
+  (48-pin, 128 K / 16 K; LQFP48 on that revision), **24C02A** EEPROM (256 B,
+  1-byte), **SLRC610** NFC front-end — confirming the two-EEPROM model above.
 
 **`store.c` EEPROM detection.** A round-trip probe cannot distinguish 1-byte from
 2-byte addressing (a write+read is self-consistent under either scheme), so detection
@@ -413,7 +414,13 @@ That closed these, all now implemented and cited in-code:
 
 And these came off a Rev K board photo rather than a datasheet: a **12 MHz
 crystal** at Y1 beside the MCU (D3), **22 Ω series resistors** in banks on the
-head-interface lines, and a 48-pin QFP at U1 consistent with the STM32F072CBT6.
+head-interface lines, and a 48-pin package at U1 whose solder joints sit flush
+against the body rather than on gull-wing leads — pointing to **UFQFPN48**
+(`STM32F072CBU6`) rather than the LQFP48 (`...CBT6`) the docs first assumed.
+ST's datasheet Table 13 carries a single shared `LQFP48/UFQFPN48` pin-number
+column, so the pad map is unaffected; what changes is that there are no leads
+to probe, which is why the 22 Ω series resistors are now the recommended test
+points (PINMAP, FIELDWORK 7c).
 
 The DRM framing in `README.md` is likewise quotable rather than inferred — the
 550 manual states "The label length is determined by the SKU data found on the

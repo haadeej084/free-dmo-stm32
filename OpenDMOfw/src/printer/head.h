@@ -14,4 +14,6 @@ uint32_t head_last_strobe_us(void);
 /* Call from the main loop: drops the 24 V heat rail once the head has been
  * idle for idle_ms. The rail is off at boot and switched on only to print. */
 void head_idle_tick(uint32_t idle_ms);
+int  head_vh_is_on(void);    /* 1 = the 24 V heat rail is currently enabled */
+void head_vh_off(void);      /* drop it now, whatever the idle timer says */
 #endif

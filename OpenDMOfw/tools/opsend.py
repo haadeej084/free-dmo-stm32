@@ -25,7 +25,7 @@ import argparse, sys, time
 
 VID = 0x0922                       # genuine D.mo vendor ID
 MODELS = {                          # name -> (PID, dots across head, bytes/line)
-    "OP104": (0x002A, 1248, 156),   # LabelWriter 5XL  (101 mm head)
+    "OP104": (0x002A, 1248, 156),   # LabelWriter 5XL  (4" class, 105.7 mm head)
     "OP57":  (0x0028,  672,  84),   # LabelWriter 550  (57 mm head)
 }
 EP_OUT = 0x01
@@ -50,7 +50,7 @@ def cmd_form_feed():                return b"\x1b\x45"              # ESC E (to 
 def cmd_end_job():                  return b"\x1b\x51"              # ESC Q
 def cmd_status_query(lock=0):       return b"\x1b\x41" + bytes([lock])  # ESC A
 def cmd_restart():                  return b"\x1b\x40"              # ESC @ (pipeline reset)
-def cmd_factory_reset():            return b"\x1b\x24"              # ESC *
+def cmd_factory_reset():            return b"\x1b\x24"              # ESC $ (0x24)
 def cmd_version():                  return b"\x1b\x56"              # ESC V
 def cmd_sku_info():                 return b"\x1b\x55"              # ESC U
 # Backdoor (never sent by the stock host; config + driver-less bring-up):
@@ -87,7 +87,10 @@ def send(dev, data):
 def read_bulk(dev, n, tries=5, timeout=1000):
     last = b""
     for _ in range(tries):
-        last = bytes(dev.read(EP_IN, n, timeout=timeout))
+        try:
+            last = bytes(dev.read(EP_IN, n, timeout=timeout))
+        except Exception:          # USBTimeoutError / USBError: retry, then give up
+            last = b""
         if len(last) >= 8:
             return last
         time.sleep(0.03)
@@ -144,11 +147,15 @@ def parse_diag(r):
         out["label_count"] = int.from_bytes(r[21:23], "little")
         out["head_bytes"] = r[23]
     elif sub == 0x01:                     # head strobe
-        out["lines"] = r[2]; out["thermal_ok"] = bool(r[3])
+        # r[2] = lines ACTUALLY fired; fewer than requested means the thermal
+        # gate stopped it (r[3] = 0).
+        out["lines_fired"] = r[2]; out["thermal_ok"] = bool(r[3])
     elif sub == 0x02:                     # motor step
         out["lines"] = r[2]
     elif sub == 0x03:                     # EEPROM self-test
         out["eeprom_match"] = bool(r[2])
+    elif sub == 0x05:                     # firmware build id
+        out["build"] = r[2:].split(b"\x00", 1)[0].decode("ascii", "replace")
     return out
 
 # ---- raster-conversion -----------------------------------------------------
@@ -224,8 +231,10 @@ def main():
     sub.add_parser("sku")
     sub.add_parser("factory-reset")
     sub.add_parser("restart")
-    p = sub.add_parser("diag");      p.add_argument("sub", type=int, help="0x01 strobe head / 0x02 step motor / 0x03 EEPROM test / 0x04 snapshot")
-    p.add_argument("arg", type=int, nargs="?", default=None, help="count for 0x01/0x02")
+    anyint = lambda s: int(s, 0)     # accepts 4 as well as 0x04
+    p = sub.add_parser("diag")
+    p.add_argument("sub", type=anyint, help="0x01 strobe head / 0x02 step motor / 0x03 EEPROM test / 0x04 snapshot / 0x05 build id")
+    p.add_argument("arg", type=anyint, nargs="?", default=None, help="count for 0x01/0x02")
     a = ap.parse_args()
 
     pid, dots, bpl = MODELS[a.model]

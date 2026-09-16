@@ -45,6 +45,14 @@ typedef struct {
 
 #define RCC_CR_HSEON     (1u<<16)
 #define RCC_CR_HSERDY    (1u<<17)
+#define RCC_CR_PLLON     (1u<<24)
+#define RCC_CR_PLLRDY    (1u<<25)
+/* PLL from HSE/PREDIV at x4 -> 48 MHz from the board's 12 MHz crystal. */
+#define RCC_CFGR_PLLSRC_HSE_PREDIV (2u<<15)
+#define RCC_CFGR_PLLMUL4           (2u<<18)
+#define RCC_CFGR_SW_PLL            (2u<<0)
+#define RCC_CFGR_SWS_PLL           (2u<<2)
+#define RCC_CFGR3_USBSW_PLL        (1u<<7)   /* 0 = HSI48 (reset default) */
 #define RCC_CR2_HSI48ON  (1u<<16)
 #define RCC_CR2_HSI48RDY (1u<<17)
 /* On the STM32F0x2 (F072) the CFGR.SW field DOES have an HSI48 option:
@@ -99,20 +107,9 @@ typedef struct {
 #define GPIOC ((GPIO_Type*)0x48000800u)
 #define GPIOF ((GPIO_Type*)0x48001400u)
 
-/* ---- SPI (register map kept for reference; the head is bit-banged GPIO,
- * see pins.h / head.c) ---------------------------------------------------- */
-typedef struct {
-    __IO uint32_t CR1, CR2, SR, DR, CRCPR, RXCRCR, TXCRCR, I2SCFGR, I2SPR;
-} SPI_Type;
-#define SPI1 ((SPI_Type*)0x40013000u)
-#define SPI_CR1_SPE  (1u<<6)
-#define SPI_CR1_MSTR (1u<<2)
-#define SPI_CR1_SSM  (1u<<9)
-#define SPI_CR1_SSI  (1u<<8)
-#define SPI_CR1_BR_Pos 3
-#define SPI_SR_TXE   (1u<<1)
-#define SPI_SR_RXNE  (1u<<0)
-#define SPI_SR_BSY   (1u<<7)
+/* The head is bit-banged GPIO (see pins.h / head.c), so there is deliberately
+ * no SPI register map here. If you ever move the shift to SPI1, add it then -
+ * an unused register map only reads as "this is wired up" when it is not. */
 
 /* ---- I2C (v2, config EEPROM) -------------------------------------------- */
 typedef struct {
@@ -148,14 +145,12 @@ typedef struct {
 #define ADC_ISR_ADRDY  (1u<<0)
 #define ADC_ISR_EOC    (1u<<2)
 
-/* ---- TIM3 (motor-step timing) ------------------------------------------- */
+/* ---- TIM3 (free-running 1 MHz counter behind delay_us, see system.c) ----- */
 typedef struct {
     __IO uint32_t CR1, CR2, SMCR, DIER, SR, EGR, CCMR1, CCMR2, CCER, CNT, PSC, ARR;
 } TIM_Type;
 #define TIM3 ((TIM_Type*)0x40000400u)
 #define TIM_CR1_CEN (1u<<0)
-#define TIM_DIER_UIE (1u<<0)
-#define TIM_SR_UIF  (1u<<0)
 #define TIM_EGR_UG  (1u<<0)
 
 /* ---- USB device controller (RM0091 chapter 30) -------------------------- */

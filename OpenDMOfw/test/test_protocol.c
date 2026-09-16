@@ -31,9 +31,14 @@ void head_set_density(unsigned char d){ g_density = d; }
 void motor_init(void){}
 void motor_enable(int on){ (void)on; }
 void motor_step_lines(unsigned short n){ g_feed += n; }
+void motor_step_line_after(unsigned int us){ (void)us; g_feed += 1; }
+void motor_idle_tick(unsigned int ms){ (void)ms; }
+unsigned int head_last_strobe_us(void){ return 0; }
+void head_idle_tick(unsigned int ms){ (void)ms; }
 void thermal_init(void){}
 unsigned short thermal_read_raw(void){ return 0; }
-int thermal_ok(void){ return 1; }
+static int g_thermal_ok = 1;       /* flip to exercise the D7 thermal gate */
+int thermal_ok(void){ return g_thermal_ok; }
 unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }
@@ -58,6 +63,7 @@ static int fails;
                      else printf("ok   %s\n", #c); }while(0)
 
 static void reset_state(void){ g_lines=0; g_feed=0; g_density=-1; g_reply_len=-1;
+                               g_thermal_ok=1; g_paper_present=1;
                                memset(&g_cfg,0,sizeof g_cfg); protocol_init(); }
 
 /* Feed one byte at a time with a task round between: forces underflow resume. */
@@ -205,11 +211,19 @@ int main(void){
     CHECK(g_reply_len == 34);
     CHECK(g_reply[32] == (MODEL_PID & 0xFF) && g_reply[33] == ((MODEL_PID >> 8) & 0xFF));
 
-    /* 18) ESC o set count: label_count updated in config. */
+    /* 18) ESC o takes ONE count byte (tech ref p.20: 'ESC' 'o' Count). A host
+     *     that sends a u16 instead leaves a 0x00 high byte behind, which S_CMD
+     *     ignores as a stray - so a following command still parses. */
     reset_state();
-    unsigned char oc[] = { 0x1B, 'o', 0xF4, 0x01 };   /* 500 LE */
+    unsigned char oc[] = { 0x1B, 'o', 200 };
     protocol_feed(oc, sizeof oc); protocol_task();
-    CHECK(g_cfg.label_count == 500);
+    CHECK(g_cfg.label_count == 200);
+    reset_state();
+    unsigned char oc16[] = { 0x1B, 'o', 220, 0x00, 0x1B, 'n', 21, 0 };
+    protocol_feed(oc16, sizeof oc16); protocol_task();
+    CHECK(g_cfg.label_count == 220);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 21);                       /* stray high byte did not desync */
 
     /* 19) ESC * factory reset: config restored to the model defaults. */
     reset_state(); strcpy(g_cfg.sku, "XYZ"); g_cfg.label_count = 5; g_cfg.flags = 0;
@@ -282,6 +296,233 @@ int main(void){
     protocol_feed(wb, sizeof wb); protocol_task();
     protocol_feed(q, sizeof q); protocol_task();
     CHECK(g_reply[5] == 9 && g_reply[6] == 0);     /* parsed after the clamped skip */
+
+    /* 24) ESC $ (0x24) is the tech-ref byte for "restore factory settings" and
+     *     the one tools/opsend.py sends. It must reset the config AND leave the
+     *     parser at S_CMD — the old code only knew 0x2A and fell into the
+     *     unknown-command branch, which swallowed the next byte. */
+    reset_state(); strcpy(g_cfg.sku, "XYZ"); g_cfg.label_count = 5;
+    unsigned char fr24[] = { 0x1B, 0x24, 0x1B, 'n', 4, 0 };   /* ESC $ then ESC n 4 */
+    protocol_feed(fr24, sizeof fr24); protocol_task();
+    CHECK(strcmp(g_cfg.sku, MODEL_DEFAULT_SKU) == 0);
+    CHECK(g_cfg.label_count == MODEL_DEFAULT_COUNT);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 4);                        /* next command NOT swallowed */
+
+    /* 25) Over-wide raster: H = HEAD_DOTS + 64 means the host puts
+     *     HEAD_BYTES + 8 bytes on the wire per line. The surplus must be
+     *     consumed (not printed, not re-read as the next line), so 2 lines
+     *     print and a following ESC n still parses. */
+    reset_state();
+    {
+        int ow_bpl = HEAD_BYTES + 8;
+        static unsigned char ow[18 + 2 * (HEAD_BYTES + 8) + 4];
+        int j = 0;
+        ow[j++]=0x1B; ow[j++]='s'; ow[j++]=1; ow[j++]=0; ow[j++]=0; ow[j++]=0;
+        esc_d(&ow[j], 2, HEAD_DOTS + 64); j += 12;
+        for (int i=0;i<2*ow_bpl;i++) ow[j++] = 0xFF;
+        ow[j++]=0x1B; ow[j++]='n'; ow[j++]=6; ow[j++]=0;
+        protocol_feed(ow, j); protocol_task();
+        CHECK(g_lines == 2);                       /* exactly 2 lines, no drift */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 6);                    /* stream stayed in sync */
+    }
+
+    /* 26) Absurd ESC D header (H > 0xFFFF): the block length is unknowable, so
+     *     it is dropped rather than half-consumed, and the parser resyncs. */
+    reset_state();
+    {
+        unsigned char bad[6 + 12 + 4]; int j = 0;
+        bad[j++]=0x1B; bad[j++]='s'; bad[j++]=1; bad[j++]=0; bad[j++]=0; bad[j++]=0;
+        esc_d(&bad[j], 2, 0x20000); j += 12;
+        bad[j++]=0x1B; bad[j++]='n'; bad[j++]=8; bad[j++]=0;
+        protocol_feed(bad, j); protocol_task();
+        CHECK(g_lines == 0);                       /* nothing printed */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 8);                    /* ESC n after it still parsed */
+    }
+
+    /* 27) DECISIONS D7: GS D 0x01 runs all dots on at maximum dwell, so it must
+     *     refuse to fire while the head is over its limit and report 0 lines. */
+    reset_state(); g_thermal_ok = 0;
+    unsigned char hot[] = { 0x1D, 'D', 0x01, 5 };
+    protocol_feed(hot, sizeof hot); protocol_task();
+    CHECK(g_reply_len == 4);
+    CHECK(g_lines == 0 && g_reply[2] == 0);        /* nothing fired */
+    CHECK(g_reply[3] == 0);                        /* thermal_ok reported false */
+
+    /* 28) ESC U geometry uses 25.4 mm/inch: the liner width at [48-49] is the
+     *     head width in mm (OP104 1248 dots -> 106, OP57 672 -> 57), not the
+     *     ~1.6 % short value a flat 25 mm/inch produced. */
+    reset_state(); strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 220;
+    {
+        unsigned den   = (unsigned)MODEL_DPI * 10u;
+        unsigned liner = ((unsigned)HEAD_DOTS * 254u + den / 2u) / den;
+        protocol_feed(u, sizeof u); protocol_task();
+        CHECK(g_reply_len == 63);
+        CHECK((unsigned)(g_reply[48] | (g_reply[49] << 8)) == liner);
+    }
+
+    /* 29) Density mapping: ESC C duty -> head level 0..16, and the status byte
+     *     echoes the percentage. 0 = heat off, 200 = full, >200 clamps to 200. */
+    reset_state();
+    unsigned char c0[] = { 0x1B, 'C', 0 };
+    protocol_feed(c0, sizeof c0); protocol_task();
+    CHECK(g_density == 0);                         /* heat off */
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[9] == 0);
+    reset_state();
+    unsigned char c100[] = { 0x1B, 'C', 100 };
+    protocol_feed(c100, sizeof c100); protocol_task();
+    CHECK(g_density == 8);                         /* 100 % = reference level */
+    reset_state();
+    unsigned char c250[] = { 0x1B, 'C', 250 };
+    protocol_feed(c250, sizeof c250); protocol_task();
+    CHECK(g_density == 16);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[9] == 200);                      /* clamped, not wrapped */
+
+    /* 30) ESC e resets density to the 100 % default. */
+    reset_state();
+    protocol_feed(c250, sizeof c250); protocol_task();
+    unsigned char ce[] = { 0x1B, 'e' };
+    protocol_feed(ce, sizeof ce); protocol_task();
+    CHECK(g_density == 8);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[9] == 100);
+
+    /* 31) Accept-and-ignore commands must consume exactly their argument and
+     *     leave the stream in sync: ESC T <speed>, ESC q <tray>, ESC h, ESC i. */
+    reset_state();
+    unsigned char misc[] = { 0x1B, 'T', 0x20,      /* speed high        */
+                             0x1B, 'q', 0x01,      /* tray              */
+                             0x1B, 'h',            /* text mode         */
+                             0x1B, 'i',            /* graphics mode     */
+                             0x1B, 'n', 11, 0 };   /* must still parse  */
+    protocol_feed(misc, sizeof misc); protocol_task();
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 11 && g_reply[6] == 0);
+
+    /* 32) ESC W with len=0: header only, no payload, parser back at S_CMD. */
+    reset_state();
+    unsigned char w0[] = { 0x1B, 'W', 0, 0, 0, 0, 0x1B, 'n', 12, 0 };
+    protocol_feed(w0, sizeof w0); protocol_task();
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 12 && g_reply[6] == 0);
+
+    /* 33) GS C with a SKU longer than OP_SKU_MAX: stored truncated and always
+     *     NUL-terminated, and the parser still resyncs afterwards. */
+    reset_state();
+    {
+        unsigned char gc[5 + 30 + 4]; int j = 0;
+        gc[j++]=0x1D; gc[j++]='C'; gc[j++]=30; gc[j++]=0x10; gc[j++]=0x00; /* 16 */
+        for (int i=0;i<30;i++) gc[j++] = (unsigned char)('A' + (i % 26));
+        gc[j++]=0x1B; gc[j++]='n'; gc[j++]=13; gc[j++]=0;
+        protocol_feed(gc, j); protocol_task();
+        CHECK(g_cfg.label_count == 16);
+        CHECK(strlen(g_cfg.sku) == OP_SKU_MAX - 1);   /* truncated, terminated */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 13);                      /* stream still in sync */
+    }
+
+    /* 34) ESC L 0 (die-cut) must CLEAR a previous raw length override — 0 is
+     *     what the stock driver sends for every die-cut job. */
+    reset_state();
+    unsigned char l1000[] = { 0x1B, 'L', 0xE8, 0x03 };   /* 1000 dots, raw */
+    protocol_feed(l1000, sizeof l1000); protocol_task();
+    protocol_feed(g, sizeof g); protocol_task();
+    CHECK(g_feed == 1000 + 20);                    /* override + gap */
+    {
+        int after_override = g_feed;
+        unsigned char l0[] = { 0x1B, 'L', 0, 0 };
+        protocol_feed(l0, sizeof l0); protocol_task();
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK((g_feed - after_override) != 1000 + 20);  /* back to the paper table */
+    }
+
+    /* 35) The printed height of one job must not leak into the next: a feed
+     *     issued before the new job's first ESC D advances a full pitch. */
+    reset_state();
+    protocol_feed(g, sizeof g); protocol_task();
+    {
+        int base_feed = g_feed;                    /* gap + full pitch, no raster */
+        reset_state();
+        unsigned char jj[64]; int j = 0;
+        jj[j++]=0x1B; jj[j++]='s'; jj[j++]=1; jj[j++]=0; jj[j++]=0; jj[j++]=0;
+        esc_d(&jj[j], 1, 16); j += 12;
+        jj[j++]=0xFF; jj[j++]=0xFF;                /* one 16-dot line */
+        jj[j++]=0x1B; jj[j++]='Q';                 /* end job 1 */
+        jj[j++]=0x1B; jj[j++]='s'; jj[j++]=2; jj[j++]=0; jj[j++]=0; jj[j++]=0;
+        protocol_feed(jj, j); protocol_task();
+        int before = g_feed;
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed - before == base_feed);
+    }
+
+    /* 36) GS D 0x05 reports the build id stamped at compile time. */
+    reset_state();
+    unsigned char d5[] = { 0x1D, 'D', 0x05 };
+    protocol_feed(d5, sizeof d5); protocol_task();
+    {
+        size_t bl = strlen(OPENDMO_BUILD);
+        if (bl > OP_BUILD_ID_MAX) bl = OP_BUILD_ID_MAX;
+        CHECK(g_reply_len == (int)(2 + bl) && g_reply_len <= 2 + OP_BUILD_ID_MAX);
+        CHECK(g_reply[0] == 'D' && g_reply[1] == 0x05);
+        CHECK(memcmp(&g_reply[2], OPENDMO_BUILD, bl) == 0);
+    }
+
+    /* 37) ESC f 1 n - "Skip n Lines" from the LabelWriter 450 tech ref. */
+    reset_state();
+    unsigned char sk[] = { 0x1B, 'f', 1, 40, 0x1B, 'n', 22, 0 };
+    protocol_feed(sk, sizeof sk); protocol_task();
+    CHECK(g_feed == 40);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 22);                       /* three-byte form consumed exactly */
+    reset_state();
+    unsigned char sk2[] = { 0x1B, 'f', 9, 40, 0x1B, 'n', 23, 0 };  /* unknown sub */
+    protocol_feed(sk2, sizeof sk2); protocol_task();
+    CHECK(g_feed == 0);                            /* ignored, not fed */
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[5] == 23);                       /* and still in sync */
+
+    /* 38) A single feed is clamped. Continuous/banner stock in the paper table
+     *     has a nominal height of 32000 dots; without the clamp one ESC G would
+     *     spool out 2.7 metres of paper. */
+    reset_state();
+    unsigned char lbig[] = { 0x1B, 'L', 0xFF, 0x7F };   /* 32767 raw dot length */
+    protocol_feed(lbig, sizeof lbig); protocol_task();
+    protocol_feed(g, sizeof g); protocol_task();
+    CHECK(g_feed > 0 && g_feed <= 4000);
+
+    /* 39) ESC U total label count is the ROLL total, not what is left on it
+     *     (tech ref p.19); the remaining count lives in the status struct. */
+    reset_state();
+    strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 3;   /* nearly empty */
+    protocol_feed(u, sizeof u); protocol_task();
+    CHECK(g_reply_len == 63);
+    CHECK((g_reply[50] | (g_reply[51] << 8)) == MODEL_DEFAULT_COUNT);
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK((g_reply[27] | (g_reply[28] << 8)) == 3);   /* status still says 3 left */
+
+    /* 40) Button actions work with no host: form feed advances, and the
+     *     built-in self test prints its canned pattern. */
+    reset_state();
+    protocol_form_feed();
+    CHECK(g_feed > 0);
+    reset_state();
+    protocol_self_test();
+    CHECK(g_lines == 400);                         /* SELFTEST_LINES */
+    CHECK(g_feed >= 400);                          /* stepped per line + tear feed */
+
+    /* 41) Neither button action may interrupt a running host job. */
+    reset_state();
+    protocol_feed(js2, sizeof js2); protocol_task();   /* ESC s: job active */
+    {
+        int before = g_feed, lines_before = g_lines;
+        protocol_form_feed();
+        protocol_self_test();
+        CHECK(g_feed == before && g_lines == lines_before);
+    }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;

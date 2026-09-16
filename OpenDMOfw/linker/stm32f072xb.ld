@@ -75,6 +75,9 @@ SECTIONS
     . = ALIGN(8);
   } >RAM
 
-  /DISCARD/ : { libc.a ( * ) libm.a ( * ) libgcc.a ( * ) }
+  /* No /DISCARD/ of libc.a / libm.a / libgcc.a here (the ST template carries
+     one). Cortex-M0 has no hardware divide, so libgcc supplies __aeabi_uidivmod
+     and __aeabi_uldivmod - both are actually referenced (usb_desc_init_serial,
+     store.c page math). --gc-sections already drops what is unused. */
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }

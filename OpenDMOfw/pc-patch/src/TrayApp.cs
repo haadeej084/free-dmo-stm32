@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -11,8 +12,16 @@ namespace DmoPatch
     /// Insert new roll / Reset counter / presets / Custom / off / startup / block-updates.
     public static class TrayApp
     {
+        // The project is a console Exe so the CLI verbs can print. In tray mode
+        // that console is just a stray window (autostart opens one on every
+        // logon), so detach from it. Launched from an existing cmd, FreeConsole
+        // only detaches us - the user's window stays.
+        [DllImport("kernel32.dll")] static extern bool FreeConsole();
+
         public static void Run()
         {
+            try { FreeConsole(); } catch { }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -72,7 +81,7 @@ namespace DmoPatch
             // --- presets ---
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Biggest roll — 30387", null,
-                (s, e) => { Program.SetFlag("30387", 9999); RefreshStatus(ni); }));
+                (s, e) => { Program.InsertRoll("30387"); RefreshStatus(ni); }));
             m.Items.Add(new ToolStripMenuItem("Unlimited — 9999 labels", null,
                 (s, e) => { if (Program.ReadFlag(out var sku, out _)) Program.SetFlag(sku, 9999); else Program.SetFlag("S0904980", 9999); RefreshStatus(ni); }));
 

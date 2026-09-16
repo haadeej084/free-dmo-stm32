@@ -7,10 +7,11 @@ extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
 extern int main(void);
 void SystemInit(void);
 
-/* Handlers - weak defaults; the real ones are in usb_core.c / motor.c. */
+/* Handlers - weak defaults; the real ones are in usb_core.c (USB) and
+ * system.c (SysTick). TIM3 free-runs as the delay_us time base and raises no
+ * interrupt, so it keeps the default handler. */
 void Default_Handler(void) { for(;;){} }
 void USB_IRQHandler(void)  __attribute__((weak, alias("Default_Handler")));
-void TIM3_IRQHandler(void) __attribute__((weak, alias("Default_Handler")));
 void SysTick_Handler(void) __attribute__((weak, alias("Default_Handler")));
 
 void Reset_Handler(void)
@@ -37,7 +38,7 @@ const vec_t g_vectors[16 + 32] = {
     0,0,                  /* 12,13 reserved    */
     Default_Handler,      /* 14 PendSV         */
     SysTick_Handler,      /* 15 SysTick        */
-    /* --- externe IRQ 0..31 --- */
+    /* --- external IRQ 0..31 --- */
     Default_Handler,      /* 0  WWDG           */
     Default_Handler,      /* 1  PVD_VDDIO2     */
     Default_Handler,      /* 2  RTC            */
@@ -54,7 +55,7 @@ const vec_t g_vectors[16 + 32] = {
     Default_Handler,      /* 13 TIM1_BRK_UP    */
     Default_Handler,      /* 14 TIM1_CC        */
     Default_Handler,      /* 15 TIM2           */
-    TIM3_IRQHandler,      /* 16 TIM3           */
+    Default_Handler,      /* 16 TIM3 (free-running, no IRQ) */
     Default_Handler,      /* 17 TIM6_DAC       */
     Default_Handler,      /* 18 TIM7           */
     Default_Handler,      /* 19 TIM14          */

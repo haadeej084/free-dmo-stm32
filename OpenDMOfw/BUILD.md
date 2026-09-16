@@ -13,12 +13,13 @@
 
 One codebase, two head widths (see `src/model.h`):
 
-| Model | Command | Width | Output |
-|-------|---------|-------|--------|
-| **OP104** (default) | `make` | 104 mm / 4" @ 300 dpi, 1248 dots | `build/OP104/opendmo-OP104.bin` |
-| OP57 | `make MODEL=OP57` | 57 mm, 672 dots | `build/OP57/opendmo-OP57.bin` |
+| Model | Command | Head | Output |
+|-------|---------|------|--------|
+| **OP104** (default) | `make` | 1248 dots @ 300 dpi (105.7 mm) | `build/OP104/opendmo-OP104.bin` |
+| OP57 | `make MODEL=OP57` | 672 dots @ 300 dpi (56.9 mm) | `build/OP57/opendmo-OP57.bin` |
 
-OP104 matches the specs of the common 4"/300 dpi shipping-label class.
+OP104 matches the specs of the common 4"/300 dpi shipping-label class; the name
+refers to the 104 mm printable label width, not to the head width.
 
 ## Building
 
@@ -38,6 +39,11 @@ Equivalent without `make`:
 
 The build uses `--specs=nano.specs` (newlib-nano) and `-Os`; the memory budget is
 128 KB flash / 16 KB SRAM. `make size` shows the usage.
+
+Both drivers stamp a build identifier from `git describe --always --dirty
+--abbrev=8` into the image; `GS D 0x05` (`opsend.py diag 5`) reports it, so a
+fieldwork report can name the exact image it was measured on. Override with
+`make BUILD_ID=whatever`; outside a git checkout it becomes `dev`.
 
 > No vendor-SDK/CMSIS needed: `src/mcu.h` contains the register definitions.
 
@@ -109,6 +115,7 @@ python tools/opsend.py density 12
 python tools/opsend.py config --count 500 --sku 30256
 python tools/opsend.py version
 python tools/opsend.py diag 4                   # GS D diagnostic snapshot
+python tools/opsend.py diag 5                   # firmware build id
 python tools/opsend.py --model OP57 feed 30     # 57 mm instead of default OP104
 ```
 
@@ -123,11 +130,24 @@ the device.
 make test
 ```
 
-- `test/test_protocol_wire.py` — status / ESC U / ESC V / GS D layouts byte-for-byte.
-- `test/test_protocol.c` — parser with mocked hardware (both models), when a host
-  `cc`/`gcc` is on PATH. Also:
+- `test/test_protocol.c` — the real parser with mocked hardware, both models
+  (53 checks / 30 scenarios). This is the regression test: it links and runs
+  `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
+- `test/test_protocol_wire.py` — a hand transcription of the reply generators,
+  checked against the live capture and the decompiled driver structs. It does
+  **not** execute the C; keep it in sync when `protocol.c` changes.
+
+Also directly:
 
 ```sh
 cc -Wall -Wextra -std=c11 [-DMODEL_OP57] \
   -Isrc -o test_protocol test/test_protocol.c src/printer/protocol.c && ./test_protocol
+```
+
+The PC-side patcher has its own suite (Windows, .NET SDK) — it builds a synthetic
+assembly and runs the real patcher against it, so no `DYMO.LabelAPI.dll` is
+needed:
+
+```sh
+cd pc-patch/test && dotnet run -c Release
 ```

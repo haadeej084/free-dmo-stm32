@@ -14,8 +14,14 @@
 #        LW550_VERSION [Pack=1, Size=34] = HwVer[16] + FwVer[16] + ProdID(u16 LE)
 #
 # It also asserts the structural invariants a well-formed reply must satisfy
-# (exact lengths, magic bytes, field positions) so a regression in the C code's
-# byte layout would show up here as soon as the transcription is refreshed.
+# (exact lengths, magic bytes, field positions).
+#
+# SCOPE - read this before trusting it as a regression test. The generators here
+# are a HAND transcription of the C, so this harness checks the transcription
+# against the capture and the driver structs; it does NOT execute protocol.c and
+# cannot catch C code drifting away from this file. The executable regression
+# test on the real parser is test/test_protocol.c (run by `make test` whenever a
+# host C compiler is present). Keep the two in sync when protocol.c changes.
 #
 # Run:  python3 test/test_protocol_wire.py
 # Exit 0 = all checks pass.
@@ -76,7 +82,7 @@ def firmware_status(job_active=0, job_id=0, label_index=0, density_pct=100,
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: send_version()
 # ---------------------------------------------------------------------------
-def firmware_version(pid, hw=b"LW5XL-REV.K", fw=b"FWAP01.02.2112"):
+def firmware_version(pid, hw=b"LW5XL-REV.K", fw=b"FWAP000100010921"):
     r = bytearray(34)
     for i in range(16):
         r[i] = hw[i] if i < len(hw) else 0
@@ -96,7 +102,18 @@ def crc16_ccitt(data):
             crc &= 0xFFFF
     return crc
 
-def firmware_sku_record(sku, label_count, w_mm=104, h_mm=59, head_dots=1248, dpi=300):
+def dots_to_mm(dots, dpi=300):
+    """Transcription of protocol.c :: dots_to_mm() - 25.4 mm/inch, rounded."""
+    den = dpi * 10
+    return (dots * 254 + den // 2) // den
+
+# Defaults = the OP104 default paper (0x0867, 1233 x 1883 dots = S0904980 4x6").
+def firmware_sku_record(sku, label_count, w_mm=None, h_mm=None,
+                        head_dots=1248, dpi=300):
+    if w_mm is None:
+        w_mm = dots_to_mm(1233, dpi)
+    if h_mm is None:
+        h_mm = dots_to_mm(1883, dpi)
     r = bytearray(63)
     r[0] = 0xB6; r[1] = 0xCA          # magic 0xCAB6 LE
     r[2] = 0                          # version
@@ -117,7 +134,7 @@ def firmware_sku_record(sku, label_count, w_mm=104, h_mm=59, head_dots=1248, dpi
     r[40:42] = (h_mm & 0xFFFF).to_bytes(2, "little")
     r[42:44] = (w_mm & 0xFFFF).to_bytes(2, "little")
     r[44] = 2; r[45] = 0; r[46] = 2; r[47] = 0
-    liner = (head_dots * 25 // dpi) & 0xFFFF
+    liner = dots_to_mm(head_dots, dpi) & 0xFFFF
     r[48:50] = liner.to_bytes(2, "little")
     r[50:52] = (label_count & 0xFFFF).to_bytes(2, "little")
     total_mm = min(pitch_mm * label_count, 0xFFFF)
@@ -172,6 +189,15 @@ check(u[8:8+8] == b"S0904980", "SKU bytes at [8..]")
 # CRC must be reproducible (self-consistent) over the payload range.
 crc = crc16_ccitt(bytes(u[8:63]))
 check(u[4:6] == (crc & 0xFFFF).to_bytes(2, "little"), "CRC16-CCITT at [4-5] matches payload")
+# Geometry must use 25.4 mm/inch, not a flat 25 (which reported everything ~1.6 % short).
+check(dots_to_mm(1248) == 106 and dots_to_mm(672) == 57,
+      "head width in mm: 1248 dots -> 106, 672 dots -> 57 (25.4 mm/inch)")
+check(dots_to_mm(1233) == 104 and dots_to_mm(1883) == 159,
+      "S0904980 (1233x1883 dots) -> 104x159 mm, matching model.h")
+check(int.from_bytes(u[42:44], "little") == 104 and
+      int.from_bytes(u[40:42], "little") == 159,
+      "SKU record carries 104 mm width at [42-43] and 159 mm length at [40-41]")
+check(int.from_bytes(u[48:50], "little") == 106, "liner width at [48-49] = 106 mm")
 
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: diagnose()  (GS D backdoor)
@@ -195,7 +221,7 @@ def firmware_diag(sub, arg=0, pid_lo=0x2A, traw=0x1234, therm_ok=1, paper=1,
     r[2] = pid_lo
     r[3] = (traw >> 8) & 0xFF; r[4] = traw & 0xFF
     r[5] = therm_ok
-    r[6] = (paper & 1) | (button & 2)
+    r[6] = (paper & 1) | ((button & 1) << 1)   # protocol.c: r[6] |= 2 when pressed
     r[7] = density
     r[8] = flags
     for i in range(12):
@@ -212,6 +238,10 @@ check(d4[2] == 0x2A, "snapshot: model id (PID low byte) at [2]")
 check(((d4[3] << 8) | d4[4]) == 0x1234, "snapshot: thermistor raw u16 BE at [3-4]")
 check(d4[5] == 1, "snapshot: thermal_ok at [5]")
 check(d4[6] & 1 == 1, "snapshot: paper-present bit0 at [6]")
+check(firmware_diag(0x04, paper=1, button=1)[6] == 0x03,
+      "snapshot: button-pressed bit1 at [6] (paper+button = 0x03)")
+check(firmware_diag(0x04, paper=0, button=1)[6] == 0x02,
+      "snapshot: button bit is independent of the paper bit")
 check(d4[7] == 100, "snapshot: density % at [7]")
 check(d4[8] == 1, "snapshot: flags at [8]")
 check(d4[9:9+8] == b"S0904980", "snapshot: SKU bytes at [9..]")

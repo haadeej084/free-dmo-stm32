@@ -41,11 +41,15 @@ INC := -Isrc
 
 OBJ := $(patsubst %.c,$(BUILD)/%.o,$(SRC))
 
+# Build identifier reported by GS D 0x05, so a fieldwork report can name the
+# exact image it was measured on. Outside a git checkout this becomes "dev".
+BUILD_ID ?= $(shell git describe --always --dirty --abbrev=8 2>/dev/null || echo dev)
+
 # -Os: this is a 128KB-flash / 16KB-RAM target, code size matters.
 CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra -Wno-unused-parameter \
-  -fno-common $(MODELDEF) $(INC)
+  -fno-common $(MODELDEF) $(INC) -DOPENDMO_BUILD='"$(BUILD_ID)"'
 
 LDSCRIPT := linker/stm32f072xb.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \

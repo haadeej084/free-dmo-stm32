@@ -247,11 +247,13 @@ static void handle_standard_setup(const usb_setup_t *s)
         static uint8_t cfg; cfg = s_configured ? 1 : 0;
         usb_ctrl_send(&cfg, 1, s->wLength);
         break; }
-    case 0: { /* GET_STATUS: device -> {0,0}; endpoint -> halt-bit */
+    case 0: { /* GET_STATUS: device -> self-powered bit; endpoint -> halt-bit */
         static uint8_t st[2];
+        uint8_t recip = s->bmRequestType & 0x1F;
         st[0] = 0; st[1] = 0;
-        if ((s->bmRequestType & 0x1F) == 2)      /* recipient = endpoint */
-            st[0] = ep_is_halted((uint8_t)s->wIndex) ? 1 : 0;
+        if (recip == 0)      st[0] = 0x01;       /* device: bit0 = self-powered */
+        else if (recip == 2) st[0] = ep_is_halted((uint8_t)s->wIndex) ? 1 : 0;
+        /* recipient = interface: always {0,0} */
         usb_ctrl_send(st, 2, s->wLength);
         break; }
     case 10: /* GET_INTERFACE */ {
@@ -292,9 +294,28 @@ static void handle_setup(void)
 }
 
 /* ---- bulk-EP API -------------------------------------------------------- */
+/* There is one PMA TX buffer per endpoint, so a second reply written before the
+ * host has collected the first would silently overwrite it (e.g. "ESC A ESC U"
+ * arriving in one 64-byte packet: protocol_task() answers both back-to-back).
+ * STAT_TX stays VALID until the IN transfer completes, so wait for that first.
+ * The wait is bounded: a host that stops polling must not stall the print loop.
+ * Returns the number of bytes queued, or 0 if the previous reply was still
+ * outstanding (dropping one reply beats sending a corrupted one). */
+#define EP_TX_WAIT_MS 50u
+
+static int ep_tx_busy(int n)
+{
+    return ((USB->EPR[n] & USB_EP_STAT_TX) >> 4) == USB_EP_STAT_VALID;
+}
+
 int usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len)
 {
+    uint32_t t0 = millis();
     if (len > EP_MAXPKT) len = EP_MAXPKT;
+    while (ep_tx_busy(ep)) {
+        wdt_kick();
+        if ((millis() - t0) > EP_TX_WAIT_MS) return 0;
+    }
     pma_write(BUF_EP1_TX, data, len);
     *btable_tx_cnt(ep) = len;
     ep_set_tx_stat(ep, STAT_TX(USB_EP_STAT_VALID));

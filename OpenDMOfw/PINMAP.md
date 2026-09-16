@@ -14,12 +14,12 @@ reasoning and the **confidence** per choice.
 
 The D.mo LabelWriter 550 series is a refresh of the 450 series (same 57 mm /
 672-dot / 300 dpi head; both tech references agree), and the 5XL continues the
-4XL (101 mm / 1248-dot / 300 dpi).
+4XL (1248-dot / 300 dpi = 105.7 mm).
 
 | Model  | Head (ROHM)                              | D.mo assembly | Source |
 |--------|------------------------------------------|---------------|--------|
 | 57 mm  | SHEC 3C56-9638 / GK11C308 / **KF3002-GK11C** | PRTA05412 | Replacement-head listings (eBay/Amazon) for the 400/400 Turbo/450 Turbo, which shares this head |
-| 101 mm | **TE3004-TP1W00A** class (1248 dots @ 300 dpi, 105.706 mm) | — | ROHM official catalog SF2024_EN_Thermal_Printheads.pdf (exact dot count) |
+| 105.7 mm | **TE3004-TP1W00A** class (1248 dots @ 300 dpi, 105.706 mm) | — | ROHM official catalog SF2024_EN_Thermal_Printheads.pdf (exact dot count) |
 
 The public sibling datasheet **KF3002-GL50A** (ROHM, "Thick Film Thermal
 Printhead 300DPI", via alldatasheet) documents the family architecture:
@@ -51,8 +51,10 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   confidential "metadata only"); the F072 GPIO map for head/sensor/motor must be
   measured on the board. The head flex carries: CLK, DI, LAT, STB (possibly
   multiple), VDD 3.3/5 V, VH, GND, two NTC wires.
-- **VH = 24 V** — the wall brick is 24 V (550: 1.75 A; Turbo: 2.5 A; 5XL: 3.75 A)
-  and the head's heat supply is that rail via a P-MOS/load switch, not a separate
+- **VH = 24 V** — now first-party sourced, not inferred: the 550 Technical
+  Reference p.9 lists the adapters as 24 VDC at 1.75 A (550), 2.5 A (550 Turbo)
+  and 3.75 A (5XL), and names the DC jack (JP2, 5.5 × 2.5 mm, centre positive).
+  The head's heat supply is that rail via a P-MOS/load switch, not a separate
   buck. Logic VDD comes from the 3V3 rail.
 - **EEPROM:** Rev H/I/K = **BL24C128A** (Belling, 128 kbit, **64 B page**,
   **2-byte addressing**), 7-bit address **0x50** (A0–A2 to GND), WP pins shorted.
@@ -63,8 +65,24 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
 - **Feed motor driver:** not named in public teardowns; likely a 4-transistor or
   small dual-H-bridge (TB6612/MP6500 class) on 24 V, driving the four phases
   directly (**IN1-IN4 expected**, no separate STEP/DIR chip — `motor.c` default
-  is now 4-phase). One raster line = 1/300 inch = **0.08467 mm**; µsteps per line
-  are not in the TRM — count them by scoping the phase pins during one ESC D line.
+  is now 4-phase). One raster line = 1/300 inch = **0.08467 mm** (the LW450
+  reference confirms the elements are "0.085 mm square ... spaced at 300 per
+  inch"); µsteps per line are not in either manual — count them by scoping the
+  phase pins during one ESC D line. **Time budget:** DYMO rates the 550 at 62
+  labels/min and the 5XL at 53 on a 4-line address label (89 mm = 1050 lines),
+  i.e. **0.92 ms and 1.08 ms per line**. Anything slower than that is not
+  genuine-speed, which is why `head.c` shifts via BSRR and the motor step
+  overlaps the strobe.
+- **Head voltage sense — an input we do NOT have.** The genuine engine "measure[s]
+  the print voltage and the head temperature before each print cycle" and
+  suspends printing below 19.3 V, resuming at 21 V (LW450 reference p.7). That
+  needs a divider from the 24 V rail to an ADC pin; `pins.h` has no such pin, and
+  the status struct's PrintHeadVoltage field is hardcoded to "ok". If you find
+  the divider on the board, that is where it plugs in.
+- **Top-of-form sensing:** an **infrared LED photocell** reading the sense hole
+  between labels, with the engine counting motor steps between holes (550
+  reference p.7). So it is an emitter/detector pair, the detector may be analog,
+  and the emitter may need its own drive pin — none of which `pins.h` models yet.
 - **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **FCC RGDLW550 internal photos** are too low-res for GPIO traces; the circuit
@@ -102,6 +120,21 @@ hardware configuration our firmware does not control. If that tie write-protects
 the EEPROM, `store_save()` degrades gracefully (config falls back to defaults)
 and the **`GS D 0x03` self-test** flags it (write+read mismatch). Verify writes
 are accepted on a rev K board via that self-test; no firmware change needed.
+
+## Confirmed from Rev K board close-ups
+
+Two high-resolution close-ups of a Rev K mainboard (images not bundled) add
+three facts that no datasheet could give:
+
+| Observation | Reading |
+|---|---|
+| **U1 is a 48-pin QFP** — twelve leads counted on each of the four sides | Consistent with the STM32F072CBT6 (LQFP48) the pin map assumes |
+| **Y1 = HC-49 can marked `AXC12.00-115`**, directly beside U1, with its load capacitors C7/C8 | A **12 MHz HSE crystal** on the MCU. 12 × PLL4 = exactly 48 MHz — see DECISIONS D3 and `-DOPENDMO_CLOCK_HSE12=1` |
+| **Banks of SMD `220` (= 22 Ω) resistors** ringing U1 — R7–R12, R18–R27, R29, R31–R33, R39 — interleaved with `102` (1 kΩ) parts | The head/motor interface lines are **series-damped at 22 Ω**. Continuity checks will read tens of ohms, not a short |
+| A SOIC-8 at **U6** near C18/C37 | Candidate for the config EEPROM; marking not legible in these shots |
+
+The silkscreen carries reference designators only (`U1`, `R27`, `C33`, `Y1`…) and
+never signal names, which is exactly why the routing still has to be probed.
 
 ## Board component map
 
@@ -147,9 +180,16 @@ identification + layout, not wiring.
 ## F072CBT6 LQFP48 physical pin map (sourced)
 
 The main MCU is an **STM32F072CBT6** — LQFP48, 128 K flash / 16 K RAM. The
-package has 12 pins per side; **pin 1 is the corner with the circular dimple**,
-numbered counter-clockwise: top edge left→right = 1–12, right edge top→bottom =
-13–24, bottom edge right→left = 25–36, left edge bottom→top = 37–48.
+package has 12 pins per side; **pin 1 is the corner marked by the dimple/dot**,
+numbered counter-clockwise from there: 1–12 down the left edge, 13–24 along the
+bottom, 25–36 up the right edge, 37–48 along the top (the standard LQFP
+convention used in the ST datasheet's package drawing — orient the part by the
+dot, then follow the numbering counter-clockwise, and check that pad 7 lands on
+NRST as a sanity check).
+
+> **The STM32F0 has no JTAG.** Debug is SWD-only on PA13/PA14. PA15, PB3 and PB4
+> are plain GPIOs after reset here — any "JTDI/JTDO/NJTRST by default" note you
+> may remember from an STM32F1 board does not apply.
 
 Complete physical pad → GPIO map, extracted from datasheet **DocID025004 Rev 2,
 Table 13** ("STM32F072xx pin definitions"):
@@ -170,7 +210,7 @@ Table 13** ("STM32F072xx pin definitions"):
 | 12  | PA2            | **status LED**                               |
 | 13  | PA3            | **button**                                   |
 | 14  | PA4            | **head LATCH**                               |
-| 15  | PA5            | **head CLK** (JTDO by default)               |
+| 15  | PA5            | **head CLK**                                 |
 | 16  | PA6            | **head DI1**                                 |
 | 17  | PA7            | **head DI2**                                 |
 | 18  | PB0            | **head STB1**                                |
@@ -193,7 +233,7 @@ Table 13** ("STM32F072xx pin definitions"):
 | 35  | VSS            | GND                                          |
 | 36  | VDDIO2         | IO supply                                    |
 | 37  | PA14           | **SWCLK** (SWD flash point)                  |
-| 38  | PA15           | JTDI by default                              |
+| 38  | PA15           | — (plain GPIO after reset)                   |
 | 39  | PB3            | head STB4 (spare)                            |
 | 40  | PB4            | **motor A1 / STEP**                          |
 | 41  | PB5            | **motor A2 / DIR**                           |
@@ -212,6 +252,14 @@ from flash by default (BOOT0 = pad 44 held Low), so no boot jumper is needed.
 **I2C note:** on the STM32F0 line I2C is **AF2**, and I2C1 exists *only* on
 PB6/PB7 or PB8/PB9 (Table 14). The board's EEPROM SCL/SDA must be traced to one
 of those two pairs; `pins.h` currently assumes PB8/PB9.
+
+> ⚠ **If the EEPROM turns out to be on PB6/PB7, there is a pin conflict.** The
+> default motor mode (`MOTOR_DRIVE_4PHASE`) uses PB4/PB5/**PB6/PB7** as A1/A2/
+> B1/B2. Moving I2C to PB6/PB7 means the motor phases must move too. There is
+> room: PB10/PB11 are free (PB10 is only used as motor ENABLE in the STEPDIR
+> fallback), as are PB12–PB15 and PA9/PA10/PA15. Resolve this **before** powering
+> the head or the motor — driving a phase pin while the I2C pull-ups hold the
+> line is the kind of mistake that takes a board with it.
 
 ## Overview
 
@@ -239,15 +287,21 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 
 ## Head geometry (per model, in `src/model.h`)
 
-| Model            | Dots | dpi | Bytes/line | Strobe segments |
-|------------------|------|-----|------------|-----------------|
-| **OP104** (default) | 1248 | 300 | 156        | 2 (two 624-dot halves) |
-| OP57 (`MODEL=OP57`) | 672 | 300 | 84         | 2 (two 336-dot halves) |
+| Model            | Dots | dpi | Width | Bytes/line | Strobe segments |
+|------------------|------|-----|-------|------------|-----------------|
+| **OP104** (default) | 1248 | 300 | 105.7 mm | 156     | 2 (two 624-dot halves) |
+| OP57 (`MODEL=OP57`) | 672 | 300 | 56.9 mm  | 84      | 2 (two 336-dot halves) |
 
 - Both heads are two-half KF3002-family modules (sibling datasheet
   KF3002-GL50A); the halves are fired sequentially to split peak current.
   Confirm the half count on the board (a wide head could have 4 heat lines —
   spare strobe pins PB2/PB3 are already mapped).
+- **Half-2 dot order is an assumption.** `head.c` feeds dot `i` to DI1 and dot
+  `half + i` to DI2 on the same clock, i.e. both halves shift in the same
+  direction from the centre outwards. Some two-half heads shift the second bank
+  in the opposite direction. If a test print comes out with the right half
+  mirrored, reverse the DI2 index in `head_print_line()` — that is the whole
+  fix. Listed in FIELDWORK as measurement 6.
 - `HEAD_BYTES = ceil(HEAD_DOTS/8)`. The line buffer is on the stack (2 KB reserve),
   so 156 bytes fits comfortably.
 - Peak current is the critical point at OP104 (1248 dots @ 300 dpi): firing the

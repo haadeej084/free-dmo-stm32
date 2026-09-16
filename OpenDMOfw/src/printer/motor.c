@@ -14,6 +14,12 @@
  *                         separate STEP/DIR chip.
  *   MOTOR_DRIVE_STEPDIR : STEP/DIR/ENABLE to an external driver IC (fallback).
  *
+ * TIME BUDGET (sourced). DYMO rates the 550 at 62 labels/min and the 5XL at 53,
+ * on a 4-line address label = 89 mm = 1050 dot lines. That is 0.92 ms and
+ * 1.08 ms per line respectively, feed included. MOTOR_STEP_US must therefore
+ * end up at or under ~900 us for one step per line, and the step has to overlap
+ * the head strobe (motor_step_line_after) rather than follow it.
+ *
  * ASSUMPTIONS (PINMAP.md): the drive variant, MOTOR_STEPS_PER_LINE and the step
  * timing are safe starting values; calibrate so one dot line advances exactly
  * one head line height (no stretching/compression of the image).
@@ -28,7 +34,7 @@
 #define MOTOR_DRIVE         MOTOR_DRIVE_4PHASE   /* expected: IN1-IN4 dual H-bridge */
 
 #define MOTOR_STEPS_PER_LINE 1
-#define MOTOR_STEP_US        1200        /* per half period; calibrate */
+#define MOTOR_STEP_US        800         /* per step; see the time budget above */
 
 void motor_init(void)
 {
@@ -55,35 +61,70 @@ void motor_enable(int on)
 #endif
 }
 
+/* Advance the phase/STEP output WITHOUT the settle delay, so the caller can
+ * decide how much of it has already elapsed. */
 #if MOTOR_DRIVE == MOTOR_DRIVE_4PHASE
 static const uint8_t k_phase[4][4] = {
     {1,0,1,0}, {0,1,1,0}, {0,1,0,1}, {1,0,0,1}   /* full-step */
 };
 static uint8_t s_ph;
-static void step_once(void)
+static void step_pulse(void)
 {
     s_ph = (s_ph + 1) & 3;
     gpio_set(PIN_MOTOR_A1, k_phase[s_ph][0]);
     gpio_set(PIN_MOTOR_A2, k_phase[s_ph][1]);
     gpio_set(PIN_MOTOR_B1, k_phase[s_ph][2]);
     gpio_set(PIN_MOTOR_B2, k_phase[s_ph][3]);
-    delay_us(MOTOR_STEP_US);
 }
 #else
-static void step_once(void)
+static void step_pulse(void)
 {
     gpio_set(PIN_MOTOR_STEP, 1);
-    delay_us(MOTOR_STEP_US);
+    delay_us(MOTOR_STEP_US / 2u);       /* driver-IC minimum pulse width */
     gpio_set(PIN_MOTOR_STEP, 0);
-    delay_us(MOTOR_STEP_US);
 }
 #endif
+
+static void step_once(void)
+{
+    step_pulse();
+    delay_us(MOTOR_STEP_US);
+}
+
+static uint32_t s_last_step_ms;
+static int      s_energised;
 
 void motor_step_lines(uint16_t lines)
 {
     motor_enable(1);
+    s_energised = 1;
     for (uint16_t l = 0; l < lines; l++)
         for (int s = 0; s < MOTOR_STEPS_PER_LINE; s++)
             step_once();
-    /* keep enable on between lines; the main loop can later call motor_enable(0) */
+    s_last_step_ms = millis();
+    /* Holding torque stays on; motor_idle_tick() drops it once feeding stops.
+     * Cutting it right after every call would de-energise the coils between the
+     * 64-byte USB packets of a single label and let the paper slip. */
+}
+
+void motor_step_line_after(uint32_t elapsed_us)
+{
+    motor_enable(1);
+    s_energised = 1;
+    for (int s = 0; s < MOTOR_STEPS_PER_LINE; s++) {
+        step_pulse();
+        /* Only the LAST step of the line may be credited with the strobe time;
+         * intermediate microsteps still need their full spacing. */
+        if (s + 1 < MOTOR_STEPS_PER_LINE) delay_us(MOTOR_STEP_US);
+    }
+    if (elapsed_us < MOTOR_STEP_US) delay_us(MOTOR_STEP_US - elapsed_us);
+    s_last_step_ms = millis();
+}
+
+void motor_idle_tick(uint32_t idle_ms)
+{
+    if (!s_energised) return;
+    if ((millis() - s_last_step_ms) < idle_ms) return;
+    motor_enable(0);
+    s_energised = 0;
 }

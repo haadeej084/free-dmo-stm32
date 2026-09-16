@@ -14,6 +14,14 @@
 
 #define __IO volatile
 
+/* Host unit test (test/test_usb.c) only: the inline-assembly construct below is
+ * specific to the Arm toolchain, so a native compiler sees it as a no-op. Never
+ * defined in a firmware build. */
+#ifdef OPENDMO_HOST_TEST
+#define __asm
+#define volatile(...) ((void)0)
+#endif
+
 /* ---- Cortex-M0 core (NVIC + SysTick + SCB, subset) ---------------------- */
 typedef struct {
     __IO uint32_t ISER[1]; uint32_t _r0[31];
@@ -229,7 +237,31 @@ typedef struct {
 #define USB_EP_STAT_NAK      2u
 #define USB_EP_STAT_VALID    3u
 
+/* EPnR writes go through one macro so the host unit test can model the
+ * register's mixed toggle / rc_w0 / read-only bit semantics. */
+#ifndef OPENDMO_HOST_TEST
+#define USB_EPR_WRITE(n, v) (USB->EPR[(n)] = (uint16_t)(v))
+#else
+void host_epr_write(int n, uint16_t v);
+#define USB_EPR_WRITE(n, v) host_epr_write((n), (uint16_t)(v))
+#endif
+
 static inline void irq_disable(void){ __asm volatile("cpsid i":::"memory"); }
 static inline void irq_enable(void){ __asm volatile("cpsie i":::"memory"); }
+
+/* Host unit test only: point the USB peripheral, its packet memory and the
+ * UID at RAM owned by test/test_usb.c. Placed last so the inline helpers above
+ * keep the real addresses (the test never calls them). */
+#ifdef OPENDMO_HOST_TEST
+#undef USB
+#undef USB_PMA_BASE
+#undef UID_BASE
+extern USB_Type host_usb;
+extern uint16_t host_pma[512];
+extern uint32_t host_uid[3];
+#define USB          (&host_usb)
+#define USB_PMA_BASE ((uintptr_t)host_pma)
+#define UID_BASE     ((uintptr_t)host_uid)
+#endif
 
 #endif /* OP57_MCU_H */

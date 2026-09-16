@@ -27,6 +27,16 @@ jobs:
       - name: Host tests
         working-directory: OpenDMOfw
         run: make test
+      - name: Worst-case stack depth
+        working-directory: OpenDMOfw
+        run: make stack && make stack MODEL=OP57
+      - name: Install Renode
+        run: |
+          curl -sSL -o renode.tar.gz https://github.com/renode/renode/releases/download/v1.17.0/renode-1.17.0.linux-portable.tar.gz
+          mkdir -p "$HOME/renode" && tar xzf renode.tar.gz -C "$HOME/renode" --strip-components=1
+      - name: Firmware image in Renode (boot, LED, SysTick, head shift)
+        working-directory: OpenDMOfw
+        run: make renode RENODE="$HOME/renode/renode" && make renode MODEL=OP57 RENODE="$HOME/renode/renode"
 
   pc-patch:
     # net48 + WinForms, so this half only builds on Windows.

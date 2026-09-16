@@ -22,6 +22,9 @@ so stock D.MO Connect enumerates it unchanged and any physical roll prints. See
 | A6 | IWDG watchdog (per-line kick) + LED fault patterns + unique serial from the MCU UID | OK |
 | A7 | Host unit test of the parser (mocked hardware) — compiled and run natively: 117 checks / 52 scenarios, both models | OK |
 | B8 | Host sender `tools/opsend.py` (genuine D.mo protocol via libusb, PNG→raster) | OK |
+| C1 | USB stack host test against a register-level peripheral model — 91 checks per model | OK |
+| C2 | Real image in Renode: boot, SysTick, LED patterns, head bit stream + per-line cost | OK |
+| C3 | Worst-case stack (920 / 776 of 2048 bytes) and static analysis (GCC analyzer, cppcheck) | OK |
 
 ## Label counter (D.mo-like, as requested)
 

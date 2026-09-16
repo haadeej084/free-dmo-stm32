@@ -100,8 +100,14 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   window has to be on the board, not in firmware. Verify that pull before the
   first 24 V test; firmware now also writes the off level *before* switching the
   pin to an output, so it never drives the gate through an undefined ODR.
-- **FCC RGDLW550 internal photos** are too low-res for GPIO traces; the circuit
-  diagram is confidential. The MCU is an **STM32F072CB** on both Rev E and Rev K
+- **FCC internal photos** (RGDLW550, RGDLW550T, RGDLW5XL) are too low-res for
+  GPIO traces or small-chip markings; the circuit diagram is confidential. They
+  do show that the **network models (5XL, 550 Turbo) carry a ~14 mm,
+  100-pin-class ST MCU** beside the RJ45 jack, with no 48-pin F072 evident —
+  read the MCU marking on a 5XL before assuming this pin map applies
+  (DECISIONS D24). Legible there: head bar `3C56-9638` (550/Turbo), motor
+  `LEILI 35BY412-339 6.5Ω` (550 and 5XL), NFC board `LW NFC BOARD REV E` on a
+  6-wire cable, button board `LW550 Button RevB`. The MCU is an **STM32F072CB** on both Rev E and Rev K
   photos; the Rev E shot reads as the LQFP48 (`...CBT6`) while the Rev K close-up
   looks like the leadless **UFQFPN48** (`...CBU6`) — a plausible cost-down
   between revisions, and harmless to us since the two packages share one
@@ -297,7 +303,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 |--------------------|---------------|-------------------------|------------|----------------|
 | Head CLK           | PA5           | GPIO out (shift clock)  | medium     | Signal set sourced (KF3002 datasheet); routing assumed — follow the head-connector CLK trace |
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
-| Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line |
+| Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
 | Head STROBE 1      | PB0           | GPIO out (STB1, half 1; active-low) | medium     | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |

@@ -46,7 +46,7 @@ static void defaults(void)
 {
     s_cfg.magic = CFG_MAGIC;
     const char *d = MODEL_DEFAULT_SKU;   /* from model.h (via pins.h) */
-    uint8_t i = 0; for (; d[i] && i < OP_SKU_MAX-1; i++) s_cfg.sku[i] = d[i];
+    uint8_t i = 0; for (; i < OP_SKU_MAX-1 && d[i]; i++) s_cfg.sku[i] = d[i];
     s_cfg.sku[i] = 0;
     s_cfg.label_count = MODEL_DEFAULT_COUNT;   /* matches factory_reset + wrap-around */
     s_cfg.density = 8;

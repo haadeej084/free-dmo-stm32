@@ -404,8 +404,8 @@ static void send_version(void)
      * four chars each - see MODEL_FW_VERSION_COMMON in model.h. */
     static const char hw[] = MODEL_HW_VERSION;
     static const char fw[] = MODEL_FW_VERSION;
-    for (int i = 0; i < 16 && hw[i]; i++) r[i]      = (uint8_t)hw[i];
-    for (int i = 0; i < 16 && fw[i]; i++) r[16 + i] = (uint8_t)fw[i];
+    for (int i = 0; i < 16 && i < (int)sizeof(hw) - 1; i++) r[i]      = (uint8_t)hw[i];
+    for (int i = 0; i < 16 && i < (int)sizeof(fw) - 1; i++) r[16 + i] = (uint8_t)fw[i];
     r[32] = (uint8_t)(MODEL_PID & 0xFF);         /* USB PID LE */
     r[33] = (uint8_t)(MODEL_PID >> 8);
     usbp_send_reply(r, sizeof(r));
@@ -546,7 +546,7 @@ static void factory_reset(void)
     op_config_t *cfg = store_get_mut();
     const char *d = MODEL_DEFAULT_SKU;
     uint8_t i = 0;
-    for (; d[i] && i < OP_SKU_MAX - 1; i++) cfg->sku[i] = d[i];
+    for (; i < OP_SKU_MAX - 1 && d[i]; i++) cfg->sku[i] = d[i];
     cfg->sku[i] = 0;
     cfg->label_count = MODEL_DEFAULT_COUNT;
     cfg->density = 8;

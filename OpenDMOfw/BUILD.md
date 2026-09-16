@@ -133,9 +133,25 @@ make test
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
   (117 checks / 52 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
+- `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
+  `usb_printer.c`) against a register-level model of the STM32F0 USB
+  peripheral, with a scripted host: enumeration, descriptors, bulk transfers,
+  printer-class requests, HALT/STALL handling (91 checks per model).
 - `test/test_protocol_wire.py` — a hand transcription of the reply generators,
   checked against the live capture and the decompiled driver structs. It does
   **not** execute the C; keep it in sync when `protocol.c` changes.
+
+Two further checks, both also run in CI:
+
+```sh
+make stack [MODEL=OP57]                   # worst-case stack from GCC's call graph vs 2048 B
+make renode [MODEL=OP57] RENODE=/path/to/renode
+```
+
+`make renode` runs the built image in the Renode emulator (1.17, portable
+tarball): `test/renode/smoke.py` checks boot, fault-free main loop, SysTick and
+the LED patterns; `test/renode/head_shift.py` checks the exact bit stream the
+head receives and prints the per-line shift cost.
 
 Also directly:
 

@@ -27,6 +27,10 @@
 > program (replacement chip, or a chip whose RDP was lowered). A factory printer
 > still uses the Bluepill I2C tag-emulator path until then.
 
+> **Check the MCU first.** The image targets an STM32F072CB. That is the MCU on
+> the USB-only 550; FCC photos of the network models (5XL, 550 Turbo) show a
+> larger ST chip instead (DECISIONS D24), so read the marking on a 5XL board.
+
 Firmware that runs **in place on a genuine D.mo LabelWriter 550 / 5XL mainboard**
 (STM32F072, flashed over SWD once the chip is writable) and makes the printer **print on any
 roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only (the network
@@ -102,6 +106,9 @@ src/                  firmware (C, hand-rolled USB FS device stack)
 tools/opsend.py       driver-less host sender (libusb) that speaks the real protocol
 pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico icon)
 test/test_protocol.c  host unit test of the parser (mocked hardware)
+test/test_usb.c       host unit test of the USB stack (register-level peripheral model)
+test/renode/          the real image in the Renode emulator (boot, LED, head shift)
+tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 ```
 
 ## Build

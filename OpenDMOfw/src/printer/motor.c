@@ -6,6 +6,13 @@
  * where 11.811 lines/mm = 300 dpi. N_steps/rev, microstepping, gear ratio and
  * roller diameter are NOT published — count the phase pulses during one ESC D
  * line to get it directly (see PINMAP.md / DECISIONS D17).
+ * What IS sourced: the LEILI 35BY412 family is 7.5 deg per full step, i.e. 48
+ * steps/rev (leili-motor.net 35BY412 page), with no built-in gearbox on the
+ * -339 part, so any reduction is in the printer's gear train. At the rated
+ * 62 labels/min (about 1090 lines/s) one full step per line means ~1360 rpm,
+ * which a 24 V low-resistance PM stepper can do; two per line (~2700 rpm)
+ * is implausible. 1 is therefore the best estimate, not a measurement
+ * (DECISIONS D24).
  *
  * Two wiring variants (select MOTOR_DRIVE):
  *   MOTOR_DRIVE_4PHASE  : direct 4-phase drive (A1/A2/B1/B2) — the EXPECTED

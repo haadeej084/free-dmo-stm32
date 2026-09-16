@@ -133,6 +133,22 @@ int thermal_ok(void)
     return !s_over_temp;
 }
 
+void thermal_scan_adc(uint16_t out[10])
+{
+    for (uint8_t ch = 0; ch < 10; ch++) {
+        pin_t p = (ch < 8) ? (pin_t){ GPIOA, ch }
+                           : (pin_t){ GPIOB, (uint8_t)(ch - 8) };
+        uint32_t sh = (uint32_t)p.pin * 2u;
+        uint32_t save = p.port->MODER;
+        p.port->MODER = (save & ~(3u << sh)) | ((uint32_t)GPIO_ANALOG << sh);
+        ADC1->CHSELR = (1u << ch);
+        out[ch] = adc_sample();
+        p.port->MODER = save;      /* restore mode; the output level is untouched */
+    }
+    ADC1->CHSELR = (1u << ADC_HEAD_TEMP_CH);
+    s_have_raw = 0;                /* the cached thermistor reading is stale now */
+}
+
 uint16_t thermal_dwell_scale(void)
 {
     uint16_t v = thermal_hot_scale();

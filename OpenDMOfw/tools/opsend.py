@@ -20,6 +20,9 @@ Examples:
   python opsend.py sku
   python opsend.py factory-reset
   python opsend.py restart
+  python opsend.py vh off                 # lock out the 24 V heat rail
+  python opsend.py diag 6                 # scan every ADC channel + port levels
+  python opsend.py diag 7 1 4 20          # toggle PB4 twenty times
 """
 import argparse, sys, time
 
@@ -58,11 +61,9 @@ def cmd_config(count, sku):
     s = sku.encode("ascii")[:23]
     return bytes([0x1d, 0x43, len(s), count & 0xFF, (count >> 8) & 0xFF]) + s   # GS C
 def cmd_feed(n):                    return bytes([0x1b, 0x64, n & 0xFF])        # ESC d
-def cmd_diag(sub, arg=None):
-    b = bytes([0x1d, 0x44, sub & 0xFF])                       # GS D <sub>
-    if arg is not None:
-        b += bytes([arg & 0xFF])                              # count (sub 0x01/0x02)
-    return b
+def cmd_diag(sub, args=()):
+    # GS D <sub> [args...]  - 0x01/0x02/0x08 take one byte, 0x07 takes three
+    return bytes([0x1d, 0x44, sub & 0xFF]) + bytes(a & 0xFF for a in args)
 
 # ---- USB -------------------------------------------------------------------
 def open_dev(vid, pid):
@@ -233,8 +234,14 @@ def main():
     sub.add_parser("restart")
     anyint = lambda s: int(s, 0)     # accepts 4 as well as 0x04
     p = sub.add_parser("diag")
-    p.add_argument("sub", type=anyint, help="0x01 strobe head / 0x02 step motor / 0x03 EEPROM test / 0x04 snapshot / 0x05 build id")
-    p.add_argument("arg", type=anyint, nargs="?", default=None, help="count for 0x01/0x02")
+    p.add_argument("sub", type=anyint,
+                   help="0x01 strobe head / 0x02 step motor / 0x03 EEPROM test / "
+                        "0x04 snapshot / 0x05 build id / 0x06 scan / 0x07 toggle pin / "
+                        "0x08 VH interlock")
+    p.add_argument("args", type=anyint, nargs="*",
+                   help="0x01,0x02: count | 0x07: port(0=A,1=B,2=C) pin count | 0x08: 0|1")
+    p = sub.add_parser("vh");        p.add_argument("state", choices=["on", "off"],
+                                                    help="off = lock out the 24 V heat rail")
     a = ap.parse_args()
 
     pid, dots, bpl = MODELS[a.model]
@@ -260,9 +267,14 @@ def main():
     elif a.cmd == "restart":
         send(dev, cmd_restart()); print("pipeline reset")
     elif a.cmd == "diag":
-        send(dev, cmd_diag(a.sub, a.arg))
+        send(dev, cmd_diag(a.sub, a.args))
         time.sleep(0.2)
         print("diag:", parse_diag(read_diag(dev)))
+    elif a.cmd == "vh":
+        # off = set the interlock. Do this before poking at unknown pins.
+        send(dev, cmd_diag(0x08, [1 if a.state == "off" else 0]))
+        time.sleep(0.2)
+        print("vh:", parse_diag(read_diag(dev)))
     elif a.cmd in ("testpattern", "image"):
         if a.cmd == "image":
             lines, dots2, data = image_to_raster(a.path, dots)

@@ -35,7 +35,7 @@ build_model() {
   local BUILD="build/$MODEL"
   local CFLAGS="$MCUFLAGS -Os -g3 -std=c11 -ffreestanding \
     -ffunction-sections -fdata-sections -Wall -Wextra -Wno-unused-parameter \
-    -fno-common -DMODEL_$MODEL -Isrc"
+    -fno-common -DMODEL_$MODEL -Isrc ${CFLAGS_EXTRA:-}"
   local LDFLAGS="$MCUFLAGS -Tlinker/stm32f072xb.ld -nostartfiles \
     -Wl,--gc-sections -Wl,-Map=$BUILD/$TARGET.map --specs=nano.specs"
 

@@ -149,3 +149,41 @@ void gpio_set(pin_t p, int high)
 }
 
 int gpio_get(pin_t p) { return (p.port->IDR >> p.pin) & 1u; }
+
+/* ---- Diagnostic pin access ---------------------------------------------- */
+static GPIO_Type *port_of(uint8_t port)
+{
+    switch (port) {
+    case 0: return GPIOA;
+    case 1: return GPIOB;
+    case 2: return GPIOC;
+    default: return 0;
+    }
+}
+
+uint16_t sys_port_idr(uint8_t port)
+{
+    GPIO_Type *g = port_of(port);
+    return g ? (uint16_t)g->IDR : 0u;
+}
+
+int sys_pin_toggle(uint8_t port, uint8_t pin, uint8_t n)
+{
+    GPIO_Type *g = port_of(port);
+    if (!g || pin > 15) return 0;
+    /* Refuse the pins that carry this very command: PA11/PA12 are USB D-/D+
+     * and PA13/PA14 are SWD. Toggling those would end the session rather than
+     * answer a question. */
+    if (g == GPIOA && (pin == 11 || pin == 12 || pin == 13 || pin == 14)) return 0;
+
+    pin_t p = { g, pin };
+    uint32_t save = g->MODER;
+    gpio_mode(p, GPIO_OUT);
+    for (uint8_t i = 0; i < n; i++) {
+        gpio_set(p, 1); delay_ms(1);
+        gpio_set(p, 0); delay_ms(1);
+        wdt_kick();
+    }
+    g->MODER = save;               /* back to whatever it was, level untouched */
+    return 1;
+}

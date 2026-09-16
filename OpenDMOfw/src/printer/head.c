@@ -32,6 +32,7 @@
  */
 #include "head.h"
 #include "thermal.h"
+#include "../config/store.h"
 #include "../mcu.h"
 #include "../system.h"
 #include "../pins.h"
@@ -76,8 +77,20 @@ void head_init(void)
     s_vh_on = 0;
 }
 
+int  head_vh_is_on(void) { return s_vh_on; }
+
+void head_vh_off(void)
+{
+    gpio_set(PIN_HEAD_VH, !HEAD_VH_ON_LEVEL);
+    s_vh_on = 0;
+}
+
 static void vh_enable(void)
 {
+    /* Hard interlock. While OP_FLAG_VH_INHIBIT is set there is no command
+     * sequence at all that puts 24 V on the head - the exploration image builds
+     * with it set, so poking at unknown pins cannot end in a dead head. */
+    if (store_get()->flags & OP_FLAG_VH_INHIBIT) return;
     if (!s_vh_on) {
         gpio_set(PIN_HEAD_VH, HEAD_VH_ON_LEVEL);
         s_vh_on = 1;

@@ -181,13 +181,28 @@ The stock host never sends `GS D`, so this cannot collide with the genuine proto
 | `0x03` | – | EEPROM write/read self-test (scratch: 2-byte `@0x140`, 1-byte `@0x40`) | 3 B: `'D' sub match(1/0)` |
 | `0x04` | – | Diagnostic snapshot | 24 B (below) |
 | `0x05` | – | Firmware build id (ASCII, from `git describe` at build time; `dev` outside a checkout) | 2–50 B: `'D' sub build[…]`, capped at 48 chars |
+| `0x06` | – | **Scan**: sample every ADC-capable pin and read the input level of every pin on ports A/B/C. Drops the 24 V rail first, because sampling briefly floats pins — including the strobes | 29 B (below) |
+| `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode. PA11/PA12 (USB) and PA13/PA14 (SWD) are refused | 3 B: `'D' sub done(1/0)` |
+| `0x08` | 0 or 1 | Clear/set **`OP_FLAG_VH_INHIBIT`**, the hard interlock on the 24 V heat rail, and persist it. Setting it drops the rail immediately | 3 B: `'D' sub flags` |
 
 Snapshot (24 B): `[0]'D' [1]sub [2]model id (PID low) [3-4]thermistor raw u16 BE
 [5]thermal_ok [6]bit0 paper present / bit1 button pressed [7]density % [8]flags
 [9-20]SKU (12 B, NUL-padded) [21-22]label count u16 LE [23]head bytes/line`.
 
-Host: `python tools/opsend.py --model OP57 diag 4` (snapshot), `diag 1 8`,
-`diag 2 30`, `diag 3`. Layout verified in `test/test_protocol_wire.py`.
+### GS D 0x06 — scan (29 B)
+
+`[0]'D' [1]0x06 [2-21] ADC IN0..IN9, u16 **BE** each [22-23] GPIOA IDR (u16 LE)
+[24-25] GPIOB IDR [26-27] GPIOC IDR [28] bit0 VH on, bit1 VH inhibited`
+
+ADC channels map to pins: **IN0–IN7 = PA0–PA7, IN8 = PB0, IN9 = PB1** — the only
+ADC-capable pins on this part. Warm the head and diff two scans to find the
+thermistor; block the top-of-form sensor and diff to find the photocell. That is
+two of the seven fieldwork measurements answered by reading a table instead of
+tracing a net.
+
+Host: `opsend.py diag 4` (snapshot), `diag 1 8`, `diag 2 30`, `diag 3`,
+`diag 6` (scan), `diag 7 1 4 20` (toggle PB4), `opsend.py vh off` (interlock).
+Layouts verified in `test/test_protocol.c` and `test/test_protocol_wire.py`.
 
 ## Example job (one full-width black label, 550)
 

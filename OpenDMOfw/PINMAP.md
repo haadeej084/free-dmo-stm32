@@ -1,4 +1,4 @@
-# PINMAP — OpenDMOfw (STM32F072xB / CBT6, 128 K)
+# PINMAP — OpenDMOfw (STM32F072xB, 48-pin, 128 K)
 
 All pins live in **one editable table**: `src/pins.h`. This file records the
 reasoning and the **confidence** per choice.
@@ -86,9 +86,11 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
 - **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **FCC RGDLW550 internal photos** are too low-res for GPIO traces; the circuit
-  diagram is confidential. MCU marking **STM32F072CBT6** is confirmed on Rev E
-  and Rev K board photos (see below). Motor-IC PN and GPIO routing still need
-  a probe.
+  diagram is confidential. The MCU is an **STM32F072CB** on both Rev E and Rev K
+  photos; the Rev E shot reads as the LQFP48 (`...CBT6`) while the Rev K close-up
+  looks like the leadless **UFQFPN48** (`...CBU6`) — a plausible cost-down
+  between revisions, and harmless to us since the two packages share one
+  pin-number column. Motor-IC PN and GPIO routing still need a probe.
 
 ## Confirmed from a rev E board photo
 
@@ -97,7 +99,7 @@ repo) confirms three part IDs:
 
 | Component  | Part (as marked) | Meaning |
 |------------|------------------|---------|
-| Main MCU   | **STM32F072CBT6** | LQFP48, 128 K flash / 16 K RAM — exactly the target part |
+| Main MCU   | **STM32F072CB** | 48-pin, 128 K flash / 16 K RAM — exactly the target part (LQFP48 on this Rev E shot; see the Rev K note for the package difference) |
 | EEPROM     | **24C02A**        | 2 Kbit (256 B), **1-byte addressing**, 8 B page (the small rev-E part) |
 | NFC FE     | **SLRC610**       | NXP NFC reader/writer front-end (I2C @ 0x28) |
 
@@ -128,13 +130,21 @@ three facts that no datasheet could give:
 
 | Observation | Reading |
 |---|---|
-| **U1 is a 48-pin QFP** — twelve leads counted on each of the four sides | Consistent with the STM32F072CBT6 (LQFP48) the pin map assumes |
+| **U1 is a 48-pin package**, twelve joints on each of the four sides, and the solder fillets sit flush against the body rather than on protruding gull-wing leads | Almost certainly **UFQFPN48**, i.e. **STM32F072CBU6**, not the LQFP48 `...CBT6`. **The pin map is unaffected**: ST's datasheet Table 13 carries a single shared `LQFP48/UFQFPN48` pin-number column, so every pad number below holds for both. What changes is probing — see the note under the table |
 | **Y1 = HC-49 can marked `AXC12.00-115`**, directly beside U1, with its load capacitors C7/C8 | A **12 MHz HSE crystal** on the MCU. 12 × PLL4 = exactly 48 MHz — see DECISIONS D3 and `-DOPENDMO_CLOCK_HSE12=1` |
 | **Banks of SMD `220` (= 22 Ω) resistors** ringing U1 — R7–R12, R18–R27, R29, R31–R33, R39 — interleaved with `102` (1 kΩ) parts | The head/motor interface lines are **series-damped at 22 Ω**. Continuity checks will read tens of ohms, not a short |
 | A SOIC-8 at **U6** near C18/C37 | Candidate for the config EEPROM; marking not legible in these shots |
 
 The silkscreen carries reference designators only (`U1`, `R27`, `C33`, `Y1`…) and
 never signal names, which is exactly why the routing still has to be probed.
+
+> ⚠ **Do not probe the MCU pads directly.** A UFQFPN48 has no leads: the pads are
+> 0.5 mm pitch and flush with the package edge, so a meter probe bridges two of
+> them easily, and a slip across two powered pins can take the part with it.
+> Probe the **22 Ω series resistors** instead — every head and motor line passes
+> through one, each is an accessible 0402/0603 pad, and electrically it *is* the
+> MCU pin. The exposed thermal pad underneath is tied to VSS, which at least
+> makes ground easy to find.
 
 ## Board component map
 
@@ -148,7 +158,7 @@ photo. `store.c` still auto-detects, but this board's default path is the
 
 | Component | As marked / seen | Reading | Confidence |
 |-----------|------------------|---------|------------|
-| Main MCU  | **STM32F072CBT6** (readable from two angles; lot `ARM 114928 B02`, `P49 1850 247`) | LQFP48 print-engine MCU — the target part, **confirmed on this board** | high (sourced) |
+| Main MCU  | **STM32F072CB** (readable from two angles; lot `ARM 114928 B02`, `P49 1850 247`) | 48-pin print-engine MCU — the target part, **confirmed on this board**. Package reads as UFQFPN48 in the close-ups; see the Rev K table above | high (sourced) |
 | Large square BGA, center-left | **"DYMO"** printed on package, green orientation dot | **Network coprocessor SoC** — the built-in "LabelWriter Print Server" (runs the Linux-style TCP/IP/IPP/SNMP/HTTP OS found in the firmware dump). The 5XL / 550-Turbo have built-in LAN; D.mo's docs put that in a coprocessor. **Out of scope** for our USB-only firmware — ignore it. Part number not readable from the photo. | medium-high (inference) |
 | Small chip, mid-board | `A8` / `1611` (week-11-2016 date code), swoosh logo | Unidentified — likely a power switch / MOSFET or small driver. Verify on hardware. | low |
 | Small chip, lower-left | `310` / `1735` (week-35-2017 date code), same swoosh logo | Unidentified — likely a power switch / MOSFET or the motor driver. Verify on hardware. | low |
@@ -177,9 +187,11 @@ GND, TM) is in the head datasheet — so the fieldworker mainly needs to measure
 which F072 pad reaches which head-connector pin. The photos' value is component
 identification + layout, not wiring.
 
-## F072CBT6 LQFP48 physical pin map (sourced)
+## F072CB 48-pin physical pin map (sourced)
 
-The main MCU is an **STM32F072CBT6** — LQFP48, 128 K flash / 16 K RAM. The
+The main MCU is an **STM32F072CB** — 48 pins, 128 K flash / 16 K RAM. This table
+holds for **both** 48-pin packages: ST's Table 13 numbers LQFP48 and UFQFPN48 in
+one shared column, so it does not matter which one your board carries. The
 package has 12 pins per side; **pin 1 is the corner marked by the dimple/dot**,
 numbered counter-clockwise from there: 1–12 down the left edge, 13–24 along the
 bottom, 25–36 up the right edge, 37–48 along the top (the standard LQFP
@@ -246,7 +258,9 @@ Table 13** ("STM32F072xx pin definitions"):
 | 48  | VDD            | power                                        |
 
 **SWD bring-up:** to flash over SWD, connect SWDIO→pad 34 (PA13), SWCLK→pad 37
-(PA14), GND→any of pads 23/35/47, and 3.3 V→pad 24 or 48 (VDD). The chip boots
+(PA14), GND→any of pads 23/35/47, and 3.3 V→pad 24 or 48 (VDD). On the QFN these
+are edge pads, not leads — find a via or a test point on each net rather than
+clipping to the package. The chip boots
 from flash by default (BOOT0 = pad 44 held Low), so no boot jumper is needed.
 
 **I2C note:** on the STM32F0 line I2C is **AF2**, and I2C1 exists *only* on

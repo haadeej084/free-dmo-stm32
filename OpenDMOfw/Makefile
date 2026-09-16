@@ -49,7 +49,7 @@ BUILD_ID ?= $(shell git describe --always --dirty --abbrev=8 2>/dev/null || echo
 CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra -Wno-unused-parameter \
-  -fno-common $(MODELDEF) $(INC) -DOPENDMO_BUILD='"$(BUILD_ID)"'
+  -fno-common $(MODELDEF) $(INC) -DOPENDMO_BUILD='"$(BUILD_ID)"' $(CFLAGS_EXTRA)
 
 LDSCRIPT := linker/stm32f072xb.ld
 LDFLAGS  := $(MCUFLAGS) -T$(LDSCRIPT) -nostartfiles \

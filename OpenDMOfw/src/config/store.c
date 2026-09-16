@@ -51,6 +51,12 @@ static void defaults(void)
     s_cfg.label_count = MODEL_DEFAULT_COUNT;   /* matches factory_reset + wrap-around */
     s_cfg.density = 8;
     s_cfg.flags = OP_FLAG_PAPER_FORCE;   /* report a valid roll regardless of the sensor */
+#if defined(OPENDMO_SAFE_BRINGUP) && OPENDMO_SAFE_BRINGUP
+    /* Exploration image: the heat rail starts locked out. FIELDWORK's fast
+     * route builds this variant, pokes at unknown pins freely, and only clears
+     * the bit once the strobe lines have been seen idling high. */
+    s_cfg.flags |= OP_FLAG_VH_INHIBIT;
+#endif
 }
 
 /* ---- Minimal I2C v2 with timeouts (never hangs) ------------------------- */

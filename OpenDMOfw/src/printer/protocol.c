@@ -87,6 +87,8 @@ typedef enum {
 static pstate_t s_state;
 static uint8_t  s_arg1, s_arg2, s_arg4[4];
 static uint8_t  s_diag_sub;        /* GS D subcommand */
+static uint8_t  s_diag_args[3];    /* GS D argument bytes */
+static uint8_t  s_diag_argn, s_diag_argi;
 static uint8_t  s_hdr[10];            /* ESC D header (10 B) / ESC W header (4 B) */
 static uint8_t  s_hcnt;
 static uint16_t s_bpl;               /* raster bytes per line ON THE WIRE */
@@ -369,12 +371,27 @@ static void send_version(void)
  *             thermally gated, the reply says how many lines actually fired
  *   0x02 <n>  step the feed motor n dot-lines (verify feed)
  *   0x03      EEPROM self-test -> reply match status
+ *   0x05      firmware build id
+ *   0x06      scan: every ADC channel + every port's input levels
+ *   0x07 p n c  toggle port p pin n, c times (USB/SWD refused)
+ *   0x08 <0|1>  clear/set the VH interlock, persisted
  *   0x04      diagnostic snapshot -> thermistor, GPIOs, config, model
  * Every reply starts with 'D' so the host can tell it apart from a status struct.
  * These exist so the physical layer (head/motor/EEPROM/thermistor) can be verified
  * on hardware without a full print job - see DECISIONS.md D8 / D15. */
-static void diagnose(uint8_t sub, uint8_t arg)
+/* How many argument bytes each subcommand takes. */
+static uint8_t diag_argcount(uint8_t sub)
 {
+    switch (sub) {
+    case 0x01: case 0x02: case 0x08: return 1;
+    case 0x07: return 3;
+    default:   return 0;
+    }
+}
+
+static void diagnose(uint8_t sub)
+{
+    uint8_t arg = s_diag_args[0];
     const op_config_t *c = store_get();
     /* 24 B is the snapshot; the rest is headroom for the build-id reply. Every
      * GS D reply stays well inside one 64-byte bulk packet. */
@@ -413,6 +430,47 @@ static void diagnose(uint8_t sub, uint8_t arg)
         r[2] = store_selftest() ? 1 : 0;
         usbp_send_reply(r, 3);
         break;
+    case 0x06: {                              /* scan every findable input */
+        /* Exploration aid: one reply with all ten ADC channels and the input
+         * level of every pin on ports A/B/C. Warm the head and diff two scans
+         * to find the thermistor; block the sensor and diff to find the
+         * photocell. Turns two of the seven fieldwork measurements from
+         * "trace it" into "read the table".
+         * The rail is dropped first: sampling means briefly floating pins,
+         * including the strobes, and a floating strobe with 24 V behind it is
+         * the one mistake that costs a print head. */
+        head_vh_off();
+        uint16_t adc[10];
+        thermal_scan_adc(adc);
+        for (int i = 0; i < 10; i++) {
+            r[2 + i*2] = (uint8_t)(adc[i] >> 8);
+            r[3 + i*2] = (uint8_t)(adc[i] & 0xFF);
+        }
+        for (int prt = 0; prt < 3; prt++) {
+            uint16_t idr = sys_port_idr((uint8_t)prt);
+            r[22 + prt*2] = (uint8_t)(idr & 0xFF);
+            r[23 + prt*2] = (uint8_t)(idr >> 8);
+        }
+        r[28] = (uint8_t)((head_vh_is_on() ? 1u : 0u) |
+                          ((c->flags & OP_FLAG_VH_INHIBIT) ? 2u : 0u));
+        usbp_send_reply(r, 29);
+        break; }
+    case 0x07:                                /* toggle an arbitrary pin */
+        /* Find a signal by driving a candidate and watching what moves. USB
+         * and SWD pins are refused - toggling those ends the session instead
+         * of answering the question. */
+        r[2] = sys_pin_toggle(s_diag_args[0], s_diag_args[1], s_diag_args[2]) ? 1 : 0;
+        usbp_send_reply(r, 3);
+        break;
+    case 0x08: {                              /* set/clear the VH interlock */
+        op_config_t *m = store_get_mut();
+        if (arg) m->flags |= OP_FLAG_VH_INHIBIT;
+        else     m->flags &= (uint8_t)~OP_FLAG_VH_INHIBIT;
+        if (m->flags & OP_FLAG_VH_INHIBIT) head_vh_off();
+        store_save();
+        r[2] = m->flags;
+        usbp_send_reply(r, 3);
+        break; }
     case 0x05: {                              /* firmware build id (ASCII) */
         const char *b = OPENDMO_BUILD;
         uint8_t n = 0;
@@ -720,13 +778,19 @@ void protocol_task(void)
 
         case S_DIAG_SUB:
             s_diag_sub = c;
-            if (c == 0x01 || c == 0x02) s_state = S_DIAG_ARG;    /* needs a count */
-            else { diagnose(c, 0); s_state = S_CMD; }
+            s_diag_args[0] = s_diag_args[1] = s_diag_args[2] = 0;
+            s_diag_argn = diag_argcount(c);
+            s_diag_argi = 0;
+            if (s_diag_argn) s_state = S_DIAG_ARG;
+            else { diagnose(c); s_state = S_CMD; }
             break;
 
         case S_DIAG_ARG:
-            diagnose(s_diag_sub, c);
-            s_state = S_CMD;
+            s_diag_args[s_diag_argi++] = c;
+            if (s_diag_argi >= s_diag_argn) {
+                diagnose(s_diag_sub);
+                s_state = S_CMD;
+            }
             break;
         }
     }

@@ -5,6 +5,8 @@
 #include "mcu.h"
 #include "pins.h"
 
+/* Also the AHB and APB clock: prescalers stay at /1. PCLK must remain >= 10 MHz
+ * while USB is enabled (RM0091 Rev 9, section 30) - see SystemInit(). */
 #define SYSCLK_HZ 48000000u
 
 void SystemInit(void);          /* clock -> 48 MHz HSI48 (SYSCLK), CRS trims on SOF */

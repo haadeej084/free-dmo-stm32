@@ -2,9 +2,9 @@
  *
  * IDENTITY (see DECISIONS.md): the device presents itself as the genuine
  * label printer of its class: VID 0x0922, per-model PID, "DYMO" /
- * "LabelWriter 5XL|550" strings and an IEEE-1284 device ID whose MFG+MDL
- * makes Windows derive the driver-model match ID the vendor's own driver
- * package expects (USBPRINT\DYMOLabelWriter_5XLB920 / ...550C80D).
+ * "DYMO LabelWriter 5XL|550" strings and an IEEE-1284 device ID whose MFG+MDL
+ * makes Windows derive the hardware ID the vendor's own driver package binds
+ * (DYMO_LW5xx.inf: USBPRINT\DYMOLabelWriter_5XLB920 / ...550C80D).
  * Interface class = USB Printer (7), bidirectional (protocol 2), so the OS
  * usbprint driver binds and the vendor spooler driver + port monitor take
  * over the wire.
@@ -40,10 +40,10 @@ static const uint8_t cfg_desc[32] = {
     9, 2, 32, 0, 1, 1, 0, 0xC0, 0x02,   /* 32 bytes total, 1 iface, self-powered, 4 mA */
     /* Interface: Printer class 7 / subclass 1 / protocol 2 (bidir) */
     9, 4, 0, 0, 2, 7, 1, 2, 0,
-    /* EP OUT 0x01 bulk 64 */
-    7, 5, 0x01, 0x02, EP_MAXPKT, 0, 0,
-    /* EP IN 0x81 bulk 64 */
-    7, 5, 0x81, 0x02, EP_MAXPKT, 0, 0
+    /* EP IN 0x82 bulk 64 - listed FIRST, as on the genuine 550 */
+    7, 5, (uint8_t)(0x80 | EP_DATA), 0x02, EP_MAXPKT, 0, 0,
+    /* EP OUT 0x02 bulk 64 */
+    7, 5, EP_DATA, 0x02, EP_MAXPKT, 0, 0
 };
 
 /* Strings as UTF-16LE. */
@@ -86,7 +86,7 @@ void usb_desc_init_serial(void)
 }
 
 /* IEEE-1284 device ID (used by the printer-class GET_DEVICE_ID). MFG+MDL are
- * chosen so the OS derives the genuine driver-model match ID; see model.h. */
+ * chosen so the OS derives the genuine hardware ID; see model.h. */
 const char OP57_IEEE1284_ID[] = MODEL_IEEE_ID;
 const uint16_t OP57_IEEE1284_ID_LEN = sizeof(MODEL_IEEE_ID) - 1;
 

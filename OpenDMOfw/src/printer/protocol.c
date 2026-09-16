@@ -6,9 +6,11 @@
  * (D.MO Connect / port monitor):
  *
  *   ESC s <JobID u32>    start of print job (job ID is echoed in status)
- *   ESC L <len u16>      set maximum label length (dots), used for feed math
+ *   ESC L <len u16 BE>   label length (dots), used for feed math; 0x7F00 =
+ *                         custom size and 0xFFFF = continuous are sentinels
  *   ESC h / ESC i        text / graphics output mode
- *   ESC T <speed>        0x10 normal, 0x20 high speed
+ *   ESC T <speed>        1B 54 (the tech ref's "1B 74" is a typo: 0x74 is 't'),
+ *                         0x10 normal, 0x20 high speed
  *   ESC n <idx u16>      set label index (echoed in status)
  *   ESC D BPP Align W H  start of label print data: W = number of lines,
  *                         H = number of dots; then W * roundup(H*BPP/8) bytes
@@ -17,17 +19,20 @@
  *   ESC Q                end of print job (releases the lock)
  *   ESC A <lock>         request status -> 32-byte struct on bulk-IN
  *   ESC C <duty>         print density, 0-200 % (0 = printing disabled)
- *   ESC c / d / e / g     zero-argument density presets: Light 75 %,
- *                         Medium 87.5 %, Normal 100 %, Dark 112.5 %
- *   ESC e                reset density to default (100 %)
+ *   ESC c / d / e / g    zero-argument density presets: Light 75 %,
+ *                         Medium 87.5 %, Normal 100 % (the default), Dark 112.5 %
+ *   ESC y / ESC z        400-series step-resolution commands, no argument,
+ *                         accepted and ignored (this family is 300x300 only)
  *   ESC U                get SKU info -> 63-byte consumable record
  *   ESC V                get version -> 34-byte reply
  *   ESC $                restore factory settings (config back to defaults).
  *                         0x24 is the byte in the tech ref and the one the host
  *                         tool sends; 0x2A ('*') is accepted as an alias because
  *                         earlier revisions of this firmware only had that one.
- *   ESC o <count u16>    set label count
- *   ESC q <tray>         select output tray (accepted, ignored)
+ *   ESC o <count u8>     set label count (one argument byte, tech ref p.20)
+ *   ESC q <roll>         select roll/tray, ASCII '0'-'3' (Twin Turbo only);
+ *                         accepted, ignored
+ *   ESC ESC ...          a run of bare ESC bytes collapses to one pending ESC
  *   ESC W len dir objid  control-command framing; payload consumed, ignored
  *   ESC M <8 bytes>      media-type descriptor (mtDefault = 8 zero bytes);
  *                         the driver always sends it, so consume + ignore
@@ -108,6 +113,7 @@ static int      s_job_active;        /* 1 from ESC s until ESC Q */
 static uint8_t  s_density_pct;       /* last ESC C duty, 0-200, reported in status */
 static const paper_t *s_paper;       /* current stock, from ESC L (feed + ESC U) */
 static uint16_t s_len_override;      /* ESC L value treated as a raw dot length */
+static int      s_len_from_raster;   /* continuous / custom size: pitch = raster height */
 static uint16_t s_raster_dots;       /* height (dots) of the current raster block */
 
 /* Feed math: die-cut rolls have a small physical gap between labels. */
@@ -127,7 +133,7 @@ void protocol_init(void)
     s_job_active = 0; s_label_index = 0; s_job_id = 0;
     s_density_pct = 100;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0;
+    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
 }
 
 void protocol_reset(void)
@@ -136,7 +142,7 @@ void protocol_reset(void)
     s_state = S_CMD; s_hcnt = 0; s_lines_left = 0; s_line_rx = 0;
     s_job_active = 0; s_label_index = 0;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0;
+    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
     /* Dropping the ring also drops the reason bulk-OUT was throttled. The
      * un-pause in ring_getc() only fires when a byte is actually read, so an
      * empty ring would leave the endpoint NAKing forever after a SOFT_RESET
@@ -229,8 +235,9 @@ static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
  * and tear-bar offset are fixed dot counts, not read from the roll. */
 static void feed_next_label(int to_tear)
 {
-    uint16_t pitch = s_len_override ? s_len_override
-                    : (s_paper ? s_paper->height_dots : s_raster_dots);
+    uint16_t pitch = s_len_from_raster ? s_raster_dots
+                   : s_len_override     ? s_len_override
+                   : (s_paper ? s_paper->height_dots : s_raster_dots);
     uint32_t dots = LABEL_GAP_DOTS;
     if (pitch > s_raster_dots) dots += (uint32_t)(pitch - s_raster_dots);
     if (to_tear) dots += TEAR_EXTRA_DOTS;
@@ -631,6 +638,20 @@ void protocol_task(void)
 
         case S_AFTER_ESC:
             switch (c) {
+            /* A run of bare ESC bytes collapses to one pending escape. The
+             * 400/450-generation CUPS driver opens every document with 100-156
+             * of them as flush padding; without this case each extra ESC took
+             * the unknown-command path and ate the following byte, so a run
+             * whose length is not a multiple of 3 swallowed the next real
+             * command - catastrophic if that was an ESC D. No DYMO command is
+             * ESC ESC. */
+            case 0x1B: break;
+            /* ESC y / ESC z: zero-argument step-resolution commands of the
+             * 400 series (300x300 / 203x300). The 550 family is 300x300 in
+             * every mode, so accept them with no effect - but they must not
+             * reach the unknown-command path, which would eat the next byte. */
+            case 'y':
+            case 'z': s_state = S_CMD; break;
             case 's': s_arg1 = 's'; s_arg2 = 0; s_state = S_ARG4; break; /* job + ID */
             case 'L': s_arg1 = 'L'; s_arg2 = 0; s_state = S_ARG2; break; /* paper code */
             case 'n': s_arg1 = 'n'; s_arg2 = 0; s_state = S_ARG2; break; /* label index */
@@ -647,7 +668,7 @@ void protocol_task(void)
             case 'A': s_arg1 = 'A'; s_state = S_ARG1; break;    /* status + lock */
             case 'C': s_arg1 = 'C'; s_state = S_ARG1; break;    /* density       */
             case 'T': s_arg1 = 'T'; s_state = S_ARG1; break;    /* speed         */
-            case 'q': s_arg1 = 'q'; s_state = S_ARG1; break;    /* tray          */
+            case 'q': s_arg1 = 'q'; s_state = S_ARG1; break;    /* roll select: ASCII '0'-'3', Twin Turbo only */
             /* The zero-argument print-density family (LW450 tech ref p.19,
              * and emitted by the CUPS driver's SetPrintDensity for the PPD's
              * Light/Medium/Normal/Dark choices). ESC d used to be our feed
@@ -703,15 +724,33 @@ void protocol_task(void)
                 uint16_t v_be = (uint16_t)(((uint16_t)s_arg4[0] << 8) | c);
                 switch (s_arg1) {
                 case 'L': {
-                    /* Paper code from the driver GPD (e.g. "<1B>L<0867>"). Known
-                     * codes set the stock; an unknown value in a plausible dot
-                     * range is treated as a raw max label length. */
+                    /* ESC L carries a label LENGTH in dots, not a paper id: in
+                     * the stock LW5XX.GPD 53 of 56 sized papers emit
+                     * page_height + 300, and nine different papers share
+                     * 0x0546. Two values are sentinels there:
+                     *   0x7F00  CUSTOMSIZE - a user-defined size range with no
+                     *           fixed dimensions (MaxSize 750/1350 x 32000);
+                     *   0xFFFF  continuous stock (the driver sends 7F 00 then
+                     *           FF FF when ContinuousMode is on).
+                     * For both, the only real length is the raster that follows
+                     * in ESC D, so the feed must not add a pitch. Without these
+                     * branches 0x7F00 passed the raw-length test as 32512 dots
+                     * and every label fed the full 4000-dot clamp. */
+                    s_len_from_raster = 0;
+                    if (v_be == 0x7F00u || v_be == 0xFFFFu) {
+                        s_len_override = 0;
+                        s_len_from_raster = 1;
+                        break;
+                    }
                     const paper_t *p = paper_find(v_be);
                     if (p) { s_paper = p; s_len_override = 0; }
-                    /* 0 = die-cut: the roll sets the pitch, so fall back to the
-                     * paper table. It must CLEAR a previous raw override -
-                     * 0 is what the stock driver sends for every die-cut job. */
+                    /* 0 is not something the Windows driver ever sends; keep it
+                     * as a defensive "clear any override". */
                     else if (v_be == 0) s_len_override = 0;
+                    /* Unknown value: take it as a raw length. DYMO's CUPS driver
+                     * sends the page height itself here (no +300 slack), and
+                     * that is the host most likely to send a code we do not
+                     * know, so it is used unmodified. */
                     else if (v_be >= 50 && v_be <= 32767) s_len_override = v_be;
                     break; }
                 case 'n': s_label_index = v_le; break;

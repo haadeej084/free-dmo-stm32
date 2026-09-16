@@ -8,8 +8,10 @@ void head_reset(void);
  * shift -> latch -> strobe with a thermally limited dwell. */
 void head_print_line(const uint8_t *bits, uint16_t nbytes);
 void head_set_density(uint8_t d);      /* 0 = heat off; 1..16 base dwell */
-/* Microseconds of strobe the last head_print_line() spent. The feed step can
- * subtract this from its own settling wait instead of adding to it. */
+/* Microseconds of strobe the last head_print_line() spent: the COMMANDED dwell
+ * times HEAD_STROBE_SEGMENTS. The true energised time per segment differs by
+ * the head driver's edge skew (see head.c). The feed step can subtract this
+ * from its own settling wait instead of adding to it. */
 uint32_t head_last_strobe_us(void);
 /* Call from the main loop: drops the 24 V heat rail once the head has been
  * idle for idle_ms. The rail is off at boot and switched on only to print. */

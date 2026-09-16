@@ -1,9 +1,13 @@
 /* OpenDMOfw - paper-size table (keyed by the ESC L code from the host driver).
  *
- * The host driver's DOC_SETUP selects a paper size with ESC L + u16 LE
- * (PROTOCOL.md / DECISIONS D11). The GPD literal "<1B>L<0867>" is the numeric
- * code 0x0867; on the wire that is bytes 67 08. The table stores that u16
- * value. The code identifies the stock; the
+ * The host driver's DOC_SETUP selects a paper size with ESC L + u16 BIG-endian
+ * (PROTOCOL.md / DECISIONS D11). The GPD literal "<1B>L<0867>" puts bytes
+ * 08 67 on the wire, read as the value 0x0867. The value is a LENGTH, not an
+ * opaque id (LW5XX.GPD: page height + 300 for most 550 papers), which is why
+ * several papers share one value - the first entry with a value wins, and the
+ * sharing papers differ only in width, which the ESC D header carries anyway.
+ * 0x7F00 (custom size) and 0xFFFF (continuous) are sentinels handled in
+ * protocol.c and never looked up here. The value identifies the stock; the
  * raster geometry itself arrives explicitly in the ESC D header. This table is
  * used for:
  *   - feed math (label pitch = paper height + physical gap)
@@ -23,7 +27,7 @@
 #include "../model.h"
 
 typedef struct {
-    uint16_t code;          /* ESC L u16 LE value (e.g. 0x0867) */
+    uint16_t code;          /* ESC L u16 big-endian value (wire 08 67 = 0x0867) */
     uint16_t width_dots;    /* page width in dots */
     uint16_t height_dots;   /* page height in dots */
 } paper_t;
@@ -45,17 +49,31 @@ static const paper_t PAPERS[] = {
     { 0x0D7A,  694, 3150 },   /* PC Postage EPS 30387 (biggest roll) */
     { 0x09F0,  694, 2244 },   /* Large lever arch                    */
     { 0x0233,  640,  263 },   /* Jewelry label 2-up                  */
-    { 0xFFFF,  638, 32000 },  /* Banner (continuous)                 */
+    /* remaining LW5XX.GPD papers */
+    { 0x0542,  422, 1046 },
+    { 0x080F,  225, 1763 },
+    { 0x07FC,  260, 1744 },
+    { 0x04C3,  544,  919 },
+    { 0x0478,  225,  844 },
+    { 0x0258,  300,  300 },
+    { 0x02A3,  675,  375 },
+    { 0x03AA,  300,  638 },
+    { 0x0290,  304,  356 },
+    { 0x035F,  150,  563 },
+    { 0x02EE,  300,  450 },
+    { 0x0438,  693,  780 },
+    { 0x05EB,  731, 1215 },
+    { 0x0339,  464,  525 },
 };
 #define PAPER_DEFAULT_CODE  0x0546
 #else
 /* 5XL-class papers (from lw4xl.gpd). */
 static const paper_t PAPERS[] = {
     { 0x0867, 1233, 1883 },   /* Shipping 4x6  (S0904980, default)   */
-    { 0x7F00, 1320, 3000 },   /* Shipping 4x10                       */
-    { 0x03E2, 1200,  694 },   /* Large shipping horizontal           */
-    { 0x0275, 1050,  329 },   /* Address horizontal                  */
-    { 0xFFFF, 1282, 32000 },  /* Banner 4 (continuous)               */
+    { 0xB80B, 1320, 3000 },   /* Shipping 4x10                       */
+    { 0xB009, 1204, 2480 },   /* A6                                  */
+    { 0x03E2, 1200,  694 },   /* High Capacity Large Shipping        */
+    { 0x0275, 1050,  329 },   /* High Capacity Address               */
 };
 #define PAPER_DEFAULT_CODE  0x0867
 #endif

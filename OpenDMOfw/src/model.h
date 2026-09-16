@@ -61,16 +61,23 @@
   /* The genuine 550 reports the product string WITH the vendor prefix:
    * a published lsusb of 0922:0028 shows "DYMO LabelWriter 550". */
   #define MODEL_USB_PRODUCT     "DYMO LabelWriter 550"
-  /* IEEE-1284 device ID. MFG+MDL must yield the driver-model match ID
-   * USBPRINT\DYMOLabelWriter_550C80D (NameModel(20) + OS checksum); the CID
-   * field reproduces the genuine compatible ID 1284_CID_DYMOLabelWriter_550B. */
-  #define MODEL_IEEE_ID         "MFG:DYMO;MDL:LabelWriter 550;CID:DYMOLabelWriter_550B;CLS:PRINTER;DES:DYMO LabelWriter 550;"
+  /* IEEE-1284 device ID. Windows derives the hardware ID
+   * USBPRINT\DYMOLabelWriter_550C80D from MFG+MDL only (NameModel(20) + OS
+   * checksum), so those two are the load-bearing fields. Key names and order
+   * follow the published device ID of the genuine LabelWriter 450 family
+   * (MFG/CMD/MDL/CLASS/DESCRIPTION); the 550's own string is unverified. No
+   * CID field: the previous one had no source. */
+  #define MODEL_IEEE_ID         "MFG:DYMO;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;"
   #define MODEL_HEAD_DOTS       672      /* 57 mm @ 300 dpi (official spec) */
   #define MODEL_DPI             300
   /* Two shift-register halves (2x336 dots), each with its own heat strobe —
    * ROHM KF3002 architecture (sibling part KF3002-GL50A datasheet). Fired
    * sequentially to split peak current. Verify half count on the board. */
   #define MODEL_STROBE_SEGMENTS 2
+  /* Dots clocked in on DI1 and DI2. ASSUMED 336 + 336: the head part number,
+   * and so its register split, is not confirmed (FIELDWORK section 3). */
+  #define MODEL_DI1_DOTS        336
+  #define MODEL_DI2_DOTS        336
   #define MODEL_DEFAULT_SKU     "30387"  /* Internet Postage, biggest 550 roll */
   #define MODEL_DEFAULT_COUNT   100
   /* ESC V version strings (16 chars each, zero-padded). Format per tech ref p.20;
@@ -83,16 +90,24 @@
   #define MODEL_NAME            "OP104"
   #define MODEL_PID             0x002A
   #define MODEL_USB_PRODUCT     "DYMO LabelWriter 5XL"  /* vendor prefix, as on the 550 */
-  /* MFG+MDL must yield USBPRINT\DYMOLabelWriter_5XLB920; the CID field
-   * reproduces the genuine compatible ID 1284_CID_DYMOLabelWriter_5XLB. */
-  #define MODEL_IEEE_ID         "MFG:DYMO;MDL:LabelWriter 5XL;CID:DYMOLabelWriter_5XLB;CLS:PRINTER;DES:DYMO LabelWriter 5XL;"
+  /* MFG+MDL must yield USBPRINT\DYMOLabelWriter_5XLB920; same key layout as
+   * the 550 block above. */
+  #define MODEL_IEEE_ID         "MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;"
   #define MODEL_HEAD_DOTS       1248     /* 105.7 mm @ 300 dpi (official spec) */
   #define MODEL_DPI             300
   /* Two heat halves (2x624 dots, STB1/STB2 per the KF3002 architecture), fired
    * sequentially to split peak current. If the board shows 4 heat lines on the
    * wide head, raise this to 4 (spare strobe pins are already in pins.h). */
   #define MODEL_STROBE_SEGMENTS 2
-  #define MODEL_DEFAULT_SKU     "S0904980" /* 104x159 mm, biggest 5XL roll */
+  /* ASSUMED 624 + 624, as for the 550 block. */
+  #define MODEL_DI1_DOTS        624
+  #define MODEL_DI2_DOTS        624
+  /* 104x159 mm, biggest 5XL roll (EU part number). DYMO's en-US driver names
+   * the same media "1744907 4 in x 6 in" (LW5XX.DLL string 420, lw5xl.gpd
+   * Shipping4x6, ESC L 0x0867), but that is a localized UI label - the GPD
+   * driver never reads the ESC U SKU. S0904980 is the name DYMO Connect's
+   * catalog resolves (pc-patch patches A and D), so it stays. */
+  #define MODEL_DEFAULT_SKU     "S0904980"
   #define MODEL_DEFAULT_COUNT   220
   /* ESC V version strings (16 chars each, zero-padded). Format per tech ref p.20;
    * the exact values are an assumption (DECISIONS D12) — kept consistent with the
@@ -105,5 +120,7 @@
 #define HEAD_DOTS            MODEL_HEAD_DOTS
 #define HEAD_BYTES           ((MODEL_HEAD_DOTS + 7) / 8)   /* OP104=156, OP57=84 */
 #define HEAD_STROBE_SEGMENTS MODEL_STROBE_SEGMENTS
+#define HEAD_DI1_DOTS        MODEL_DI1_DOTS   /* first dots of the line -> DI1 */
+#define HEAD_DI2_DOTS        MODEL_DI2_DOTS   /* remaining dots         -> DI2 */
 
 #endif /* OP_MODEL_H */

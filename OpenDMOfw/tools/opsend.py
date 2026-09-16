@@ -31,8 +31,8 @@ MODELS = {                          # name -> (PID, dots across head, bytes/line
     "OP104": (0x002A, 1248, 156),   # LabelWriter 5XL  (4" class, 105.7 mm head)
     "OP57":  (0x0028,  672,  84),   # LabelWriter 550  (57 mm head)
 }
-EP_OUT = 0x01
-EP_IN  = 0x81
+EP_OUT = 0x02    # genuine 550: bulk pair on endpoint 2 (lsusb -v 0922:0028)
+EP_IN  = 0x82
 
 # ---- protocol encoders (tech ref p.11-20; decompiled driver) --------------
 def cmd_start_job(job_id=1):        return b"\x1b\x73" + job_id.to_bytes(4, "little")
@@ -41,7 +41,7 @@ def cmd_density(duty):              return b"\x1b\x43" + bytes([max(0, min(200, 
 def cmd_graphics():                 return b"\x1b\x69"              # ESC i (graphics mode)
 def cmd_text():                     return b"\x1b\x68"              # ESC h (text mode)
 def cmd_media_type():               return b"\x1b\x4d" + bytes(8)   # ESC M + 8B (mtDefault)
-def cmd_label_length(length):       return b"L" + length.to_bytes(2, "big")  # ESC L is BIG-endian
+def cmd_label_length(length):       return b"\x1b\x4c" + length.to_bytes(2, "big")  # ESC L is BIG-endian
 def cmd_label_index(idx):           return b"\x1b\x6e" + idx.to_bytes(2, "little")
 def cmd_set_count(count):           return b"\x1b\x6f" + count.to_bytes(2, "little")  # ESC o
 def cmd_raster(lines, dots, data):

@@ -83,7 +83,7 @@ lsusb | grep 0922:0028                     # OP57 / 550
 ```
 
 The genuine D.mo identity is VID `0x0922`; per-model PID `0x002A` (5XL) /
-`0x0028` (550). Windows derives the driver-model match ID from the IEEE-1284
+`0x0028` (550). Windows derives the hardware ID from the IEEE-1284
 `MFG`/`MDL` fields, so the stock D.mo driver package binds.
 
 ## Setting config / reading roll status
@@ -131,7 +131,7 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (53 checks / 30 scenarios). This is the regression test: it links and runs
+  (117 checks / 52 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_protocol_wire.py` — a hand transcription of the reply generators,
   checked against the live capture and the decompiled driver structs. It does

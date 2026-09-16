@@ -95,7 +95,10 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  *   SCL = PB6 or PB8,  SDA = PB7 or PB9
  * (datasheet DocID025004 Rev 2, Table 14 "STM32F072xx alternate function pin
  * description", Port B, AF2 row). Note PB12/PB14 are EVENTOUT and TIM15_CH1 at
- * AF2 -- neither is I2C. We use the PB8/PB9 pair so it sits cleanly next to the
+ * AF1 (TIM1_BKIN / TIM1_CH2N at AF2, SPI2 at AF0) -- none of them is I2C.
+ * Errata ES0223 2.2.1 (I2C analog filter): AF5 on PB9/PB10 and AF1 on PB14
+ * misbehave while the I2C analog filter is enabled; nothing here uses those,
+ * but check before remapping. We use the PB8/PB9 pair so it sits cleanly next to the
  * head-strobe (PB0-3) and motor (PB4-7) blocks with no pin conflict; PB6/PB7 is
  * the other valid pair.
  * CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to whichever

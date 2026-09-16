@@ -8,7 +8,7 @@ Reference Manual* and as emitted by the decompiled stock driver, so D.MO Connect
 The device is a **USB Printer Class** device (interface class 7, subclass 1,
 protocol 2 = bidirectional). The OS binds its generic printer driver
 (`usbprint` on Windows), and the vendor spooler driver + port monitor take over
-the wire. Bulk **OUT** (`0x01`) carries commands/raster; bulk **IN** (`0x81`)
+the wire. Bulk **OUT** (`0x02`) carries commands/raster; bulk **IN** (`0x82`)
 carries replies (status, SKU record, version).
 
 ## USB identity (per model, `src/model.h`)
@@ -18,13 +18,19 @@ carries replies (status, SKU record, version).
 | idVendor | `0x0922` (D.mo) | `0x0922` |
 | idProduct | `0x002A` | `0x0028` |
 | Manufacturer | `DYMO` | `DYMO` |
-| Product | `LabelWriter 5XL` | `LabelWriter 550` |
+| Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
 | Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
-| IEEE-1284 ID | `MFG:DYMO;MDL:LabelWriter 5XL;CID:DYMOLabelWriter_5XLB;CLS:PRINTER;DES:...` | `...MDL:LabelWriter 550;CID:DYMOLabelWriter_550B;...` |
+| Endpoints | bulk IN `0x82` (listed first), bulk OUT `0x02` | same |
+| IEEE-1284 ID | `MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;` | same with `550` |
 
-The `MFG`+`MDL` pair is what makes Windows derive the genuine driver-model match
-ID (`USBPRINT\DYMOLabelWriter_5XLB920` / `...550C80D`) that D.mo's own driver
-package expects. Head widths (1248 / 672 dots) come from the tech reference and
+The `MFG`+`MDL` pair is what makes Windows derive the hardware ID
+`USBPRINT\<MFG+MDL, spaces to underscores, cut to 20><4-char OS CRC>`, here
+`USBPRINT\DYMOLabelWriter_5XLB920` / `...550C80D` - exactly the IDs DYMO's own
+`DYMO_LW5xx.inf` binds (that INF has no compatible IDs, so the other 1284 keys
+cannot affect binding). The key layout follows the published LabelWriter 450
+family string; the genuine 550/5XL string has not been captured. Microsoft
+warns its CRC "may not match ... any other CRC algorithm", so the bench check is
+`setupapi.dev.log` (FIELDWORK section 5). Head widths (1248 / 672 dots) come from the tech reference and
 the driver GPDs' `MaxPrintableWidth`.
 
 ## Class requests (USB Printer Class 1.1)
@@ -33,7 +39,7 @@ the driver GPDs' `MaxPrintableWidth`.
 |----------|------|-----|-------|
 | 0 | GET_DEVICE_ID | IN (`0xA1`) | 2-byte BE length + IEEE-1284 string |
 | 1 | GET_PORT_STATUS | IN (`0xA1`) | 1 byte: bit3 no-error, bit4 select, bit5 paper-out |
-| 2 | SOFT_RESET | OUT (`0x21`) | reset the print pipeline |
+| 2 | SOFT_RESET | OUT (`0x21`, `0x23` also accepted) | reset the print pipeline, drop a queued bulk-IN reply and clear an IN stall (DTOG untouched) |
 
 ## Data commands (bulk OUT)
 
@@ -45,28 +51,46 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 73` + JobID(u32) | **ESC s** | Start of print job (mandatory; ID echoed in status) | tech ref p.11 |
 | `1B 4C` + len(**u16 BE**) | **ESC L** | "Sets the print engine mode between normal label stock and continuous label stock" (tech ref p.11 — it gives no parameter table). We take a u16 **MSB-first**: `0` = die-cut (roll sets the pitch, clears any override), a plain dot length is the feed pitch. Three independent sources for the byte order: DYMO's own CUPS driver writes `(v>>8)` then `v&0xff` and pins it in a unit test; Microsoft's GPD rule makes `<1B>L<0867>` emit bytes `08 67` in that order; and read big-endian, 12 of 14 LW5XX.GPD entries are exactly `height_dots + 300` where byte-swapped they are noise | CUPS driver `SendLabelLength`; GPD; LW5XX.GPD |
 | `1B 68` / `1B 69` | **ESC h / i** | Text / graphics output mode | tech ref p.11 |
-| `1B 74` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high | tech ref p.11 |
+| `1B 54` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high. The tech ref prints `1B 74`, a typo: `0x74` is `t`; the driver GPD sends `<1B>T` | tech ref p.11; LW5XX.GPD |
 | `1B 6E` + idx(u16) | **ESC n** | Set label index (echoed in status) | tech ref p.12 |
 | `1B 44` + BPP Align W(u32) H(u32) + data | **ESC D** | Start of label print data: **W = number of lines**, **H = number of dots**; then `W × ⌈H·BPP/8⌉` bytes. Driver sends `BPP=1, Align=2` (2 = bottom, the only value the manual documents, and what genuine driver captures carry). MSB of the first byte = leftmost dot | tech ref p.12 |
 | `1B 47` | **ESC G** | Feed to print head (short form feed, between labels) | tech ref p.13 |
 | `1B 45` | **ESC E** | Feed to tear position (long form feed) | tech ref p.13 |
 | `1B 51` | **ESC Q** | End of print job (releases the lock) | tech ref p.13 |
 | `1B 41` + lock | **ESC A** | Request status → 32-byte struct on bulk-IN. Lock: 0 read, 1 lock, 2 no-lock-multiple | tech ref p.13 |
-| `1B 43` + duty | **ESC C** | Print density, `0–200` % (0 = off); echoed in status byte 9 | tech ref p.16; capture byte9=0x64 |
+| `1B 43` + duty | **ESC C** | Print density, `0–200` % (0 = off); echoed in status byte 9. The Windows driver's density ladder is `0x4B`/`0x58`/`0x64`/`0x71` (75/88/100/113 %), mirroring the ESC c/d/e/g presets below | tech ref p.16; capture byte9=0x64; LW5XX.GPD |
 | `1B 63` / `1B 64` / `1B 65` / `1B 67` | **ESC c / d / e / g** | Zero-argument print-density presets: Light 75 %, Medium 87.5 %, Normal 100 %, Dark 112.5 %. The CUPS driver emits one of these per job for the PPD's darkness choice. **`ESC d` was previously our feed backdoor** — a collision that would have eaten the next command's `ESC`; the feed now lives on `GS D 0x02` and `ESC f 1 n` | LW450 tech ref p.19; CUPS driver `SetPrintDensity` |
 | `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes); always sent by the driver, consumed + ignored | decompiled driver |
 | `1B 55` | **ESC U** | Get SKU info → 63-byte consumable record (below) | tech ref p.16 |
 | `1B 56` | **ESC V** | Get version → 34-byte reply (below) | tech ref p.20 |
 | `1B 24` | **ESC $** | Restore factory settings (config back to defaults). `1B 2A` (`ESC *`) is accepted as an alias | tech ref p.20 |
 | `1B 6F` + count(u8) | **ESC o** | Set label count. **One** argument byte: the tech ref's table is `Byte 0 1 2 / 'ESC' 'o' Count`, three bytes total, where `ESC n`/`ESC L` get explicit two-byte tables. If a host does send a u16, its `0x00` high byte is ignored as a stray rather than eaten as a command — the safe direction. Use `GS C` for counts above 255 | tech ref p.20 |
-| `1B 71` + tray | **ESC q** | Select output tray — accepted, argument ignored | tech ref p.5 (job structure) |
+| `1B 71` + ID | **ESC q** | "Select output tray" on the 550 ("will be supported by LW550 Twin Turbo"). On the 450 the same opcode is "Select Roll (Twin Turbo only)" with an **ASCII digit** argument: `0x30` '0' automatic, `0x31` '1' left, `0x32` '2' right - not binary 0/1/2. One roll here, so the byte is accepted and ignored under either encoding | tech ref p.5; LW450 tech ref p.16 |
+| `1B 79` / `1B 7A` | **ESC y / z** | 400-series "set print resolution" 300x300 / 203x300. **Zero-argument**; accepted and ignored - this family is 300x300 in every mode, so the only point is not to eat the next command | LW400 tech ref p.19 |
 | `1B 66 01` + n | **ESC f 1 n** | Skip `n` dot lines. Documented in the **450** series tech ref; dropped from the 550 manual but cheap to honour | LW450 tech ref p.10 |
 | `1B 40` | **ESC @** | Restart print engine → full pipeline reset here | tech ref p.20 |
 | `1B 57` len dir obj(2) + payload | **ESC W** | Control-command framing; 4 header bytes, then `len` payload bytes consumed and ignored. `len` is clamped to 250 | driver |
 
 Unknown bytes outside a command are ignored. An unknown byte *after* `ESC` is
 treated as a one-argument command, so one further byte is consumed — that is why
-`ESC $` must be spelled exactly. The parser is byte-driven and resumable: if the
+`ESC $` must be spelled exactly. **Exception: a further `ESC`.** A run of bare
+`ESC` bytes collapses to one pending escape, so the parser resynchronises on the
+first real opcode whatever the run length. DYMO's CUPS driver sends such a run
+at the start of every document (156 bytes in the code, 100 in its own unit
+test); no DYMO command is `ESC ESC`.
+
+**`ESC L` sentinels.** The value is a length, but two values are not: `7F 00`
+(custom size) and `FF FF` (continuous stock). Both clear the length override and
+take the label pitch from the raster height of the page just printed.
+
+**Label counter vs. eject (deliberate deviation).** On a genuine 550 the roll
+tag's counter advances on every label **eject**, including a feed with nothing
+printed (EEVblog "Dymo 550 Thermal Printer DRM Hacking", reply #25ff., bench
+observation). Our count decrements only on a completed raster block, so a bare
+`ESC E` / `ESC G` / button feed leaves it unchanged. There is no tag here, the
+count is configuration (D14), and the genuine over-count exists only to enforce
+the DRM. Whether status bytes 27-28 follow a bare feed on a genuine unit is
+unverified. The parser is byte-driven and resumable: if the
 ring buffer runs dry mid-raster it continues on the next `protocol_task()`
 without losing the job.
 
@@ -203,20 +227,24 @@ Host: `opsend.py diag 4` (snapshot), `diag 1 8`, `diag 2 30`, `diag 3`,
 `diag 6` (scan), `diag 7 1 4 20` (toggle PB4), `opsend.py vh off` (interlock).
 Layouts verified in `test/test_protocol.c` and `test/test_protocol_wire.py`.
 
-## Example job (one full-width black label, 550)
+## Example job (one full-width black label, 5XL, 4x6 shipping)
+
+The Windows driver's DOC_SETUP emits its preamble in GPD order: density
+(`ESC C`), quality (`ESC h` / `ESC i`), speed (`ESC T`), then paper (`ESC L`) -
+and for continuous stock a second `ESC L FF FF`.
 
 ```
 1B 73 01 00 00 00      # ESC s, JobID=1
-1B 65                  # ESC e, density normal (100 %)
-1B 69                  # ESC i, graphics mode
-1B 4D 00*8             # ESC M, media type (mtDefault)
-1B 4C 00 00            # ESC L, die-cut (tag/length 0)
+1B 43 64               # ESC C, density 100 %
+1B 68                  # ESC h, text quality (ESC i = graphics)
+1B 54 10               # ESC T, normal speed
+1B 4C 08 67            # ESC L, 0x0867 big-endian (Shipping 4x6)
 1B 6E 01 00            # ESC n, label index 1
-1B 44 01 80 <W u32> <H u32> <data>   # ESC D, W=lines H=672 dots, 84 B/line
+1B 44 01 02 <W u32> <H u32> <data>   # ESC D, BPP=1 Align=2, W=lines H=1248 dots, 156 B/line
 1B 47                  # ESC G, short feed
 1B 45                  # ESC E, feed to tear
 1B 51                  # ESC Q, end job
 ```
 
-`tools/opsend.py` emits exactly this sequence (byte-matched to the decompiled
-driver) and can send a test pattern or a PNG.
+`tools/opsend.py` sends the same command set (plus `ESC M` with 8 zero bytes,
+as the decompiled driver does) and can send a test pattern or a PNG.

@@ -41,7 +41,16 @@ void SystemInit(void)
     RCC->CR2 |= RCC_CR2_HSI48ON;
     while (!(RCC->CR2 & RCC_CR2_HSI48RDY)) {}
 
-    /* SYSCLK = HSI48 (SW=11). AHB/APB prescalers = 1 (reset default) -> 48 MHz. */
+    /* SYSCLK = HSI48 (SW=11). AHB/APB prescalers stay at their reset value
+     * (/1), so HCLK = PCLK = 48 MHz - in the HSE12 branch above as well.
+     * Do NOT add an HPRE/PPRE divider, for three independent reasons:
+     *  1. RM0091 Rev 9 section 30, "Structure and usage of packet buffers":
+     *     "the APB clock must have a minimum frequency of 10 MHz to avoid data
+     *     overrun/underrun problems". USB's own 48 MHz clock does not cover it.
+     *  2. TIM3->PSC and SysTick->LOAD assume PCLK == SYSCLK; a prescaler would
+     *     silently stretch delay_us(), which is the head strobe dwell.
+     *  3. ES0223 2.9.4-2.9.6 (IWDG) need APB > 2x the IWDG clock; see wdt_init.
+     * The WFI idles are Sleep mode (clocks keep running) and are safe. */
     RCC->CFGR = (RCC->CFGR & ~0x3u) | RCC_CFGR_SW_HSI48;
     while ((RCC->CFGR & RCC_CFGR_SWS_HSI48) != RCC_CFGR_SWS_HSI48) {}
 
@@ -86,7 +95,16 @@ uint32_t millis(void) { return s_millis; }
 
 /* IWDG on the LSI (~40 kHz). PR=5 -> /128 -> ~312 Hz; RLR=1250 -> ~4 s timeout.
  * The print loop kicks per dot line, so 4 s is plenty; if the firmware hangs
- * (e.g. a stuck sensor wait), the watchdog resets the device. */
+ * (e.g. a stuck sensor wait), the watchdog resets the device.
+ *
+ * ES0223 Rev 6 2.9.1-2.9.6 (IWDG) all gate writes to IWDG_PR/RLR/WINR, never
+ * the KR reload in wdt_kick(), so the worst case is losing the ability to
+ * CHANGE the timeout, not to kick it. None applies:
+ *  - 2.9.4-2.9.6 need APB < 2x the IWDG clock: APB is 48 MHz, LSI ~40 kHz.
+ *  - 2.9.1-2.9.3 need Stop-mode entry while PVU/RVU/WVU is set: SLEEPDEEP is
+ *    never set (both WFI sites are plain Sleep) and WINR is never written.
+ * If Stop mode is ever added, wait at the Stop-entry site until IWDG->SR has
+ * PVU and RVU clear (at most ~5 LSI cycles) before sleeping. */
 void wdt_init(void)
 {
     IWDG->KR  = 0x5555;      /* write access to PR/RLR */

@@ -19,8 +19,8 @@
 /* BTABLE @ offset 0; 4 x 16-bit per EP. Bufferoffsets in PMA (bytes): */
 #define BUF_EP0_TX 0x40
 #define BUF_EP0_RX 0x80
-#define BUF_EP1_TX 0xC0
-#define BUF_EP1_RX 0x100
+#define BUF_DATA_TX 0xC0
+#define BUF_DATA_RX 0x100
 #define RX_COUNT_64 0x8400u   /* BLSIZE=1, NUM_BLOCK=1 -> 64 bytes */
 
 static volatile uint16_t *btable_tx_addr(int ep){ return &PMA[ep*4 + 0]; }
@@ -119,11 +119,20 @@ static void ep_init(int n, uint16_t type, uint16_t ea)
 #define STAT_RX(s) ((uint16_t)((s) << 12))
 #define STAT_TX(s) ((uint16_t)((s) << 4))
 
-/* Re-open an RX endpoint to accept a fresh packet. On every receive the hardware
- * overwrites the CNT field with the number of bytes actually received, clobbering
- * the BLSIZE/num_block bits that define the buffer capacity -- so before the next
- * packet we must restore them (TinyUSB does this with btable_set_rx_bufsize() after
- * every RX completion) and then set STAT_RX=VALID. MPS is 64 on both EP0 and EP1. */
+/* Re-open an RX endpoint to accept a fresh packet.
+ *
+ * RM0091 (DocID018940 Rev 9, "OUT and SETUP packets"): on a completed reception
+ * "the internal COUNT register is copied back in the COUNTn_RX location ...
+ * leaving unaffected BL_SIZE and NUM_BLOCK fields, which normally do not require
+ * to be re-written", and the endpoint is parked at STAT_RX = NAK. So the one
+ * thing actually required here is re-arming STAT_RX = VALID. (An earlier comment
+ * claimed reception clobbers BL_SIZE/NUM_BLOCK; it does not.)
+ *
+ * Restoring RX_COUNT_64 is kept as belt-and-braces, but note what it implies:
+ * the 16-bit store also zeroes COUNTn_RX[9:0], so this must never run before
+ * the received byte count has been read. on_ctr() reads it first, EP_DATA's
+ * reopen is deferred to usb_ep_rx_ready(), and handle_setup() copies the SETUP
+ * packet out before reopening. Keep that ordering. MPS is 64 on both EPs. */
 static void rx_reopen(int n)
 {
     *btable_rx_cnt(n) = RX_COUNT_64;
@@ -195,10 +204,13 @@ void usb_ctrl_send(const uint8_t *data, uint16_t len, uint16_t wLength)
     s_ctrl_zlp = (len < wLength) && (len != 0) && ((len % EP_MAXPKT) == 0);
     ctrl_tx_chunk();
 }
+static int s_ctrl_stalled;           /* the current SETUP was answered with STALL */
+
 void usb_ctrl_stall(void)
 {
     ep_set_tx_stat(EP_CTRL, STAT_TX(USB_EP_STAT_STALL));
     ep_set_rx_stat(EP_CTRL, STAT_RX(USB_EP_STAT_STALL));
+    s_ctrl_stalled = 1;
 }
 void usb_ctrl_ack(void)
 {
@@ -231,10 +243,10 @@ static void handle_standard_setup(const usb_setup_t *s)
     case 9: /* SET_CONFIGURATION */
         s_configured = (s->wValue != 0);
         if (s_configured) {
-            /* open bulk EP1: IN (TX) and OUT (RX). */
-            *btable_tx_addr(EP_DATA) = BUF_EP1_TX;
+            /* open the bulk pair (EP_DATA): IN (TX) and OUT (RX). */
+            *btable_tx_addr(EP_DATA) = BUF_DATA_TX;
             *btable_tx_cnt (EP_DATA) = 0;
-            *btable_rx_addr(EP_DATA) = BUF_EP1_RX;
+            *btable_rx_addr(EP_DATA) = BUF_DATA_RX;
             *btable_rx_cnt (EP_DATA) = RX_COUNT_64;
             ep_init(EP_DATA, USB_EP_TYPE_BULK, EP_DATA);
             /* RM0091 30.6.2 on DTOG_RX/DTOG_TX: "This bit can also be toggled
@@ -293,6 +305,7 @@ static void handle_setup(void)
 {
     usb_setup_t s;
     pma_read(BUF_EP0_RX, (uint8_t*)&s, sizeof(s));
+    s_ctrl_stalled = 0;
 
     uint8_t typ = (s.bmRequestType >> 5) & 3;   /* 0=standard 1=class 2=vendor */
     if (typ == 0)
@@ -300,8 +313,14 @@ static void handle_setup(void)
     else if (!usb_class_setup(&s))
         usb_ctrl_stall();
 
-    /* Reopen OUT for the next SETUP/OUT (restore buffer capacity + VALID). */
-    rx_reopen(EP_CTRL);
+    /* Reopen OUT for the next SETUP/OUT - but not after a STALL. rx_reopen()
+     * would toggle EP0's RX side straight back out of the STALL just set, so an
+     * unsupported control-OUT request would have its data ACKed and dropped
+     * instead of stalled. Leaving RX stalled is safe: RM0091 30.5.2 - a SETUP is
+     * accepted whatever STAT_RX says, and the hardware resets both directions
+     * to NAK on its arrival. */
+    *btable_rx_cnt(EP_CTRL) = RX_COUNT_64;
+    if (!s_ctrl_stalled) rx_reopen(EP_CTRL);
 }
 
 /* ---- bulk-EP API -------------------------------------------------------- */
@@ -327,7 +346,7 @@ int usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len)
         wdt_kick();
         if ((millis() - t0) > EP_TX_WAIT_MS) return 0;
     }
-    pma_write(BUF_EP1_TX, data, len);
+    pma_write(BUF_DATA_TX, data, len);
     *btable_tx_cnt(ep) = len;
     ep_set_tx_stat(ep, STAT_TX(USB_EP_STAT_VALID));
     return len;
@@ -337,6 +356,21 @@ void usb_ep_rx_ready(uint8_t ep)
     rx_reopen(ep);
 }
 int usb_is_configured(void) { return s_configured; }
+
+/* Printer-class SOFT_RESET, USB Printer Class 1.1 section 4.2.3: "flushes all
+ * buffers and resets the Bulk OUT and Bulk IN pipes to their default states.
+ * This request clears all stall conditions." protocol_reset() already re-arms
+ * the OUT side; this is the IN side: drop a queued reply (else the first IN
+ * after the reset returns pre-reset data) and clear a host-set IN STALL.
+ * Deliberately NOT touching DTOG: a class request is not a configuration event
+ * (USB 2.0 8.5.2), and Linux usblp issues SOFT_RESET without resetting its own
+ * toggle, so zeroing ours would desynchronise it. */
+void usb_ep_flush_in(uint8_t ep)
+{
+    if (!s_configured) return;            /* BTABLE entry not set up yet */
+    ep_set_tx_stat(ep, STAT_TX(USB_EP_STAT_NAK));
+    *btable_tx_cnt(ep) = 0;
+}
 
 /* ---- IRQ ---------------------------------------------------------------- */
 static void on_ctr(void)
@@ -370,7 +404,7 @@ static void on_ctr(void)
         if (epr & USB_EP_CTR_RX) {
             uint16_t cnt = *btable_rx_cnt(ep) & 0x3FF;
             static uint8_t buf[EP_MAXPKT];
-            pma_read(BUF_EP1_RX, buf, cnt);
+            pma_read(BUF_DATA_RX, buf, cnt);
             ep_clear_ctr_rx(ep);
             usb_class_data_out(ep, buf, cnt);    /* lower layer decides when rx_ready */
         }
@@ -405,6 +439,17 @@ void USB_IRQHandler(void)
     }
     if (istr & USB_ISTR_CTR) on_ctr();
 
+    /* ES0223 Rev 6 section 2.15.2 "ESOF interrupt timing desynchronized after
+     * resume signaling" (all F072 revisions): after the DEVICE signals resume,
+     * the core allows only 2 ms instead of 3 ms before the first SOF and can
+     * raise a spurious SUSP. Not reachable here: bmAttributes 0xC0 leaves the
+     * remote-wakeup bit clear and USB_CNTR.RESUME is never set, so only
+     * host-initiated resume occurs, which the erratum does not cover.
+     * If remote wakeup is ever added, mask SUSP for 3 ms after driving RESUME.
+     * Careful: ST's text says "set SUSPM to mask", but in RM0091 SUSPM is the
+     * interrupt ENABLE, so in these registers that means CLEAR SUSPM for 3 ms,
+     * then set it again. Remote wakeup would also need bmAttributes 0xE0,
+     * GET_STATUS bit 1, and SET/CLEAR_FEATURE DEVICE_REMOTE_WAKEUP honoured. */
     if (istr & USB_ISTR_WKUP) {
         USB->CNTR &= ~USB_CNTR_FSUSP;
         USB->ISTR = (uint16_t)~USB_ISTR_WKUP;
@@ -420,7 +465,13 @@ void usb_init(void)
 {
     RCC->APB1ENR |= RCC_APB1ENR_USBEN;
 
-    /* PA11/PA12 = USB_DM/DP, AF2, high speed (DocID025004 Table 14). */
+    /* PA11/PA12 carry USB_DM/USB_DP as *additional* functions (DocID025004
+     * Rev 2, Table 13), which the datasheet legend defines as "directly
+     * selected/enabled through peripheral registers" - they are not in Table 14,
+     * where AF2 on PA11/PA12 is TIM1_CH4/TIM1_ETR. The transceiver is really
+     * enabled by clearing PDWN and setting BCDR.DPPU below; this AF write
+     * mirrors ST's HAL, which calls it "optional, and maintained only for user
+     * guidance". Harmless: TIM1 is never clocked in this firmware. */
     gpio_af((pin_t){GPIOA, 11}, 2);
     gpio_af((pin_t){GPIOA, 12}, 2);
     GPIOA->OSPEEDR |= (3u << (11 * 2)) | (3u << (12 * 2));

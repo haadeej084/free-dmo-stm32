@@ -964,3 +964,88 @@ tech reference does:
 
 Recorded so nobody re-derives it: the tables come from `lw5xxmon.dll` version
 1.1.0.266, with the opcode names at one jump table and the lengths at another.
+
+## D30 — The genuine energy model, recovered from LabelWriter 450 firmware
+
+The 450 firmware image described in D29 was disassembled in full. Because the
+device owner reports that a 450 mainboard fitted into a 550 **prints
+correctly**, this firmware is driving the very mechanism this project targets:
+the same head, motor and sensors, over compatible connectors. Its numbers are
+therefore not an analogue — they are a working drive model for our hardware.
+Everything below is read from the image, not inferred.
+
+### The machine it runs on
+
+NXP LPC11Uxx Cortex-M0 at 48 MHz from a 12 MHz crystal (PLL M=4, P=2) — the
+same clock arrangement as ours. Three timers: a 0.375 µs tick for the strobe
+and the line engine, and a 1 µs general timer.
+
+### The head interface
+
+| Signal | Pin | Detail |
+|---|---|---|
+| Data | PIO1_22 | SSP1 MOSI, 8-bit SPI, CPOL=0 CPHA=0, bit clock PCLK/4 = 12 MHz |
+| Clock | PIO1_20 | SSP1 SCK |
+| Latch | PIO1_23 | **active low**, a minimum-width pulse right after the line is shifted |
+| Strobe | PIO1_16 | **active low**, released by a timer match interrupt |
+
+Three things follow directly:
+
+1. **The strobe is active low on hardware that prints on our mechanism.** Our
+   `MODEL_STB_ACTIVE_LEVEL = 0` is now backed by working firmware, not by a
+   datasheet drawing that in fact shows the opposite (D28). It stays an
+   assumption for the 550's own board, but a much better supported one.
+2. **The genuine firmware fires ONE strobe for all 672 dots.** There is no
+   strobe grouping in it at all. We fire two halves sequentially on the
+   reasoning that a 42 W brick cannot supply a whole line — and that reasoning
+   may simply be wrong for this mechanism, since DYMO's own firmware does not
+   split. `MODEL_STROBE_SEGMENTS` stays 2 (it is the conservative choice, and
+   the 550's board is not the 450's), but the evidence is recorded and the
+   sequential split is now known to cost line time the genuine product does not
+   spend.
+3. **The head is 84 bytes = 672 dots**, hard-coded in the firmware. An
+   independent confirmation of our geometry from the vendor's own code.
+
+### The pulse-width computation
+
+In timer ticks of 0.375 µs:
+
+    w = 400 + P/2 + 3·B + 3·(V/4),   clamped to 200 ≤ w ≤ 2500
+
+* `400` ticks = 150 µs base;
+* `P` = the current **line period** in the same ticks, so a slower line gets
+  more energy — exactly the adaptive-speed behaviour ROHM publish as a curve
+  and which our fixed dwell does not model at all;
+* `B` = the number of **dot-data bytes in this line** (0…84), i.e. a real
+  dot-count term worth up to 252 ticks = 94.5 µs. This is the rail-sag
+  compensation our `HEAD_SEGMENT_SAG_US` knob was left at zero for;
+* `V` = a 10-bit ADC reading (the firmware reads three channels; which one
+  feeds this term is not yet pinned down), contributing up to 765 ticks =
+  287 µs;
+* the clamp is **75 µs … 937.5 µs**.
+
+Then the density command multiplies it: `ESC c ×0.75`, `ESC d ×0.875`,
+`ESC e ×1.0`, `ESC g ×1.125` — integer shift-and-add in the firmware, and
+exactly the 75 / 87.5 / 100 / 112.5 % ladder we already implement. That part of
+our model is now confirmed against the vendor's own code.
+
+### What this does NOT license yet
+
+Our own dwell is a fixed 270 µs at density 100 %, scaled by temperature and
+capped at 410 µs (D28). The genuine model would give roughly 850 µs for a full
+line at the 550's rated line rate — about three times more energy per dot, in
+one pulse rather than two. That is a real conflict with the ROHM family rating
+(TON 0.28 ms) that D28's ceiling was derived from, and it is not a conflict to
+resolve by taking the larger number: the two could differ because the 450 runs
+its line slower, because `V` is a supply-voltage term that idles high, or
+because the 450's head is driven at a different effective rail. Raising the
+energy into an irreplaceable head on one reading of one disassembly is exactly
+the kind of step this project does not take.
+
+So this entry records the model and **queues the port as the next piece of
+work**, with its own verification: re-derive `P`, `B` and `V` from the
+disassembly independently, establish which ADC channel `V` is, and reconcile
+the result with ROHM's rated operating point before any constant in `head.c`
+moves. Until then `head.c` keeps its conservative ceiling, and the parts of the
+model that are already confirmed — the density ladder, the dot-count term's
+existence, the active-low strobe and latch — are documented here.

@@ -143,8 +143,14 @@
  * so ROHM do mark it when a variant is active-low, and at least one KF3002
  * variant is. Polarity is per-variant, and the GK11C has no public datasheet.
  *
+ * CORROBORATED since: the genuine LabelWriter 450 firmware drives its head
+ * strobe ACTIVE LOW (see DECISIONS D30), and a 450 mainboard is reported to
+ * print correctly on a 550 mechanism - so the head this firmware talks to
+ * accepts an active-low strobe. That is evidence from working hardware rather
+ * than from a datasheet drawing, and it is why the assumption stays Low.
+ *
  * Getting this wrong means the head fires continuously the moment VH comes up,
- * which is why OP_FLAG_VH_INHIBIT exists and why FIELDWORK now has a
+ * which is why OP_FLAG_VH_INHIBIT exists and why FIELDWORK has a
  * current-limited polarity check before the first 24 V test. One constant, one
  * place to flip. */
 #define MODEL_STB_ACTIVE_LEVEL 0     /* 0 = Low fires (current assumption) */

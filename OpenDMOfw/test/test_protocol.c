@@ -67,6 +67,10 @@ void usbp_set_paper_present(int p){ g_paper_present = p; }
 int  usbp_paper_present(void){ return g_paper_present; }
 int  gpio_get(pin_t p){ (void)p; return PAPER_PRESENT_LEVEL; }  /* paper present */
 void delay_ms(unsigned int ms){ (void)ms; }
+#include <setjmp.h>
+static jmp_buf g_dfu_jmp;
+static int     g_dfu_calls;
+void sys_enter_bootloader(void){ g_dfu_calls++; longjmp(g_dfu_jmp, 1); }
 void wdt_kick(void){}
 
 /* ---- harness ------------------------------------------------------------- */
@@ -710,6 +714,32 @@ int main(void){
         protocol_feed(i14, sizeof i14); protocol_task();
         protocol_feed(q, sizeof q); protocol_task();
         CHECK(g_reply_len == 32 && g_reply[5] == 14);
+    }
+
+    /* 53) GS D 0x09 reboots into USB DFU only with the exact confirmation
+     *     'D' 'F' 'U', never mid-job, and answers before it goes. */
+    reset_state();
+    {
+        unsigned char bad[] = { 0x1D, 'D', 0x09, 'D', 'F', 'X' };
+        g_dfu_calls = 0;
+        protocol_feed(bad, sizeof bad); protocol_task();
+        CHECK(g_dfu_calls == 0 && g_reply_len == 3 && g_reply[1] == 0x09 && g_reply[2] == 0);
+
+        unsigned char job[] = { 0x1B, 's', 1, 0, 0, 0 };
+        unsigned char ok[]  = { 0x1D, 'D', 0x09, 'D', 'F', 'U' };
+        protocol_feed(job, sizeof job); protocol_task();
+        protocol_feed(ok, sizeof ok); protocol_task();
+        CHECK(g_dfu_calls == 0 && g_reply[2] == 0);          /* refused mid-job */
+
+        reset_state();
+        g_dfu_calls = 0;
+        g_vh_on = 1;
+        if (setjmp(g_dfu_jmp) == 0) {
+            protocol_feed(ok, sizeof ok); protocol_task();
+        }
+        CHECK(g_dfu_calls == 1);
+        CHECK(g_reply_len == 3 && g_reply[1] == 0x09 && g_reply[2] == 1);
+        CHECK(g_vh_on == 0);                                  /* heat rail dropped */
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

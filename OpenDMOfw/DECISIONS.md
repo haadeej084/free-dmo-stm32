@@ -145,7 +145,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **121 checks / 54 scenarios, both models**. Note that
+  compiled + run natively; **126 checks / 55 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -726,3 +726,24 @@ words from a four-entry table built once per line: 11 898 instructions
   documented: Renode's EEPROM commits bytes before the STOP condition, which
   a real 24Cxx does not, so a pre-stored record on the small part cannot be
   tested faithfully with it.
+
+## D26 — Reflash over USB, and an end-to-end host test
+
+- **USB DFU entry.** `GS D 0x09 'D' 'F' 'U'` (three confirmation bytes, refused
+  during a job) drops the heat rail, replies, stores `0xDF00B007` in a `.noinit`
+  RAM word and requests a system reset. `Reset_Handler` checks that word before
+  anything else — before `.data`/`.bss`, the clock and above all the
+  independent watchdog, which once started could not be stopped and would pull
+  the part out of the boot loader after ~4 s — clears it, remaps system memory
+  (SYSCFG MEM_MODE = 01) and jumps to ST's boot loader at `0x1FFFC800` with its
+  own MSP (AN2606, STM32F071xx/072xx). The boot loader enumerates as
+  `0483:df11` and clocks USB from HSI48 + CRS, so it needs nothing from the
+  board. Only the first image needs SWD; `opsend.py dfu` + `dfu-util` does the
+  rest, which makes the fieldwork's rebuild-and-retry loop practical. Checked in
+  `test/test_protocol.c` (scenario 53) and `test/renode/dfu.py` (flag + AIRCR on
+  request; jump with the boot loader's MSP and a cleared flag on the next boot).
+- **`test/test_e2e.c`.** The USB stack and the parser had been tested
+  separately; this joins them on the peripheral model. It found no defect, and
+  a deliberately broken flow control (never pausing the endpoint when the ring
+  is full) fails 11 of its 26 checks, so it does watch the seam it was written
+  for.

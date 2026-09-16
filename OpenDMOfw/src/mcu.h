@@ -86,6 +86,18 @@ typedef struct {
 #define RCC_APB2ENR_SYSCFGEN (1u<<0)
 
 /* ---- FLASH interface ---------------------------------------------------- */
+/* ---- SCB reset + SYSCFG memory remap (USB DFU entry, see startup.c) ----- */
+#define SCB_AIRCR                (*(volatile uint32_t*)0xE000ED0Cu)
+#define SCB_AIRCR_SYSRESETREQ    (0x05FA0000u | (1u<<2))  /* VECTKEY + SYSRESETREQ */
+typedef struct { __IO uint32_t CFGR1; } SYSCFG_Type;
+#define SYSCFG ((SYSCFG_Type*)0x40010000u)
+#define SYSCFG_CFGR1_MEM_MODE_Msk    3u
+#define SYSCFG_CFGR1_MEM_MODE_SYSMEM 1u   /* 01: system flash at 0x00000000 */
+/* ST system-memory boot loader of the STM32F071xx/072xx: 0x1FFFC800 (AN2606,
+ * "STM32F071xx/072xx" table). It offers USART and USB DFU; the DFU path clocks
+ * itself from HSI48 + CRS, so no crystal is needed. */
+#define SYSMEM_BASE 0x1FFFC800u
+
 typedef struct { __IO uint32_t ACR; } FLASH_Type;
 #define FLASH ((FLASH_Type*)0x40022000u)
 #define FLASH_ACR_LATENCY1 (1u<<0)

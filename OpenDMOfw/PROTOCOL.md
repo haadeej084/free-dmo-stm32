@@ -191,7 +191,7 @@ Kept for configuration and driver-less bring-up via `tools/opsend.py`:
 | Bytes | Name | Meaning |
 |-------|------|---------|
 | `1D 43` len lo hi sku[len] | **GS C** | Set roll config in EEPROM: `label_count = hi<<8\|lo`, then `len` SKU bytes |
-| `1B 64` n | **ESC d** | Feed `n` dot lines |
+| `1B 66 01` n | **ESC f 1 n** | Feed `n` dot lines (see the command table; `ESC d` is a density preset, not a feed) |
 | `1D 44` sub [arg] | **GS D** | Self-test / diagnostic (see below) |
 
 ### GS D — self-test / diagnostic
@@ -209,6 +209,7 @@ The stock host never sends `GS D`, so this cannot collide with the genuine proto
 | `0x06` | – | **Scan**: sample every ADC-capable pin and read the input level of every pin on ports A/B/C. Drops the 24 V rail first, because sampling briefly floats pins — including the strobes | 29 B (below) |
 | `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode. PA11/PA12 (USB) and PA13/PA14 (SWD) are refused | 3 B: `'D' sub done(1/0)` |
 | `0x08` | 0 or 1 | Clear/set **`OP_FLAG_VH_INHIBIT`**, the hard interlock on the 24 V heat rail, and persist it. Setting it drops the rail immediately | 3 B: `'D' sub flags` |
+| `0x09` | `'D' 'F' 'U'` | **Reboot into ST's USB DFU boot loader** (appears as `0483:df11`). Only with exactly these three confirmation bytes and never during a job; drops the heat rail, replies, then resets | 3 B: `'D' sub accepted(1/0)` |
 
 Snapshot (24 B): `[0]'D' [1]sub [2]model id (PID low) [3-4]thermistor raw u16 BE
 [5]thermal_ok [6]bit0 paper present / bit1 button pressed [7]density % [8]flags

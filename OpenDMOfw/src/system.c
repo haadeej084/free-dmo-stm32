@@ -205,3 +205,15 @@ int sys_pin_toggle(uint8_t port, uint8_t pin, uint8_t n)
     g->MODER = save;               /* back to whatever it was, level untouched */
     return 1;
 }
+
+/* USB DFU entry: flag the request in .noinit RAM and reset. Resetting (rather
+ * than jumping from here) gives the boot loader clean peripherals, a released
+ * D+ pull-up so the host sees a fresh device, and no running watchdog. */
+extern uint32_t g_boot_request;
+void sys_enter_bootloader(void)
+{
+    __asm volatile("cpsid i" ::: "memory");
+    g_boot_request = BOOT_MAGIC;
+    SCB_AIRCR = SCB_AIRCR_SYSRESETREQ;
+    for (;;) {}
+}

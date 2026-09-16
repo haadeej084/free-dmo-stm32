@@ -82,6 +82,7 @@ flash: $(BUILD)/$(TARGET).bin
 # run when a host compiler (cc or gcc) is present. `set -e` so a failure in ANY
 # of them fails the target, not only the last one.
 USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
+E2E_TEST_SRC = test/test_e2e.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c src/printer/protocol.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -95,6 +96,9 @@ test:
 	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); \
 	  /tmp/opendmo-usbtest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-e2etest-$$m $(E2E_TEST_SRC); \
+	  /tmp/opendmo-e2etest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the
@@ -108,13 +112,14 @@ stack:
 	python3 tools/stack_depth.py --limit $(STACK_LIMIT) $(BUILD)/stack/*.ci
 
 # The real image in the Renode emulator: boot/LED/SysTick smoke test, the head
-# shift bit stream + cost, and the config EEPROM on both known parts. Needs
-# Renode: RENODE=/path/to/renode.
+# shift bit stream + cost, the config EEPROM on both known parts, and the USB
+# DFU hand-over. Needs Renode: RENODE=/path/to/renode.
 RENODE ?= renode
 renode: $(BUILD)/$(TARGET).elf
 	RENODE=$(RENODE) python3 test/renode/smoke.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/head_shift.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/eeprom.py $(MODEL)
+	RENODE=$(RENODE) python3 test/renode/dfu.py $(MODEL)
 
 clean:
 	rm -rf $(BUILD)

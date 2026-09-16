@@ -109,7 +109,8 @@ tools/opsend.py       driver-less host sender (libusb) that speaks the real prot
 pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico icon)
 test/test_protocol.c  host unit test of the parser (mocked hardware)
 test/test_usb.c       host unit test of the USB stack (register-level peripheral model)
-test/renode/          the real image in the Renode emulator (boot, LED, head shift, EEPROM)
+test/test_e2e.c       USB stack + parser end to end (a full job through 64-byte packets)
+test/renode/          the real image in the Renode emulator (boot, LED, head shift, EEPROM, DFU)
 tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 ```
 

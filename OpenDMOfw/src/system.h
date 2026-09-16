@@ -9,6 +9,10 @@
  * while USB is enabled (RM0091 Rev 9, section 30) - see SystemInit(). */
 #define SYSCLK_HZ 48000000u
 
+/* Reboot into ST's USB DFU boot loader (0483:df11); see startup.c. */
+#define BOOT_MAGIC 0xDF00B007u
+void sys_enter_bootloader(void) __attribute__((noreturn));
+
 void SystemInit(void);          /* clock -> 48 MHz HSI48 (SYSCLK), CRS trims on SOF */
 void systick_init(void);        /* 1 ms tick for delays/timeouts */
 void wdt_init(void);            /* IWDG ~4 s; must be kicked periodically */

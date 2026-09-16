@@ -446,6 +446,7 @@ static uint8_t diag_argcount(uint8_t sub)
     switch (sub) {
     case 0x01: case 0x02: case 0x08: return 1;
     case 0x07: return 3;
+    case 0x09: return 3;
     default:   return 0;
     }
 }
@@ -521,6 +522,21 @@ static void diagnose(uint8_t sub)
          * and SWD pins are refused - toggling those ends the session instead
          * of answering the question. */
         r[2] = sys_pin_toggle(s_diag_args[0], s_diag_args[1], s_diag_args[2]) ? 1 : 0;
+        usbp_send_reply(r, 3);
+        break;
+    case 0x09:                                /* reboot into USB DFU */
+        /* Three confirmation bytes 'D' 'F' 'U', so no stray byte sequence can
+         * take the printer off the bus. Refused mid-job. The reply goes out
+         * first; the short wait lets the host collect it before the reset. */
+        if (s_diag_args[0] == 'D' && s_diag_args[1] == 'F' && s_diag_args[2] == 'U'
+            && !s_job_active) {
+            head_vh_off();
+            r[2] = 1;
+            usbp_send_reply(r, 3);
+            delay_ms(100);
+            sys_enter_bootloader();
+        }
+        r[2] = 0;
         usbp_send_reply(r, 3);
         break;
     case 0x08: {                              /* set/clear the VH interlock */

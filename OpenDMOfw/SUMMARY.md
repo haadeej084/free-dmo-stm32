@@ -21,11 +21,13 @@ so stock D.MO Connect enumerates it unchanged and any physical roll prints. See
 | A4 | Head strobe for N segments via a pin array | OK |
 | A5 | Print-density command (genuine `ESC C` / `ESC e`) | OK |
 | A6 | IWDG watchdog (per-line kick) + LED fault patterns + unique serial from the MCU UID | OK |
-| A7 | Host unit test of the parser (mocked hardware) — compiled and run natively: 121 checks / 54 scenarios, both models | OK |
+| A7 | Host unit test of the parser (mocked hardware) — compiled and run natively: 126 checks / 55 scenarios, both models | OK |
 | B8 | Host sender `tools/opsend.py` (genuine D.mo protocol via libusb, PNG→raster) | OK |
 | C1 | USB stack host test against a register-level peripheral model — 91 checks per model | OK |
 | C2 | Real image in Renode: boot, SysTick, LED patterns, head bit stream + per-line cost, config EEPROM on both known parts | OK |
 | C3 | Worst-case stack (920 / 776 of 2048 bytes) and static analysis (GCC analyzer, cppcheck) | OK |
+| C4 | End-to-end host test: USB stack + parser, a full job through 64-byte packets with flow control — 26 checks per model | OK |
+| C5 | USB DFU entry (`GS D 0x09 'D' 'F' 'U'`): reflash over USB with `dfu-util` after the first SWD flash; request and hand-over checked in Renode | OK |
 
 ## Label counter (D.mo-like, as requested)
 
@@ -40,7 +42,7 @@ tag / DRM / authentication.
 - Identity: cloned genuine D.mo — VID `0x0922`, PID `0x002A` (5XL) / `0x0028` (550),
   `DYMO` manufacturer + per-model product strings.
 - Flash ~11.7 KB of the 64 KB the linker allows (fits the F072C8 and CB), RAM ~35 % of 16 KB.
-- Parser test: 121 checks pass for both models; sender byte-matched to the decompiled driver.
+- Parser test: 126 checks pass for both models; sender byte-matched to the decompiled driver.
 - PC-side patcher: 27 offline checks on a synthetic assembly (no vendor DLL needed).
 
 ## Docs

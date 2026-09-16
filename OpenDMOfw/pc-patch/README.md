@@ -16,7 +16,7 @@ applies four patches to that DLL (all idempotent — always rebuilt from a prist
 | A | Catalog | In the embedded SKU catalog, set `Region="Global"` on the active SKU (length-preserving byte edit), keeping its real paper name. |
 | B | IL inject | In `UpdatePrinterStatus…::MoveNext`, right after `set_SkuNumber`: if the printer reports an **empty** SKU, force `SkuNumber` / `LabelsRemaining` / `eRollValidity = Valid` from a local flag file. This is what lets a printer that "accepts" the emulated tag but conveys no usable SKU still pass on the PC side. |
 | C | ValidateResult | Flip the non-null `return false` sites to `true`, so a printer reporting Error/Counterfeit state still passes validation. |
-| D | ExcludedPapers | Blank the active SKU's real paper name in the per-driver exclusion lists, so the paper resolves (otherwise e.g. S0904980 would not resolve → "Leeg"/empty). |
+| D | ExcludedPapers | Blank the active SKU's real paper name in the per-driver exclusion lists, so the paper resolves (otherwise e.g. S0904980 would not resolve, and Connect shows the roll as empty — "Leeg" on a Dutch install). |
 
 ## Roll selection — the flag file
 
@@ -94,8 +94,26 @@ the tag-presence check is enforced in the printer's own MCU firmware, not in D.M
   (shipped with Windows 10/11).
 - **App:** `cd src && dotnet build -c Release` → `bin\Release\dmo.exe` (+ `dnlib.dll`,
   `dmo.exe.config`). The app icon is `dmo.ico` (the D.mo LabelWriter 550 photo).
+- **Tests:** `cd test && dotnet run -c Release` (exit 0 = all pass).
 
 Dependencies: [dnlib](https://github.com/0xd4d/dnlib) 3.1.0 (MIT) for the IL patching.
+
+## Tests
+
+`test/` builds a **synthetic assembly** with the same shapes the patcher anchors
+on (`LabelWriterRollDetectionPrinterCommunication`, a nested `UpdatePrinterStatus`
+state machine with `MoveNext`, `set_SkuNumber` fed by `get_InsertedSKU`, a
+`set_LabelsRemaining` call, an `ERollValidity` local) and runs the real patcher
+against it — no `DYMO.LabelAPI.dll` needed, so it runs in CI.
+
+The assertions are about **branch wiring**, not just "patching succeeded". Two
+label captures used to read back the wrong instruction, which made the flag file
+a silent no-op: `File.Exists == true` jumped straight to the unconditional
+branch (skipping the parse block, leaving the SKU local `null`), and a
+*successful* `int.TryParse` jumped to "load default count", discarding the value
+it had just parsed. Both produced a DLL that loaded and ran perfectly — only the
+feature was gone, and `dmo show` still reported the flag correctly because it
+reads the file itself. Reintroducing either bug now fails the suite.
 
 ## Notes / limitations
 

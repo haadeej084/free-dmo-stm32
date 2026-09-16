@@ -99,7 +99,16 @@ namespace DmoPatch
             Console.WriteLine("Roll switch:  dmo set <SKU> <count>   |   dmo off   (flag: " + FlagPath + ")");
         }
 
+        // The tray menu patches on the UI thread while the watch thread patches
+        // every 500 ms; both move and copy the same files. Serialise them.
+        static readonly object PatchLock = new object();
+
         public static void PatchDll(string live, List<string> skus)
+        {
+            lock (PatchLock) { PatchDllLocked(live, skus); }
+        }
+
+        static void PatchDllLocked(string live, List<string> skus)
         {
             string orig = live + ".orig";
             if (!File.Exists(orig)) File.Copy(live, orig); // first time: keep pristine reference
@@ -255,8 +264,9 @@ namespace DmoPatch
                         Console.WriteLine("[ok] autostart ON -> " + exe + " --tray");
                         break;
                     case "off":
+                        bool was = k.GetValue(valueName) != null;
                         k.DeleteValue(valueName, false);
-                        Console.WriteLine(k.GetValue(valueName) == null ? "[ok] autostart removed" : "[i] autostart not present");
+                        Console.WriteLine(was ? "[ok] autostart removed" : "[i] autostart was not present");
                         break;
                     default:
                         var v = k.GetValue(valueName);
@@ -272,6 +282,7 @@ namespace DmoPatch
         public static void UpdatesBlock(string mode)
         {
             string hosts = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "drivers", "etc", "hosts");
+            if (!File.Exists(hosts)) { Console.WriteLine("[!] hosts file not found: " + hosts); return; }
             switch (mode)
             {
                 case "on":

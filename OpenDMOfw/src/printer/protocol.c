@@ -20,7 +20,10 @@
  *   ESC e                reset density to default (100 %)
  *   ESC U                get SKU info -> 63-byte consumable record
  *   ESC V                get version -> 34-byte reply
- *   ESC *                restore factory settings (config back to defaults)
+ *   ESC $                restore factory settings (config back to defaults).
+ *                         0x24 is the byte in the tech ref and the one the host
+ *                         tool sends; 0x2A ('*') is accepted as an alias because
+ *                         earlier revisions of this firmware only had that one.
  *   ESC o <count u16>    set label count
  *   ESC q <tray>         select output tray (accepted, ignored)
  *   ESC W len dir objid  control-command framing; payload consumed, ignored
@@ -71,7 +74,8 @@ typedef enum {
     S_ARG4,         /* four argument bytes, u32 LE (s_arg1 = which command) */
     S_ESC_D,        /* ESC D: BPP, Align, W(4), H(4) then raster */
     S_RASTER,       /* consuming raster lines for one label */
-    S_ESC_W,        /* ESC W: 5 header bytes then len payload bytes */
+    S_ESC_W,        /* ESC W: 4 header bytes then len payload bytes */
+    S_ESC_F,        /* ESC f: sub-command byte then one argument byte */
     S_SKIP,         /* consume s_w_payload raw bytes (ESC M media type) */
     S_AFTER_GS,     /* saw 0x1D (backdoor config commands) */
     S_GSC_HDR,      /* GS C: 3 header bytes (len, cntLo, cntHi) */
@@ -85,7 +89,8 @@ static uint8_t  s_arg1, s_arg2, s_arg4[4];
 static uint8_t  s_diag_sub;        /* GS D subcommand */
 static uint8_t  s_hdr[10];            /* ESC D header (10 B) / ESC W header (4 B) */
 static uint8_t  s_hcnt;
-static uint16_t s_bpl;               /* raster bytes per line */
+static uint16_t s_bpl;               /* raster bytes per line ON THE WIRE */
+static uint16_t s_use;               /* bytes of that line the head can print */
 static uint16_t s_lines_left;        /* lines still to print for this label */
 static uint16_t s_line_rx;           /* bytes received for the current line */
 static uint8_t  s_line[HEAD_BYTES];
@@ -101,11 +106,16 @@ static uint8_t  s_density_pct;       /* last ESC C duty, 0-200, reported in stat
 static const paper_t *s_paper;       /* current stock, from ESC L (feed + ESC U) */
 static uint16_t s_len_override;      /* ESC L value treated as a raw dot length */
 static uint16_t s_raster_dots;       /* height (dots) of the current raster block */
-static uint16_t s_last_lines;        /* printed height (dots) of the last label */
 
 /* Feed math: die-cut rolls have a small physical gap between labels. */
 #define LABEL_GAP_DOTS   20          /* ~1.7 mm at 300 dpi */
 #define TEAR_EXTRA_DOTS  15          /* tear bar sits past the next print position */
+/* Hard ceiling on a single feed. The paper table carries continuous/banner
+ * stock with a nominal height of 32000 dots; without this, a short label on
+ * that stock would make ESC G spool out 32000 lines = 2.7 metres. The largest
+ * real die-cut pitch in either table is 3150 dots (PC Postage 30387, 10").
+ * Continuous stock has no inter-label pitch to honour anyway. */
+#define MAX_FEED_DOTS    4000        /* ~34 cm */
 
 void protocol_init(void)
 {
@@ -114,7 +124,7 @@ void protocol_init(void)
     s_job_active = 0; s_label_index = 0; s_job_id = 0;
     s_density_pct = 100;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_last_lines = 0;
+    s_len_override = 0; s_raster_dots = 0;
 }
 
 void protocol_reset(void)
@@ -123,7 +133,13 @@ void protocol_reset(void)
     s_state = S_CMD; s_hcnt = 0; s_lines_left = 0; s_line_rx = 0;
     s_job_active = 0; s_label_index = 0;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_last_lines = 0;
+    s_len_override = 0; s_raster_dots = 0;
+    /* Dropping the ring also drops the reason bulk-OUT was throttled. The
+     * un-pause in ring_getc() only fires when a byte is actually read, so an
+     * empty ring would leave the endpoint NAKing forever after a SOFT_RESET
+     * that arrived while the ring was backed up. Re-arm it here. */
+    s_rx_paused = 0;
+    if (usb_is_configured()) usb_ep_rx_ready(EP_DATA);
     head_reset();
 }
 
@@ -134,8 +150,12 @@ void protocol_feed(const uint8_t *data, uint16_t len)
         s_ring[s_head] = data[i];
         s_head = (s_head + 1) & (RING_SZ - 1);
     }
-    if (ring_free() < EP_MAXPKT) s_rx_paused = 1;
-    else                          usb_ep_rx_ready(EP_DATA);
+    if (ring_free() < EP_MAXPKT) {
+        s_rx_paused = 1;
+    } else {
+        s_rx_paused = 0;
+        usb_ep_rx_ready(EP_DATA);
+    }
 }
 
 static int ring_getc(void)
@@ -158,6 +178,10 @@ static void set_density(uint8_t pct)
     uint8_t d = (s_density_pct == 0) ? 0
              : (uint8_t)(((uint32_t)s_density_pct * 8u + 50u) / 100u);
     if (d > 16) d = 16;
+    /* Only ESC C 0 means "disable printing" (tech ref p.16). 1-6 % must still
+     * print, however faintly - rounding them down to 0 would silently turn the
+     * heat off on a host that just wanted a very light label. */
+    if (d == 0 && s_density_pct != 0) d = 1;
     head_set_density(d);
 }
 
@@ -177,18 +201,21 @@ static void label_printed(void)
     s_label_index++;
 }
 
+/* `bpl` is the width the HOST will actually put on the wire; it must never be
+ * clamped, or the surplus bytes of an over-wide line get parsed as the next
+ * line and the whole raster desynchronises. Clamp only what we hand to the
+ * head (s_use); the remainder of each line is consumed and discarded.
+ * The driver caps the printable width at the head width (GPD MaxPrintableWidth:
+ * 1248 for 5XL, 672 for 550), so s_use == s_bpl in normal operation. A narrower
+ * raster is centered on the head (matches PrintableOrigin geometry). */
 static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
 {
     s_raster_dots = dots;
-    uint16_t bpl = (uint16_t)(((uint32_t)dots * bpp + 7u) / 8u);
-    /* The driver caps the printable width at the head width (GPD
-     * MaxPrintableWidth: 1248 for 5XL, 672 for 550), so bpl never exceeds
-     * HEAD_BYTES; the clamp is defensive only. A narrower raster is centered
-     * on the head (matches PrintableOrigin geometry). */
-    if (bpl > HEAD_BYTES) bpl = HEAD_BYTES;
-    s_bpl = bpl; s_lines_left = lines; s_line_rx = 0;
-    s_xoff = (bpl < HEAD_BYTES) ? (HEAD_BYTES - bpl) / 2 : 0;
-    if (bpl == 0 || lines == 0) { s_state = S_CMD; return; }
+    s_bpl = (uint16_t)(((uint32_t)dots * bpp + 7u) / 8u);
+    s_use = (s_bpl > HEAD_BYTES) ? (uint16_t)HEAD_BYTES : s_bpl;
+    s_lines_left = lines; s_line_rx = 0;
+    s_xoff = (uint16_t)((HEAD_BYTES - s_use) / 2);
+    if (s_bpl == 0 || lines == 0) { s_state = S_CMD; return; }
     s_job_active = 1;
     s_state = S_RASTER;
 }
@@ -201,10 +228,11 @@ static void feed_next_label(int to_tear)
 {
     uint16_t pitch = s_len_override ? s_len_override
                     : (s_paper ? s_paper->height_dots : s_raster_dots);
-    uint16_t dots = LABEL_GAP_DOTS;
-    if (pitch > s_raster_dots) dots += (uint16_t)(pitch - s_raster_dots);
+    uint32_t dots = LABEL_GAP_DOTS;
+    if (pitch > s_raster_dots) dots += (uint32_t)(pitch - s_raster_dots);
     if (to_tear) dots += TEAR_EXTRA_DOTS;
-    motor_step_lines(dots);
+    if (dots > MAX_FEED_DOTS) dots = MAX_FEED_DOTS;
+    motor_step_lines((uint16_t)dots);
 }
 
 /* ---- 32-byte status struct (layout per tech ref p.13-16) -------- */
@@ -249,6 +277,15 @@ static uint16_t crc16_ccitt(const uint8_t *d, uint16_t n)
     return crc;
 }
 
+/* Dots -> mm at the model DPI, rounded to nearest. 25.4 mm per inch: using a
+ * flat 25 here (as an earlier revision did) reports every dimension ~1.6 %
+ * short, e.g. S0904980 as 102x156 mm instead of its real 104x159 mm. */
+static uint16_t dots_to_mm(uint16_t dots)
+{
+    uint32_t den = (uint32_t)MODEL_DPI * 10u;
+    return (uint16_t)(((uint32_t)dots * 254u + den / 2u) / den);
+}
+
 static void send_sku_record(void)
 {
     const op_config_t *c = store_get();
@@ -256,9 +293,9 @@ static void send_sku_record(void)
     uint8_t r[63];
     for (int i = 0; i < 63; i++) r[i] = 0;
 
-    /* mm values from the default paper's dot dimensions at MODEL_DPI */
-    uint16_t w_mm = (uint16_t)(p->width_dots  * 25u / MODEL_DPI);
-    uint16_t h_mm = (uint16_t)(p->height_dots * 25u / MODEL_DPI);
+    /* mm values from the configured paper's dot dimensions at MODEL_DPI */
+    uint16_t w_mm = dots_to_mm(p->width_dots);
+    uint16_t h_mm = dots_to_mm(p->height_dots);
 
     r[0] = 0xB6; r[1] = 0xCA;                    /* magic 0xCAB6 LE */
     r[2] = 0;                                    /* version */
@@ -285,11 +322,18 @@ static void send_sku_record(void)
     r[42] = (uint8_t)(w_mm & 0xFF); r[43] = (uint8_t)(w_mm >> 8);   /* label width mm */
     r[44] = 2; r[45] = 0;                        /* printable area h-offset 2 mm */
     r[46] = 2; r[47] = 0;                        /* printable area v-offset 2 mm */
-    r[48] = (uint16_t)(HEAD_DOTS * 25u / MODEL_DPI) & 0xFF;         /* liner width mm */
-    r[49] = ((uint16_t)(HEAD_DOTS * 25u / MODEL_DPI) >> 8) & 0xFF;
-    r[50] = (uint8_t)(c->label_count & 0xFF);    /* total label count */
-    r[51] = (uint8_t)(c->label_count >> 8);
-    uint32_t total_mm = (uint32_t)pitch_mm * c->label_count;
+    uint16_t liner_mm = dots_to_mm(HEAD_DOTS);   /* liner width = head width */
+    r[48] = (uint8_t)(liner_mm & 0xFF);
+    r[49] = (uint8_t)(liner_mm >> 8);
+    /* Bytes 50-51 are the roll's TOTAL label count and 52-53 the roll's total
+     * length (tech ref p.19), not what is left on it - the remaining count is
+     * the status struct's job (bytes 27-28). Reporting the remaining count here
+     * would make the "roll" appear to shrink as it is used. */
+    uint16_t total_count = MODEL_DEFAULT_COUNT;
+    if (c->label_count > total_count) total_count = c->label_count;
+    r[50] = (uint8_t)(total_count & 0xFF);
+    r[51] = (uint8_t)(total_count >> 8);
+    uint32_t total_mm = (uint32_t)pitch_mm * total_count;
     if (total_mm > 0xFFFF) total_mm = 0xFFFF;
     r[52] = (uint8_t)(total_mm & 0xFF); r[53] = (uint8_t)(total_mm >> 8);
     /* counter margin = 0 */
@@ -307,12 +351,13 @@ static void send_version(void)
 {
     uint8_t r[34];
     for (int i = 0; i < 34; i++) r[i] = 0;
-    /* 16-char fields, zero-padded (tech ref p.20). Per-model values from
-     * model.h; the exact strings are an assumption (DECISIONS D12). */
-    uint8_t hw[16] = MODEL_HW_VERSION;
-    uint8_t fw[16] = MODEL_FW_VERSION;
-    for (int i = 0; i < 16; i++) { r[i]     = hw[i];
-                                   r[16 + i] = fw[i]; }
+    /* Two 16-char fields, zero-padded (tech ref p.20). The FW field's internal
+     * structure is fixed by the manual - "FWAP"/"FWBL", major, minor, MMYY,
+     * four chars each - see MODEL_FW_VERSION_COMMON in model.h. */
+    static const char hw[] = MODEL_HW_VERSION;
+    static const char fw[] = MODEL_FW_VERSION;
+    for (int i = 0; i < 16 && hw[i]; i++) r[i]      = (uint8_t)hw[i];
+    for (int i = 0; i < 16 && fw[i]; i++) r[16 + i] = (uint8_t)fw[i];
     r[32] = (uint8_t)(MODEL_PID & 0xFF);         /* USB PID LE */
     r[33] = (uint8_t)(MODEL_PID >> 8);
     usbp_send_reply(r, sizeof(r));
@@ -320,7 +365,8 @@ static void send_version(void)
 
 /* ---- GS D: self-test / diagnostic backdoor (never sent by the stock host) --
  * Subcommands (GS D <sub> [arg]):
- *   0x01 <n>  strobe the head for n all-on lines at max density (verify head drive)
+ *   0x01 <n>  strobe the head for n all-on lines at max density (verify head drive);
+ *             thermally gated, the reply says how many lines actually fired
  *   0x02 <n>  step the feed motor n dot-lines (verify feed)
  *   0x03      EEPROM self-test -> reply match status
  *   0x04      diagnostic snapshot -> thermistor, GPIOs, config, model
@@ -330,19 +376,32 @@ static void send_version(void)
 static void diagnose(uint8_t sub, uint8_t arg)
 {
     const op_config_t *c = store_get();
-    uint8_t r[24];
-    for (int i = 0; i < 24; i++) r[i] = 0;
+    /* 24 B is the snapshot; the rest is headroom for the build-id reply. Every
+     * GS D reply stays well inside one 64-byte bulk packet. */
+    uint8_t r[2 + OP_BUILD_ID_MAX];
+    for (unsigned i = 0; i < sizeof(r); i++) r[i] = 0;
     r[0] = 'D';                       /* marker: distinguishes from a status struct */
     r[1] = sub;                       /* echo the subcommand (uniform across cases) */
 
     switch (sub) {
     case 0x01: {                              /* strobe head n all-on lines */
         uint8_t line[HEAD_BYTES];
+        uint8_t fired = 0;
         for (int i = 0; i < HEAD_BYTES; i++) line[i] = 0xFF;
         head_set_density(16);                 /* max dwell so it is unmistakable */
-        for (uint8_t i = 0; i < arg; i++) { head_print_line(line, HEAD_BYTES); wdt_kick(); }
+        for (uint8_t i = 0; i < arg; i++) {
+            /* DECISIONS D7: every line is gated on thermal_ok(). This path runs
+             * all dots on at maximum dwell, so unlike the print path it does not
+             * fall through after the wait - it stops and reports how far it got. */
+            for (int g = 0; g < 100 && !thermal_ok(); g++) { delay_ms(10); wdt_kick(); }
+            if (!thermal_ok()) break;
+            head_print_line(line, HEAD_BYTES);
+            fired++;
+            wdt_kick();
+        }
         set_density(s_density_pct);           /* restore the configured base level */
-        r[2] = arg; r[3] = thermal_ok() ? 1 : 0;
+        r[2] = fired;                         /* lines actually fired (<= arg) */
+        r[3] = thermal_ok() ? 1 : 0;
         usbp_send_reply(r, 4);
         break; }
     case 0x02:                                /* step feed motor n dot-lines */
@@ -354,6 +413,12 @@ static void diagnose(uint8_t sub, uint8_t arg)
         r[2] = store_selftest() ? 1 : 0;
         usbp_send_reply(r, 3);
         break;
+    case 0x05: {                              /* firmware build id (ASCII) */
+        const char *b = OPENDMO_BUILD;
+        uint8_t n = 0;
+        while (n < OP_BUILD_ID_MAX && b[n]) { r[2 + n] = (uint8_t)b[n]; n++; }
+        usbp_send_reply(r, (uint16_t)(2 + n));
+        break; }
     case 0x04:                                /* diagnostic snapshot */
     default: {
         uint16_t traw = thermal_read_raw();
@@ -392,15 +457,59 @@ static void emit_line(void)
      * than the head is left-aligned and clipped at the buffer edge. */
     uint8_t tmp[HEAD_BYTES];
     for (uint16_t i = 0; i < HEAD_BYTES; i++)
-        tmp[i] = (i >= s_xoff && (i - s_xoff) < s_bpl) ? s_line[i - s_xoff] : 0;
+        tmp[i] = (i >= s_xoff && (i - s_xoff) < s_use) ? s_line[i - s_xoff] : 0;
     for (uint16_t i = 0; i < HEAD_BYTES; i++) s_line[i] = tmp[i];
     wdt_kick();
     /* Bounded cool-down wait (max ~1 s), keep feeding the watchdog. After that
      * print anyway: the dwell is already thermally reduced, so this never hangs. */
     for (int i = 0; i < 100 && !thermal_ok(); i++) { delay_ms(10); wdt_kick(); }
     head_print_line(s_line, HEAD_BYTES);
-    motor_step_lines(1);
+    /* Credit the strobe time against the step's settle delay: the paper may
+     * not move during the heat pulse, but the pulse is dead time the step
+     * would otherwise wait out a second time. */
+    motor_step_line_after(head_last_strobe_us());
     wdt_kick();
+}
+
+/* ---- host-independent button actions (see main.c) ----------------------- */
+void protocol_form_feed(void)
+{
+    if (s_job_active) return;          /* never fight a running host job */
+    feed_next_label(1);
+}
+
+/* Built-in canned test pattern. The genuine printer has one too - 550 tech ref
+ * p.8, "a repeating series of test patterns" on a long button press - and it is
+ * the only way to prove the head and the feed on a bench with no host at all.
+ * Border + diagonals: the border shows head width and both edges, the diagonals
+ * show dropouts and feed regularity. */
+#define SELFTEST_LINES 400u            /* ~34 mm at 300 dpi */
+
+void protocol_self_test(void)
+{
+    if (s_job_active) return;
+    uint8_t line[HEAD_BYTES];
+    int released = 0;
+
+    for (uint16_t y = 0; y < SELFTEST_LINES; y++) {
+        for (uint16_t b = 0; b < HEAD_BYTES; b++) line[b] = 0;
+        for (uint16_t x = 0; x < HEAD_DOTS; x++) {
+            int edge = (x < 8) || (x >= HEAD_DOTS - 8) ||
+                       (y < 8) || (y >= SELFTEST_LINES - 8);
+            int diag = ((x + y) % 32u) < 2u;
+            if (edge || diag) line[x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
+        }
+        for (int g = 0; g < 100 && !thermal_ok(); g++) { delay_ms(10); wdt_kick(); }
+        if (!thermal_ok()) break;                    /* D7: never strobe over the limit */
+        head_print_line(line, HEAD_BYTES);
+        motor_step_line_after(head_last_strobe_us());
+        wdt_kick();
+        /* A second press stops it, as on the genuine printer. The button is
+         * still held when we start, so wait for a release first. */
+        if (gpio_get(PIN_BUTTON) != BUTTON_PRESSED_LEVEL) released = 1;
+        else if (released) break;
+    }
+    feed_next_label(1);                              /* present it at the tear bar */
 }
 
 /* Process as many bytes as are available; resume exactly where we stopped. */
@@ -428,7 +537,16 @@ void protocol_task(void)
             case 's': s_arg1 = 's'; s_arg2 = 0; s_state = S_ARG4; break; /* job + ID */
             case 'L': s_arg1 = 'L'; s_arg2 = 0; s_state = S_ARG2; break; /* paper code */
             case 'n': s_arg1 = 'n'; s_arg2 = 0; s_state = S_ARG2; break; /* label index */
-            case 'o': s_arg1 = 'o'; s_arg2 = 0; s_state = S_ARG2; break; /* set count   */
+            /* ESC o is ONE argument byte. The 550 tech ref p.20 shows
+             * "Byte 0 1 2 / 'ESC' 'o' Count" - three bytes total - exactly as it
+             * shows two-byte tables for ESC n and ESC L. Some notes on the
+             * decompiled driver claim u16. Reading one byte is safe under both
+             * readings: a u16's high byte is 0x00, which S_CMD ignores as a
+             * stray. Reading two when the host sent one would swallow the next
+             * command's ESC and wreck the rest of the job. Use GS C for counts
+             * above 255. */
+            case 'o': s_arg1 = 'o'; s_state = S_ARG1; break;    /* set count   */
+            case 'f': s_hcnt = 0; s_state = S_ESC_F; break;     /* skip n lines */
             case 'A': s_arg1 = 'A'; s_state = S_ARG1; break;    /* status + lock */
             case 'C': s_arg1 = 'C'; s_state = S_ARG1; break;    /* density       */
             case 'T': s_arg1 = 'T'; s_state = S_ARG1; break;    /* speed         */
@@ -443,11 +561,13 @@ void protocol_task(void)
             case 'E': feed_next_label(1); s_state = S_CMD; break;  /* tear feed   */
             case 'Q':                                 /* end of job / unlock     */
                 s_job_active = 0; s_label_index = 0;
+                s_raster_dots = 0;   /* no printed height carries into the next job */
                 s_state = S_CMD; break;
             case 'e': set_density(100); s_state = S_CMD; break;  /* density reset */
             case 'U': send_sku_record(); s_state = S_CMD; break;
             case 'V': send_version();    s_state = S_CMD; break;
-            case '*': factory_reset();   s_state = S_CMD; break;
+            case '$':                                 /* 0x24, per the tech ref */
+            case '*': factory_reset();   s_state = S_CMD; break;  /* 0x2A alias */
             case '@': protocol_reset();  s_state = S_CMD; return; /* pipeline reset */
             default:  s_arg1 = '?'; s_state = S_ARG1; break;     /* unknown: skip 1 arg */
             }
@@ -458,6 +578,7 @@ void protocol_task(void)
             case 'A': send_status(); break;
             case 'C': set_density(c); break;
             case 'd': motor_step_lines(c); break;
+            case 'o': store_get_mut()->label_count = c; store_save(); break;
             /* 'T' speed, 'q' tray, '?': accept and ignore */
             }
             s_state = S_CMD;
@@ -475,10 +596,13 @@ void protocol_task(void)
                      * range is treated as a raw max label length. */
                     const paper_t *p = paper_find(v);
                     if (p) { s_paper = p; s_len_override = 0; }
+                    /* 0 = die-cut: the roll sets the pitch, so fall back to the
+                     * paper table. It must CLEAR a previous raw override -
+                     * 0 is what the stock driver sends for every die-cut job. */
+                    else if (v == 0) s_len_override = 0;
                     else if (v >= 50 && v <= 32767) s_len_override = v;
                     break; }
                 case 'n': s_label_index = v; break;
-                case 'o': store_get_mut()->label_count = v; store_save(); break;
                 }
             }
             s_state = S_CMD;
@@ -492,6 +616,9 @@ void protocol_task(void)
                                ((uint32_t)s_arg4[2] << 16) | ((uint32_t)s_arg4[3] << 24);
                     s_job_active = 1;
                     s_label_index = 0;
+                    /* A feed before this job's first ESC D must advance a full
+                     * pitch, not the height of the previous job's last label. */
+                    s_raster_dots = 0;
                 }
                 s_state = S_CMD;
             }
@@ -505,20 +632,29 @@ void protocol_task(void)
                                  ((uint32_t)s_hdr[4] << 16) | ((uint32_t)s_hdr[5] << 24);
                 uint32_t h     = s_hdr[6] | ((uint32_t)s_hdr[7] << 8) |
                                  ((uint32_t)s_hdr[8] << 16) | ((uint32_t)s_hdr[9] << 24);
-                if (w > 0xFFFF) w = 0xFFFF;
-                if (h > 0x7FFF) h = 0x7FFF;      /* keep bpl in u16 range */
-                begin_raster((uint16_t)w, (uint16_t)h, bpp);
+                uint32_t bpl   = (h > 0xFFFFu) ? 0x10000u
+                                               : ((h * bpp + 7u) / 8u);
+                if (w > 0xFFFFu || bpl > 0xFFFFu) {
+                    /* Header out of range: we cannot know where this raster
+                     * block ends, so consuming it would desynchronise the
+                     * stream. Drop the block and resync on the next ESC. */
+                    s_lines_left = 0; s_line_rx = 0;
+                    s_state = S_CMD;
+                } else {
+                    begin_raster((uint16_t)w, (uint16_t)h, bpp);
+                }
             }
             break;
 
         case S_RASTER:
-            if (s_line_rx < HEAD_BYTES) s_line[s_line_rx] = c;   /* clip overflow */
+            /* Bytes past the head width are consumed but not printed, so an
+             * over-wide line cannot shift the rest of the raster. */
+            if (s_line_rx < s_use) s_line[s_line_rx] = c;
             s_line_rx++;
-            if (s_line_rx >= s_bpl) {              /* line complete */
+            if (s_line_rx >= s_bpl) {              /* line complete on the wire */
                 emit_line();
                 s_line_rx = 0;
                 if (--s_lines_left == 0) {         /* label done */
-                    s_last_lines = s_raster_dots;  /* printed height, for feed math */
                     label_printed();
                     s_state = S_CMD;
                 }
@@ -533,6 +669,18 @@ void protocol_task(void)
                     if (s_w_payload > 250) s_w_payload = 250;
                     s_state = (s_w_payload ? S_SKIP : S_CMD);
                 }
+            }
+            break;
+
+        case S_ESC_F:
+            /* ESC f 1 n - "Skip n Lines", documented in the LabelWriter 450
+             * Series tech ref. The 550 manual drops it, but the command costs
+             * three bytes to support and gives a host a genuine way to feed
+             * without the GS backdoor. Any other sub-command is consumed. */
+            s_hdr[s_hcnt++] = c;
+            if (s_hcnt >= 2) {
+                if (s_hdr[0] == 1) motor_step_lines(s_hdr[1]);
+                s_state = S_CMD;
             }
             break;
 

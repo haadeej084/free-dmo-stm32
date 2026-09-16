@@ -6,8 +6,13 @@
 > complete and verified** (both models build clean; every software-testable path is
 > tested), but the firmware **has not yet been run on a real board**. Before it prints,
 > someone with a genuine LabelWriter 550/5XL must do the **hardware fieldwork** in
-> [`FIELDWORK.md`](FIELDWORK.md) — confirm the GPIO routing, motor steps/line,
-> thermistor divider, and STB polarity on the physical board.
+> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **seven** items: GPIO routing,
+> the motor drive train, the thermistor divider resistor, the top-of-form sensor,
+> the VH enable pin, the half-2 dot order, and host acceptance.
+>
+> **You can help in five minutes without opening anything.** If you own a working
+> LabelWriter and a genuine roll, three USB captures (`FIELDWORK.md` section 1b)
+> retire three of the last open protocol assumptions.
 >
 > **The author's specialism is embedded software, not hardware.** The firmware is
 > built to be robust and self-diagnosing, so a short session with a multimeter — not
@@ -26,10 +31,17 @@ Firmware that runs **in place on a genuine D.mo LabelWriter 550 / 5XL mainboard*
 roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only (the network
 "LabelWriter Print Server" coprocessor is out of scope). One codebase builds both models:
 
-| Model | Build | USB PID | Print head | Dots / line |
-|-------|-------|---------|-----------|-------------|
-| LabelWriter **5XL** (101 mm) | `make` (default) | `0x002A` | 1248 dots (156 B) | 300 dpi |
-| LabelWriter **550** (57 mm)   | `make MODEL=OP57` | `0x0028` | 672 dots (84 B)   | 300 dpi |
+| Model | Build | USB PID | Print head | Head width | Resolution |
+|-------|-------|---------|-----------|------------|------------|
+| LabelWriter **5XL** (4" class) | `make` (default) | `0x002A` | 1248 dots (156 B) | 105.7 mm | 300 dpi |
+| LabelWriter **550**            | `make MODEL=OP57` | `0x0028` | 672 dots (84 B)   | 56.9 mm  | 300 dpi |
+
+Only the **dot count** is a spec value — the tech reference states 672 and 1248
+dots at 300 dpi — and the mm width follows from it. (DYMO's own prose calls the
+5XL head "101 mm wide"; 1248 dots at 300 dpi is 105.7 mm, and the ROHM catalog
+lists the matching head at 105.706 mm, so the 101 mm figure is a nominal media
+width rather than the dot row. The firmware only ever uses the dot count.) The
+build name `OP104` refers to the 104 mm printable width of the biggest 5XL roll.
 
 Both present themselves as the real device — VID `0x0922`, per-model PID, `DYMO` /
 `LabelWriter 5XL|550` strings, and an IEEE-1284 device ID that makes Windows derive the
@@ -46,8 +58,10 @@ refuses — so a working bypass must defeat all three:
    consumable record — SKU, geometry, remaining label count. The printer's own firmware
    reads the tag and reports a *roll state* to the host. No tag, or a tag whose SKU it
    doesn't recognise, yields an error or a **counterfeit** bay status
-   (`MainBayStatus = 10`), and the engine will not print. The tech reference is explicit:
-   *"the label length is determined by the SKU data found on the NFC Tag."*
+   (`MainBayStatus = 10`, an enumerated value in the manual's own status table),
+   and the engine will not print. The tech reference says it in as many words:
+   *"The label length is determined by the SKU data found on the NFC Tag"* and
+   *"Only authentic Dymo labels with a valid NFC Tag can be used for printing."*
 
 2. **PC side (D.MO Connect / `DYMO.LabelAPI.dll`).** Even a printer that reports "roll
    present" is not enough. The host software validates the reported SKU against an
@@ -133,6 +147,19 @@ silent guess.
 
 The firmware is complete; the only remaining work is **hardware verification +
 calibration** on a real board (GPIO routing, motor µsteps, thermistor divider, STB
-polarity). If you have a LabelWriter 550/5XL and a multimeter, [`FIELDWORK.md`](FIELDWORK.md)
-lists exactly what to measure — then **report your findings by email to
-`opendymofw@secret.fyi`** (no code required).
+polarity, VH enable, half-2 dot order).
+
+[`FIELDWORK.md`](FIELDWORK.md) is written to be worked through with a multimeter
+in hand: safety rules, the continuity table, a staged bring-up that never powers
+the head before it has been measured, each measurement with its method, its
+expected value and the exact constant to patch, a symptom→cause troubleshooting
+map, and a **fill-in report template**. The continuity work alone is one to two
+hours and is the single most valuable contribution.
+
+**No code required** — fill in the template and mail it to
+`opendymofw@secret.fyi`. A PR updating `src/pins.h` is a welcome bonus.
+
+## License
+
+Covered by the repository's [`LICENSE`](../LICENSE) (GPL-3.0). The PC-side
+patcher in `pc-patch/` depends on [dnlib](https://github.com/0xd4d/dnlib) (MIT).

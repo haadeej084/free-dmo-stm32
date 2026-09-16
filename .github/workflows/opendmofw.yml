@@ -16,10 +16,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install ARM toolchain
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+        run: |
+          sudo apt-get update
+          # libnewlib is needed explicitly for --specs=nano.specs; relying on
+          # apt Recommends is how this breaks on a --no-install-recommends runner.
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
       - name: Build OP104 and OP57
         working-directory: OpenDMOfw
         run: make && make MODEL=OP57
       - name: Host tests
         working-directory: OpenDMOfw
         run: make test
+
+  pc-patch:
+    # net48 + WinForms, so this half only builds on Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build the patcher
+        working-directory: OpenDMOfw/pc-patch/src
+        run: dotnet build -c Release
+      - name: Patcher tests
+        working-directory: OpenDMOfw/pc-patch/test
+        run: dotnet run -c Release

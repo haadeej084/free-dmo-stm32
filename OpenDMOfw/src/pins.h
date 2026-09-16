@@ -30,7 +30,7 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  *                      PRTA05412) — replacement-head listings for the 400/450
  *                      Turbo generation, which shares this head (57 mm, 672
  *                      dots, 300 dpi, per both tech references).
- *   101 mm (5XL class): ROHM TE3004-TP1W00A class — ROHM catalog SF2024 lists
+ *   105.7 mm (5XL class): ROHM TE3004-TP1W00A class — ROHM catalog SF2024 lists
  *                      exactly 1248 dots @ 300 dpi / 105.706 mm.
  * Interface per the ROHM KF3002-GL50A datasheet (equivalent circuit + pin
  * config + timing chart):

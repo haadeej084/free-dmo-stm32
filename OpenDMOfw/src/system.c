@@ -6,10 +6,37 @@ static volatile uint32_t s_millis;
 /* HSI48 as SYSCLK (48 MHz) + CRS autotrim on USB SOF. This gives a
  * USB-compliant clock without an external crystal (RM0091 RCC/CRS). On the
  * F072, CFGR.SW=11 selects HSI48 as the system clock (verified vs CMSIS). */
+/* Clock source. Default is the crystal-less HSI48 + CRS path, because it needs
+ * nothing from the board and therefore also works on the bare F072 a
+ * fieldworker brings up first (FIELDWORK.md step A).
+ *
+ * The genuine Rev K mainboard does carry a crystal: a close-up of the board
+ * shows "AXC12.00-115" in an HC-49 can at Y1, immediately beside the 48-pin
+ * MCU, with its load capacitors. 12 MHz x PLL4 = exactly 48 MHz, which is a
+ * better USB clock than a trimmed RC. Build with -DOPENDMO_CLOCK_HSE12=1 to use
+ * it; if the crystal is absent or a different frequency, the HSERDY wait would
+ * hang, so this is opt-in rather than auto-detected. */
+#ifndef OPENDMO_CLOCK_HSE12
+#define OPENDMO_CLOCK_HSE12 0
+#endif
+
 void SystemInit(void)
 {
     FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY1;   /* 1 wait state for 48 MHz */
 
+#if OPENDMO_CLOCK_HSE12
+    /* SYSCLK and USB from the board's 12 MHz crystal via PLL x4. */
+    RCC->CR |= RCC_CR_HSEON;
+    while (!(RCC->CR & RCC_CR_HSERDY)) {}
+    RCC->CFGR2 = 0;                                  /* PREDIV = /1 */
+    RCC->CFGR = (RCC->CFGR & ~((3u<<15) | (0xFu<<18) | 0x3u))
+              | RCC_CFGR_PLLSRC_HSE_PREDIV | RCC_CFGR_PLLMUL4;
+    RCC->CR |= RCC_CR_PLLON;
+    while (!(RCC->CR & RCC_CR_PLLRDY)) {}
+    RCC->CFGR = (RCC->CFGR & ~0x3u) | RCC_CFGR_SW_PLL;
+    while ((RCC->CFGR & (3u<<2)) != RCC_CFGR_SWS_PLL) {}
+    RCC->CFGR3 |= RCC_CFGR3_USBSW_PLL;               /* USB from PLL, not HSI48 */
+#else
     /* HSI48 on: it is both the CPU clock and the USB clock. */
     RCC->CR2 |= RCC_CR2_HSI48ON;
     while (!(RCC->CR2 & RCC_CR2_HSI48RDY)) {}
@@ -18,14 +45,31 @@ void SystemInit(void)
     RCC->CFGR = (RCC->CFGR & ~0x3u) | RCC_CFGR_SW_HSI48;
     while ((RCC->CFGR & RCC_CFGR_SWS_HSI48) != RCC_CFGR_SWS_HSI48) {}
 
-    /* CRS: sync source = USB SOF (do not rely on reset default), autotrim. */
+    /* CRS: sync source = USB SOF (do not rely on reset default), autotrim.
+     * RCC_CFGR3.USBSW is left at its reset value, which already selects HSI48
+     * as the USB clock on the F072. */
     RCC->APB1ENR |= RCC_APB1ENR_CRSEN;
     CRS->CFGR = (CRS->CFGR & ~CRS_CFGR_SYNCSRC_Msk) | CRS_CFGR_SYNCSRC_USB;
     CRS->CR |= CRS_CR_AUTOTRIMEN | CRS_CR_CEN;
+#endif
 
     /* GPIO port clocks that we use. */
     RCC->AHBENR |= RCC_AHBENR_GPIOAEN | RCC_AHBENR_GPIOBEN |
                    RCC_AHBENR_GPIOCEN | RCC_AHBENR_GPIOFEN;
+}
+
+/* TIM3 free-runs at 1 MHz and is the time base for delay_us(). A calibrated
+ * NOP loop (the previous implementation) drifts with compiler version and
+ * optimisation level and, worse, is stretched by every interrupt that lands
+ * inside it — which for a head strobe means extra heat energy per dot line.
+ * Reading a hardware counter costs the same and cannot drift. */
+static void us_timer_init(void)
+{
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;
+    TIM3->PSC = (SYSCLK_HZ / 1000000u) - 1u;   /* 48 -> 1 MHz, 1 tick = 1 us */
+    TIM3->ARR = 0xFFFFu;                        /* free-running, wraps at 65.5 ms */
+    TIM3->EGR = TIM_EGR_UG;                     /* latch PSC/ARR */
+    TIM3->CR1 = TIM_CR1_CEN;
 }
 
 void systick_init(void)
@@ -33,6 +77,7 @@ void systick_init(void)
     SysTick->LOAD = (SYSCLK_HZ / 1000u) - 1u;
     SysTick->VAL  = 0;
     SysTick->CTRL = 7;   /* CLKSOURCE=AHB | TICKINT | ENABLE */
+    us_timer_init();     /* must be up before the first delay_us() */
 }
 
 void SysTick_Handler(void) { s_millis++; }
@@ -58,11 +103,18 @@ void delay_ms(uint32_t ms)
     while ((s_millis - t0) < ms) { wdt_kick(); __asm volatile("wfi"); }
 }
 
+/* Busy-wait on the 1 MHz TIM3 counter. 16-bit wrap-around arithmetic, so a
+ * chunk may not exceed the 65.5 ms period; chunks of 30 ms keep a wide margin.
+ * Note this bounds the WAIT exactly, not the whole pulse: an interrupt taken
+ * after the wait still delays the falling edge by its own duration. */
 void delay_us(uint32_t us)
 {
-    /* Coarse busy-wait; 48 MHz => ~48 cycles/us. Sufficient for pulse widths. */
-    volatile uint32_t n = us * 6u;
-    while (n--) { __asm volatile("nop"); }
+    while (us) {
+        uint16_t chunk = (us > 30000u) ? 30000u : (uint16_t)us;
+        uint16_t t0 = (uint16_t)TIM3->CNT;
+        while ((uint16_t)((uint16_t)TIM3->CNT - t0) < chunk) { }
+        us -= chunk;
+    }
 }
 
 /* ---- GPIO --------------------------------------------------------------- */

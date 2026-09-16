@@ -29,9 +29,15 @@ static const uint8_t dev_desc[18] = {
     1                   /* bNumConfigurations */
 };
 
+/* bmAttributes 0xC0 = self-powered, bMaxPower 0x02 = 4 mA drawn from VBUS.
+ * Not a guess: a LabelWriter is fed from a 24 V brick (550 TRM p.9 lists the
+ * adapters), and published `lsusb -v` output for the genuine LabelWriter 450
+ * (0922:0020, same family) reports exactly "Self Powered" with MaxPower 4mA.
+ * The previous 0x80 / 500 mA claimed half an amp of bus power the printer does
+ * not take, which is wrong on a bus-powered hub's budget. */
 static const uint8_t cfg_desc[32] = {
     /* Configuration */
-    9, 2, 32, 0, 1, 1, 0, 0x80, 0xFA,   /* 32 bytes total, 1 iface, bus-powered, 500 mA */
+    9, 2, 32, 0, 1, 1, 0, 0xC0, 0x02,   /* 32 bytes total, 1 iface, self-powered, 4 mA */
     /* Interface: Printer class 7 / subclass 1 / protocol 2 (bidir) */
     9, 4, 0, 0, 2, 7, 1, 2, 0,
     /* EP OUT 0x01 bulk 64 */

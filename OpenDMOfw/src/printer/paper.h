@@ -28,9 +28,6 @@ typedef struct {
     uint16_t height_dots;   /* page height in dots */
 } paper_t;
 
-/* Raster line width in bytes for a given dot width. */
-#define PAPER_LINE_BYTES(wd)  (((wd) + 7) / 8)
-
 #if defined(MODEL_OP57)
 /* 550-class papers (from LW5XX.GPD). */
 static const paper_t PAPERS[] = {

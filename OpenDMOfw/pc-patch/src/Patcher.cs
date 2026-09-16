@@ -16,7 +16,8 @@ namespace DmoPatch
     ///   C  ValidateResult: flip the non-null return-false sites to true so a printer in an
     ///      Error/Counterfeit state still passes validation (needed by the REV.E firmware).
     ///   D  ExcludedPapers: blank the real paper's <PaperName> entries so it resolves on the
-    ///      550 driver (otherwise S0904980 would not resolve -> "Leeg").
+    ///      550 driver (otherwise S0904980 would not resolve and Connect shows the roll
+    ///      as empty - "Leeg" on a Dutch install).
     /// All idempotent: always rebuild from the .orig copy.
     public static class Patcher
     {
@@ -212,8 +213,12 @@ namespace DmoPatch
             Instruction brGuard = Instruction.Create(OpCodes.Br, (Instruction)null);
             L.Add(brGuard);
             // --- flag branch: parse "SKU count" from the file ---
-            Instruction hasFlagLbl = L[L.Count - 1]; // placeholder; set below to first instr of this block
-            L.Add(Instruction.Create(OpCodes.Ldloc, locPath));
+            // Build the label instruction FIRST and add it, rather than reading
+            // back L[L.Count-1] (which at this point is brGuard itself, not the
+            // start of this block - that made File.Exists==true skip the whole
+            // parse block and leave locSku null).
+            Instruction hasFlagLbl = Instruction.Create(OpCodes.Ldloc, locPath);
+            L.Add(hasFlagLbl);
             L.Add(Instruction.Create(OpCodes.Call, mReadAllText));
             L.Add(Instruction.Create(OpCodes.Call, mTrim));
             L.Add(Instruction.Create(OpCodes.Stloc, locContent));
@@ -247,8 +252,11 @@ namespace DmoPatch
             L.Add(Instruction.Create(OpCodes.Ldc_I4, DefaultCount)); // fail: load default
             L.Add(Instruction.Create(OpCodes.Stloc, locCnt));        // store (empty stack)
             // --- guard: apply only when the detected SKU is empty ---
-            Instruction guardLbl = L[L.Count - 2]; // first instr of the guard block (Ldloc printer below)
-            L.Add(Instruction.Create(OpCodes.Ldloc, locPrinter));
+            // Same fix as above: L[L.Count-2] pointed at "load default count",
+            // so a SUCCESSFUL TryParse jumped there and overwrote the parsed
+            // count with the default.
+            Instruction guardLbl = Instruction.Create(OpCodes.Ldloc, locPrinter);
+            L.Add(guardLbl);
             L.Add(Instruction.Create(OpCodes.Callvirt, getSku));
             L.Add(Instruction.Create(OpCodes.Call, mIsNullOrEmpty));
             L.Add(Instruction.Create(OpCodes.Brfalse, cont));        // not empty -> skip (empty stack at cont)

@@ -2,9 +2,15 @@
 build/
 *.o
 
+# --- Python bytecode -------------------------------------------------------
+__pycache__/
+*.pyc
+
 # --- .NET patcher build output ---------------------------------------------
 pc-patch/src/bin/
 pc-patch/src/obj/
+pc-patch/test/bin/
+pc-patch/test/obj/
 
 # --- Local research + continuity notes (kept on disk, not part of the repo) --
 refs/

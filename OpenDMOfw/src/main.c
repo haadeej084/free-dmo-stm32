@@ -46,12 +46,48 @@ static void led_update(void)
     }
 }
 
+/* Front-panel button, matching what the genuine printer does with it:
+ *   short press  -> form feed (550 TRM p.7: the form-feed button advances the
+ *                   stock to the top-of-form tear position)
+ *   hold ~10 s   -> built-in self test (550 TRM p.8: "press the form-feed
+ *                   button and power button together and hold it down for
+ *                   approximately 10 seconds ... a repeating series of test
+ *                   patterns"; we have one button, so holding it is the gesture)
+ * Both work with no host attached, which is the point during bring-up. */
+#define BTN_DEBOUNCE_MS   40u
+#define BTN_SELFTEST_MS   10000u
+
+static void button_task(void)
+{
+    static int      down;
+    static uint32_t down_ms;
+    static int      fired;               /* self test already run for this press */
+    int now_down = (gpio_get(PIN_BUTTON) == BUTTON_PRESSED_LEVEL);
+    uint32_t now = millis();
+
+    if (now_down && !down) { down = 1; down_ms = now; fired = 0; return; }
+    if (now_down) {
+        if (!fired && (now - down_ms) >= BTN_SELFTEST_MS) {
+            fired = 1;
+            protocol_self_test();
+        }
+        return;
+    }
+    if (down) {
+        down = 0;
+        if (!fired && (now - down_ms) >= BTN_DEBOUNCE_MS)
+            protocol_form_feed();
+    }
+}
+
 int main(void)
 {
-    /* SystemInit() (clock 48 MHz + CRS) was already done by Reset_Handler. */
+    /* SystemInit() (48 MHz system clock) was already done by Reset_Handler.
+     * The watchdog goes first: from here on any hang, including one inside a
+     * peripheral init or a fault handler, ends in a reset rather than a brick. */
+    wdt_init();
     systick_init();
     io_init();
-    wdt_init();                          /* on before I2C/USB so a stuck init recovers */
 
     store_init();                        /* config from EEPROM or defaults */
     head_init();
@@ -66,8 +102,14 @@ int main(void)
 
     for (;;) {
         protocol_task();                 /* processes print data (head/feed) */
+        button_task();
         led_update();
-        motor_enable(0);                 /* motor cools/stays quiet when nothing is running */
+        motor_idle_tick(300);            /* release the motor 300 ms after the last step */
+        head_idle_tick(30000);           /* drop the 24 V heat rail after 30 s idle */
         wdt_kick();
+        /* Nothing here polls faster than the 1 ms SysTick, and the USB IRQ
+         * wakes us the moment print data arrives, so idle in WFI instead of
+         * spinning - less self-heating next to a thermal head. */
+        __asm volatile("wfi");
     }
 }

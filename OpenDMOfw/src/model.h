@@ -1,9 +1,15 @@
 /* OpenDMOfw - model selection (width-dependent parameters in one place).
  *
- * One codebase, two head widths. The default is the 4" (5XL) class; the
- * 57 mm variant is a build option. Select with a build define:
- *   (none)        -> OP104 : 1248 dots, 300 dpi, 2 strobe segments (5XL class)
- *   -DMODEL_OP57  -> OP57  :  672 dots, 300 dpi, 2 strobe segments (550 class)
+ * One codebase, two head widths. Select with a build define:
+ *   -DMODEL_OP57 (default) -> OP57  :  672 dots, 300 dpi (LabelWriter 550)
+ *   -DMODEL_OP104          -> OP104 : 1248 dots, 300 dpi (4" / 5XL geometry)
+ *
+ * WHICH BOARD. The plain LabelWriter 550 carries an STM32F072 (48-pin), the
+ * part this firmware is written for. The 5XL and the 550 Turbo carry an
+ * STM32F407VET6 (Cortex-M4, 100-pin, Ethernet via a KSZ8081 PHY) - read on
+ * several boards (DECISIONS D25). So OP57 is the image with a real target;
+ * OP104 keeps the 1248-dot geometry, 5XL USB identity and paper table ready
+ * for an F407 port, and runs on an F072 only as a test build.
  *
  * Head dimensions per the official "LabelWriter 550 Series Printers Technical
  * Reference Manual": the 57 mm head uses 672 individually addressable dots
@@ -53,6 +59,13 @@
 /* Wire cap for that string. 2 + 48 keeps the reply inside one 64-byte bulk
  * packet with room to spare; long enough for "v1.1.1-14-gfda76012-dirty". */
 #define OP_BUILD_ID_MAX 48
+
+#if defined(MODEL_OP57) && defined(MODEL_OP104)
+#error "define MODEL_OP57 or MODEL_OP104, not both"
+#endif
+#if !defined(MODEL_OP104) && !defined(MODEL_OP57)
+#define MODEL_OP57                 /* default: the LabelWriter 550 */
+#endif
 
 #if defined(MODEL_OP57)
   /* 57 mm head, presents as the 550-class printer. */

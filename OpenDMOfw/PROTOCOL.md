@@ -13,10 +13,10 @@ carries replies (status, SKU record, version).
 
 ## USB identity (per model, `src/model.h`)
 
-| Field | 5XL (default, OP104) | 550 (`MODEL=OP57`) |
+| Field | 5XL geometry (`MODEL=OP104`) | 550 (default, OP57) |
 |-------|----------------------|--------------------|
 | idVendor | `0x0922` (D.mo) | `0x0922` |
-| idProduct | `0x002A` | `0x0028` |
+| idProduct | `0x002A` | `0x0028` (DYMO Connect's own table: 550 `0x28`, 550 Turbo `0x29`, 5XL `0x2A`, 550 Twin Turbo `0x2B`, Twin Pro `0x2C`, 5XL Pro `0x2D`) |
 | Manufacturer | `DYMO` | `DYMO` |
 | Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
 | Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
@@ -70,7 +70,8 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 79` / `1B 7A` | **ESC y / z** | 400-series "set print resolution" 300x300 / 203x300. **Zero-argument**; accepted and ignored - this family is 300x300 in every mode, so the only point is not to eat the next command | LW400 tech ref p.19 |
 | `1B 66 01` + n | **ESC f 1 n** | Skip `n` dot lines. Documented in the **450** series tech ref; dropped from the 550 manual but cheap to honour | LW450 tech ref p.10 |
 | `1B 40` | **ESC @** | Restart print engine → full pipeline reset here | tech ref p.20 |
-| `1B 57` len dir obj(2) + payload | **ESC W** | Control-command framing; 4 header bytes, then `len` payload bytes consumed and ignored. `len` is clamped to 250 | driver |
+| `1B 57` len dir obj(2) + payload | **ESC W** | Control-command framing. `len` counts the 4 header bytes plus the payload (`len = payload + 4`), so `len − 4` payload bytes are consumed and ignored. DYMO Connect uses it for LAN/Wi-Fi configuration and cutter objects, none of which a USB 550/5XL needs | decompiled `ControlCommand` |
+| `1B 52` len dir obj(2) + payload | **ESC R** | Update-protocol framing, same layout. **Reflash** (`1B 52 04 03 00 00`, reboot into the bootloader) is ignored. **Secure firmware update** (object `0xF100`): the host sends `1B 52 00 01 00 F1`, a 128-byte signed header, and waits up to 15 s for `1B 72 <status>`; we consume the header and answer `1B 72 01`, so DYMO Connect aborts cleanly instead of streaming an image into the parser | decompiled `SecureFwUpdateCommand`, `ReflashCommand` |
 
 Unknown bytes outside a command are ignored. An unknown byte *after* `ESC` is
 treated as a one-argument command, so one further byte is consumed — that is why

@@ -33,7 +33,16 @@
  *   ESC q <roll>         select roll/tray, ASCII '0'-'3' (Twin Turbo only);
  *                         accepted, ignored
  *   ESC ESC ...          a run of bare ESC bytes collapses to one pending ESC
- *   ESC W len dir objid  control-command framing; payload consumed, ignored
+ *   ESC W len dir objid  control-command framing; len counts the 4 header
+ *                         bytes after ESC W plus the payload (decompiled
+ *                         ControlCommand: len = payload + 6 - 2); payload
+ *                         consumed, ignored
+ *   ESC R len dir objid  update-protocol framing, same layout. A secure
+ *                         firmware update (object 0xF100) sends a 128-byte
+ *                         signed header and waits for ESC r <status>; we
+ *                         consume the header and answer ESC r 01 (refused),
+ *                         so DYMO Connect aborts instead of streaming an image
+ *                         into the command parser. Reflash (object 0) ignored.
  *   ESC M <8 bytes>      media-type descriptor (mtDefault = 8 zero bytes);
  *                         the driver always sends it, so consume + ignore
  *   ESC @                restart print engine -> full pipeline reset here
@@ -80,7 +89,7 @@ typedef enum {
     S_ARG4,         /* four argument bytes, u32 LE (s_arg1 = which command) */
     S_ESC_D,        /* ESC D: BPP, Align, W(4), H(4) then raster */
     S_RASTER,       /* consuming raster lines for one label */
-    S_ESC_W,        /* ESC W: 4 header bytes then len payload bytes */
+    S_ESC_W,        /* ESC W / ESC R: 4 header bytes then len-4 payload bytes */
     S_ESC_F,        /* ESC f: sub-command byte then one argument byte */
     S_SKIP,         /* consume s_w_payload raw bytes (ESC M media type) */
     S_AFTER_GS,     /* saw 0x1D (backdoor config commands) */
@@ -104,6 +113,12 @@ static uint16_t s_line_rx;           /* bytes received for the current line */
 static uint8_t  s_line[HEAD_BYTES];
 static uint16_t s_xoff;              /* left padding (bytes) to center narrow rasters */
 static uint16_t s_w_payload;         /* ESC W payload bytes still to consume */
+static uint8_t  s_w_cmd;             /* 'W' or 'R': which framed command */
+static int      s_refuse_update;     /* answer ESC r 01 once the skip ends */
+
+#define UPDATE_OBJ_SECURE_FW 0xF100u /* SecureFwUpdateCommand PBBObjectId */
+#define UPDATE_SECURE_HDR    128u    /* signed header sent before the reply */
+#define UPDATE_REFUSED       0x01u   /* any non-zero status aborts the host */
 static uint8_t  s_sku_len, s_sku_i;
 
 /* Job context for the status struct. */
@@ -679,7 +694,8 @@ void protocol_task(void)
             case 'd': set_density(88);  s_state = S_CMD; break;  /* Medium  87.5 % */
             case 'g': set_density(113); s_state = S_CMD; break;  /* Dark   112.5 % */
             case 'D': s_hcnt = 0; s_state = S_ESC_D; break;     /* raster header */
-            case 'W': s_hcnt = 0; s_state = S_ESC_W; break;     /* control cmd   */
+            case 'W':                                           /* control cmd   */
+            case 'R': s_hcnt = 0; s_w_cmd = c; s_state = S_ESC_W; break; /* update */
             case 'M': s_w_payload = 8; s_state = S_SKIP; break; /* media type +8B */
             case 'h': s_state = S_CMD; break;                   /* text mode     */
             case 'i': s_state = S_CMD; break;                   /* graphics mode */
@@ -816,8 +832,16 @@ void protocol_task(void)
             if (s_hcnt < 4) {                       /* len dir obj(2) */
                 s_hdr[s_hcnt++] = c;
                 if (s_hcnt == 4) {                 /* header complete */
-                    s_w_payload = s_hdr[0];        /* payload bytes to skip */
-                    if (s_w_payload > 250) s_w_payload = 250;
+                    /* len counts these 4 header bytes; a len below 4 is
+                     * malformed and carries no payload. */
+                    s_w_payload = (s_hdr[0] > 4u) ? (uint16_t)(s_hdr[0] - 4u) : 0u;
+                    uint16_t obj = (uint16_t)(s_hdr[2] | (s_hdr[3] << 8));
+                    if (s_w_cmd == 'R' && obj == UPDATE_OBJ_SECURE_FW) {
+                        /* image > 255 B, so the host sends len 0 and then
+                         * exactly the 128-byte header before it listens */
+                        s_w_payload = UPDATE_SECURE_HDR;
+                        s_refuse_update = 1;
+                    }
                     s_state = (s_w_payload ? S_SKIP : S_CMD);
                 }
             }
@@ -836,7 +860,14 @@ void protocol_task(void)
             break;
 
         case S_SKIP:
-            if (--s_w_payload == 0) s_state = S_CMD;   /* media-type bytes done */
+            if (--s_w_payload == 0) {                  /* skipped bytes done */
+                s_state = S_CMD;
+                if (s_refuse_update) {
+                    static const uint8_t refuse[3] = { 0x1B, 'r', UPDATE_REFUSED };
+                    s_refuse_update = 0;
+                    usbp_send_reply(refuse, sizeof refuse);
+                }
+            }
             break;
 
         case S_AFTER_GS:

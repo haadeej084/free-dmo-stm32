@@ -15,18 +15,20 @@ One codebase, two head widths (see `src/model.h`):
 
 | Model | Command | Head | Output |
 |-------|---------|------|--------|
-| **OP104** (default) | `make` | 1248 dots @ 300 dpi (105.7 mm) | `build/OP104/opendmo-OP104.bin` |
-| OP57 | `make MODEL=OP57` | 672 dots @ 300 dpi (56.9 mm) | `build/OP57/opendmo-OP57.bin` |
+| **OP57** (default) | `make` | 672 dots @ 300 dpi (56.9 mm) | `build/OP57/opendmo-OP57.bin` |
+| OP104 | `make MODEL=OP104` | 1248 dots @ 300 dpi (105.7 mm) | `build/OP104/opendmo-OP104.bin` |
 
-OP104 matches the specs of the common 4"/300 dpi shipping-label class; the name
-refers to the 104 mm printable label width, not to the head width.
+OP57 is the LabelWriter 550, the board with an STM32F072. OP104 is the 5XL's
+4"/300 dpi geometry (the name refers to the 104 mm printable label width, not
+the head); a genuine 5XL carries an STM32F407VET6, so OP104 is built and tested
+for a future port but does not run on a 5XL board (DECISIONS D25).
 
 ## Building
 
 ```sh
-make                 # OP104 (default) -> build/OP104/opendmo-OP104.bin + size
-make MODEL=OP57      # 57 mm variant   -> build/OP57/opendmo-OP57.bin
-make clean MODEL=OP57
+make                 # OP57 (default) -> build/OP57/opendmo-OP57.bin + size
+make MODEL=OP104     # 4" geometry    -> build/OP104/opendmo-OP104.bin
+make clean MODEL=OP104
 ```
 
 Equivalent without `make`:
@@ -69,16 +71,17 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 > already programmable. The firmware does **not** write option bytes (it will
 > not set RDP1 or RDP2).
 >
-> Linker script: `linker/stm32f072xb.ld` (128 KB flash / 16 KB RAM — the **B**
-> density of the F072CB; `x8` would be the 64 KB part).
+> Linker script: `linker/stm32f072xb.ld` (declares 64 KB flash / 16 KB RAM: the
+> image fits both the F072C8 and the F072CB, and the one legible 550 marking
+> does not say which is fitted).
 
 ## Testing enumeration (no head connected)
 
 After flashing, with only USB connected:
 
 ```sh
-lsusb | grep 0922:002a                     # OP104 / 5XL (default)
-lsusb | grep 0922:0028                     # OP57 / 550
+lsusb | grep 0922:0028                     # OP57 / 550 (default)
+lsusb | grep 0922:002a                     # OP104 test build
 # device ID (Linux, usblp): the printer returns the IEEE-1284 string via GET_DEVICE_ID
 ```
 
@@ -116,7 +119,7 @@ python tools/opsend.py config --count 500 --sku 30256
 python tools/opsend.py version
 python tools/opsend.py diag 4                   # GS D diagnostic snapshot
 python tools/opsend.py diag 5                   # firmware build id
-python tools/opsend.py --model OP57 feed 30     # 57 mm instead of default OP104
+python tools/opsend.py --model OP104 feed 30    # 4" test build instead of the default OP57
 ```
 
 On Windows a WinUSB binding may be needed (e.g. via Zadig) before libusb can claim
@@ -131,7 +134,7 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (117 checks / 52 scenarios). This is the regression test: it links and runs
+  (121 checks / 54 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB
@@ -144,19 +147,20 @@ make test
 Two further checks, both also run in CI:
 
 ```sh
-make stack [MODEL=OP57]                   # worst-case stack from GCC's call graph vs 2048 B
-make renode [MODEL=OP57] RENODE=/path/to/renode
+make stack [MODEL=OP104]                  # worst-case stack from GCC's call graph vs 2048 B
+make renode [MODEL=OP104] RENODE=/path/to/renode
 ```
 
 `make renode` runs the built image in the Renode emulator (1.17, portable
 tarball): `test/renode/smoke.py` checks boot, fault-free main loop, SysTick and
 the LED patterns; `test/renode/head_shift.py` checks the exact bit stream the
-head receives and prints the per-line shift cost.
+head receives and prints the per-line shift cost; `test/renode/eeprom.py` runs
+the config store against emulated 16 KB and 256 B EEPROMs.
 
 Also directly:
 
 ```sh
-cc -Wall -Wextra -std=c11 [-DMODEL_OP57] \
+cc -Wall -Wextra -std=c11 [-DMODEL_OP104] \
   -Isrc -o test_protocol test/test_protocol.c src/printer/protocol.c && ./test_protocol
 ```
 

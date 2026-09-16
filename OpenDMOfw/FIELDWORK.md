@@ -1,7 +1,8 @@
 # FIELDWORK — OpenDMOfw (what a board owner needs to measure)
 
-**Status.** The firmware is complete and builds clean for both models
-(`make` → 5XL, `make MODEL=OP57` → 550). Every software-testable layer is done and
+**Status.** The firmware is complete and builds clean
+(`make` → 550, the target board; `make MODEL=OP104` → 4" geometry for a future
+5XL port). Every software-testable layer is done and
 verified on a host.
 
 **This document is deliberately as short as it can be.** Everything that DYMO's
@@ -20,7 +21,7 @@ short, and it is the part that names what cannot be undone.
 
 **Flashing a factory board:** the stock F072 is reported to be at **RDP Level 2**
 (DECISIONS D13). SWD is then off until RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
-printer. A 550 build is `make MODEL=OP57` (PID `0x0028`); the default `make` is 5XL.
+printer. The default `make` is the 550 build (PID `0x0028`).
 
 ---
 
@@ -106,13 +107,12 @@ These retire the remaining protocol entries in DECISIONS D12. Mail the hex to
 
 **Required**
 
-- A genuine **LabelWriter 550 or 5XL**, opened, mainboard exposed.
-  **Read the main MCU's marking before anything else.** This firmware is for an
-  **STM32F072CB**. The USB-only 550 carries one; the FCC photos of the network
-  models (5XL, 550 Turbo) show a much larger (~14 mm, 100-pin-class) ST chip
-  next to the LAN jack instead, and no 48-pin F072 was visible (DECISIONS D24).
-  If your board's print-engine MCU is not an F072CB, stop and report the
-  marking — that report alone is valuable.
+- A genuine **LabelWriter 550**, opened, mainboard exposed. **Not a 5XL or 550
+  Turbo:** those boards carry an **STM32F407VET6** (read on several boards,
+  DECISIONS D25) and this image does not run on them. Read the MCU marking
+  anyway: it should be `STM32F072C8U6` or `STM32F072CBU6` (both work — the
+  image is linked for 64 KB). A board photo with a legible marking is a
+  welcome report on its own.
 - A **multimeter** with a continuity buzzer and DC volts. Fine-tipped probes or
   a pair of sewing needles — LQFP48 pads are 0.5 mm apart.
 - This repo checked out, so you can read `src/pins.h` while measuring.
@@ -285,10 +285,9 @@ damaged in this step.
    needs no probe: hold BOOT0 (pad 44) high with USB attached and look for a
    DFU device `0483:df11` (AN2606: the F072 bootloader offers USB DFU); at RDP2
    nothing appears. Continue on an F072 you are allowed to program.
-2. **Flash** with the head connector and motor disconnected:
-   `make flash` (5XL) or `make MODEL=OP57 flash`.
-3. **Enumeration.** Plug USB into a PC. Expect `0922:002a` (5XL, default) or
-   `0922:0028` (550). On Linux: `lsusb`. Report the exact VID:PID line.
+2. **Flash** with the head connector and motor disconnected: `make flash`.
+3. **Enumeration.** Plug USB into a PC. Expect `0922:0028`. On Linux: `lsusb`.
+   Report the exact VID:PID line.
 4. **Device ID.** The printer class returns the IEEE-1284 string via
    GET_DEVICE_ID; on Windows the hardware ID derives from its MFG+MDL.
    Report whether Windows binds D.mo's own driver package without a prompt. If

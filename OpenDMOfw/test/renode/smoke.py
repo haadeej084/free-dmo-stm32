@@ -21,13 +21,13 @@ Two things Renode does not model are bridged, and only these two:
 (The platform's SysTick reference clock is also set to our 48 MHz SYSCLK.)
 USB is not modelled by Renode at all; test/test_usb.c covers that layer.
 
-Usage:  RENODE=/path/to/renode python3 test/renode/smoke.py [OP104|OP57]
+Usage:  RENODE=/path/to/renode python3 test/renode/smoke.py [OP57|OP104]
 """
 import os, re, struct, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "OP104"
+MODEL = sys.argv[1] if len(sys.argv) > 1 else "OP57"
 ELF = os.path.join(ROOT, "build", MODEL, f"opendmo-{MODEL}.elf")
 RENODE = os.environ.get("RENODE", "renode")
 

@@ -101,11 +101,10 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   first 24 V test; firmware now also writes the off level *before* switching the
   pin to an output, so it never drives the gate through an undefined ODR.
 - **FCC internal photos** (RGDLW550, RGDLW550T, RGDLW5XL) are too low-res for
-  GPIO traces or small-chip markings; the circuit diagram is confidential. They
-  do show that the **network models (5XL, 550 Turbo) carry a ~14 mm,
-  100-pin-class ST MCU** beside the RJ45 jack, with no 48-pin F072 evident —
-  read the MCU marking on a 5XL before assuming this pin map applies
-  (DECISIONS D24). Legible there: head bar `3C56-9638` (550/Turbo), motor
+  GPIO traces or small-chip markings; the circuit diagram is confidential.
+  Sharper community photos settle the MCU: **5XL and 550 Turbo = STM32F407VET6**
+  (+ KSZ8081 Ethernet PHY), **550 = STM32F072 48-pin** (DECISIONS D25). This pin
+  map is for the 550 only. Legible there: head bar `3C56-9638` (550/Turbo), motor
   `LEILI 35BY412-339 6.5Ω` (550 and 5XL), NFC board `LW NFC BOARD REV E` on a
   6-wire cable, button board `LW550 Button RevB`. The MCU is an **STM32F072CB** on both Rev E and Rev K
   photos; the Rev E shot reads as the LQFP48 (`...CBT6`) while the Rev K close-up
@@ -179,13 +178,18 @@ photo. `store.c` still auto-detects, but this board's default path is the
 
 | Component | As marked / seen | Reading | Confidence |
 |-----------|------------------|---------|------------|
-| Main MCU  | **STM32F072CB** (readable from two angles; lot `ARM 114928 B02`, `P49 1850 247`) | 48-pin print-engine MCU — the target part, **confirmed on this board**. Package reads as UFQFPN48 in the close-ups; see the Rev K table above | high (sourced) |
-| Large square BGA, center-left | **"DYMO"** printed on package, green orientation dot | **Network coprocessor SoC** — the built-in "LabelWriter Print Server" (runs the Linux-style TCP/IP/IPP/SNMP/HTTP OS found in the firmware dump). The 5XL / 550-Turbo have built-in LAN; D.mo's docs put that in a coprocessor. **Out of scope** for our USB-only firmware — ignore it. Part number not readable from the photo. | medium-high (inference) |
+| Main MCU (U1) | 48-pin QFN with ST logo, beside the 12 MHz crystal Y1 and a bank of 22 Ω resistors | The STM32F072 print-engine MCU — the target part. Its marking is not legible in these photos; a sharper photo of a 550 Rev E board reads `STM32F072C?U6` (C8 or CB, fifth character unreadable). The image is linked for 64 KB so either works | high (part family), C8/CB open |
 | Small chip, mid-board | `A8` / `1611` (week-11-2016 date code), swoosh logo | Unidentified — likely a power switch / MOSFET or small driver. Verify on hardware. | low |
 | Small chip, lower-left | `310` / `1735` (week-35-2017 date code), same swoosh logo | Unidentified — likely a power switch / MOSFET or the motor driver. Verify on hardware. | low |
 
-**What the photos do NOT give us:** individual GPIO trace routing, the exact
-network-SoC part number, and the two small chips' identities. Those still need a
+**Correction.** Earlier revisions of this table listed a large "DYMO"-marked BGA
+network coprocessor. Neither these photos nor any of the sharper board photos
+found since (550 Rev E; 550 Turbo Rev I; 5XL Rev D and Rev I) show one. The
+network models run LAN on the STM32F407VET6 itself with a KSZ8081 PHY
+(DECISIONS D25); the plain 550 has no network hardware.
+
+**What the photos do NOT give us:** individual GPIO trace routing and the two
+small chips' identities. Those still need a
 board probe (continuity from F072 pads to the head/motor/EEPROM) — see the
 bring-up order below. The photos DO confirm the MCU part and give a reliable
 component-location map for the fieldworker.
@@ -327,8 +331,8 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 
 | Model            | Dots | dpi | Width | Bytes/line | Strobe segments |
 |------------------|------|-----|-------|------------|-----------------|
-| **OP104** (default) | 1248 | 300 | 105.7 mm | 156     | 2 (two 624-dot halves) |
-| OP57 (`MODEL=OP57`) | 672 | 300 | 56.9 mm  | 84      | 2 (two 336-dot halves) |
+| **OP57** (default)  | 672 | 300 | 56.9 mm  | 84      | 2 (two 336-dot halves) |
+| OP104 (`MODEL=OP104`, F407 port geometry) | 1248 | 300 | 105.7 mm | 156     | 2 (two 624-dot halves) |
 
 - Both heads are two-half KF3002-family modules (sibling datasheet
   KF3002-GL50A); the halves are fired sequentially to split peak current.
@@ -350,7 +354,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 
 1. **Writable F072 only** (stock chips are reported to be RDP2). Head connector disconnected.
    Flash, confirm the MCU boots and enumerates as a USB printer (`lsusb` shows
-   `0922:002a` for 5XL / `0922:0028` for 550, `make MODEL=OP57`).
+   `0922:0028`).
 2. Scope the CLK/DI1/DI2/LAT/STB lines during a test print job; confirm the
    mapping in `pins.h` is right (and the STB polarity). Correct as needed.
 3. Check the **thermistor divider direction** (`THERMAL_HOTTER_IS_HIGHER` in

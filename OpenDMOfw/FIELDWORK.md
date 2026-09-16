@@ -286,6 +286,9 @@ damaged in this step.
    DFU device `0483:df11` (AN2606: the F072 bootloader offers USB DFU); at RDP2
    nothing appears. Continue on an F072 you are allowed to program.
 2. **Flash** with the head connector and motor disconnected: `make flash`.
+   This is the only time you need SWD: every later image can go in over USB
+   with `python tools/opsend.py dfu` followed by `dfu-util` (BUILD.md, "Updating
+   over USB"). That matters for the fast route in 7b, where you rebuild often.
 3. **Enumeration.** Plug USB into a PC. Expect `0922:0028`. On Linux: `lsusb`.
    Report the exact VID:PID line.
 4. **Device ID.** The printer class returns the IEEE-1284 string via

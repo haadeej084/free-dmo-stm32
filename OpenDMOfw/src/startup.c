@@ -2,10 +2,26 @@
  * Copies .data, zeroes .bss, calls SystemInit + main. */
 #include <stdint.h>
 #include "mcu.h"
+#include "system.h"   /* BOOT_MAGIC */
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
 extern int main(void);
 void SystemInit(void);
+
+/* USB DFU entry. sys_enter_bootloader() (system.c) stores BOOT_MAGIC here and
+ * resets; .noinit is neither copied nor zeroed, so the value survives the
+ * system reset, and Reset_Handler hands over to ST's boot loader before it
+ * touches anything else - in particular before the independent watchdog is
+ * started, which once running could not be stopped and would reset the part
+ * out of the boot loader after ~4 s. Clearing the magic first means a boot
+ * loader "leave" (dfu-util :leave) returns to this application normally. */
+__attribute__((section(".noinit"))) uint32_t g_boot_request;
+
+__attribute__((naked, noreturn)) static void jump_with_msp(uint32_t sp, uint32_t pc)
+{
+    __asm volatile("msr msp, r0" ::: "memory");
+    __asm volatile("bx r1" ::: "memory");
+}
 
 /* Handlers - weak defaults; the real ones are in usb_core.c (USB) and
  * system.c (SysTick). TIM3 free-runs as the delay_us time base and raises no
@@ -16,6 +32,15 @@ void SysTick_Handler(void) __attribute__((weak, alias("Default_Handler")));
 
 void Reset_Handler(void)
 {
+    if (g_boot_request == BOOT_MAGIC) {
+        g_boot_request = 0;
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+        SYSCFG->CFGR1 = (SYSCFG->CFGR1 & ~SYSCFG_CFGR1_MEM_MODE_Msk)
+                      | SYSCFG_CFGR1_MEM_MODE_SYSMEM;
+        jump_with_msp(((const uint32_t *)SYSMEM_BASE)[0],
+                      ((const uint32_t *)SYSMEM_BASE)[1]);
+    }
+
     uint32_t *src = &_sidata, *dst = &_sdata;
     while (dst < &_edata) *dst++ = *src++;
     for (dst = &_sbss; dst < &_ebss; ) *dst++ = 0;

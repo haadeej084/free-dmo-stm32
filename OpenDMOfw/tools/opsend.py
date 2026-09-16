@@ -23,6 +23,7 @@ Examples:
   python opsend.py vh off                 # lock out the 24 V heat rail
   python opsend.py diag 6                 # scan every ADC channel + port levels
   python opsend.py diag 7 1 4 20          # toggle PB4 twenty times
+  python opsend.py dfu                    # reboot into USB DFU for dfu-util
 """
 import argparse, sys, time
 
@@ -245,6 +246,7 @@ def main():
                    help="0x01,0x02: count | 0x07: port(0=A,1=B,2=C) pin count | 0x08: 0|1")
     p = sub.add_parser("vh");        p.add_argument("state", choices=["on", "off"],
                                                     help="off = lock out the 24 V heat rail")
+    sub.add_parser("dfu", help="reboot into ST's USB DFU boot loader (0483:df11) for dfu-util")
     a = ap.parse_args()
 
     pid, dots, bpl = MODELS[a.model]
@@ -278,6 +280,12 @@ def main():
         send(dev, cmd_diag(0x08, [1 if a.state == "off" else 0]))
         time.sleep(0.2)
         print("vh:", parse_diag(read_diag(dev)))
+    elif a.cmd == "dfu":
+        send(dev, cmd_diag(0x09, [ord("D"), ord("F"), ord("U")]))
+        time.sleep(0.05)
+        r = parse_diag(read_diag(dev))
+        print("dfu:", r)
+        print("now: dfu-util -a 0 -s 0x08000000:leave -D build/OP57/opendmo-OP57.bin")
     elif a.cmd in ("testpattern", "image"):
         if a.cmd == "image":
             lines, dots2, data = image_to_raster(a.path, dots)

@@ -69,6 +69,16 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* Survives a system reset: neither copied from flash nor zeroed. Holds the
+     USB DFU request flag (startup.c). */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+  } >RAM
+
   ._user_heap_stack :
   {
     . = ALIGN(8);

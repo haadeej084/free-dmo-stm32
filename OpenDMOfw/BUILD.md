@@ -75,6 +75,23 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 > image fits both the F072C8 and the F072CB, and the one legible 550 marking
 > does not say which is fitted).
 
+## Updating over USB after the first flash (DFU)
+
+The first image has to go in over SWD. After that, no probe is needed:
+
+```sh
+python tools/opsend.py dfu                                   # printer reboots as 0483:df11
+dfu-util -a 0 -s 0x08000000:leave -D build/OP57/opendmo-OP57.bin
+```
+
+`GS D 0x09 'D' 'F' 'U'` sets a flag in `.noinit` RAM and resets; the reset
+handler sees the flag before anything else runs and jumps to ST's boot loader
+at `0x1FFFC800` (AN2606). The boot loader clocks USB from HSI48 + CRS, so it
+works without the crystal. `:leave` jumps back to the new image when done.
+On Windows, `dfu-util` needs the WinUSB driver for `0483:df11` (Zadig), or use
+STM32CubeProgrammer. At RDP Level 1 the boot loader refuses to read or write
+flash until a mass erase; at RDP 0 (a chip you flashed yourself) it just works.
+
 ## Testing enumeration (no head connected)
 
 After flashing, with only USB connected:
@@ -134,12 +151,17 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (121 checks / 54 scenarios). This is the regression test: it links and runs
+  (126 checks / 55 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB
   peripheral, with a scripted host: enumeration, descriptors, bulk transfers,
   printer-class requests, HALT/STALL handling (91 checks per model).
+- `test/test_e2e.c` — the USB stack, printer class and protocol parser together
+  against the same peripheral model: a 120-line job pushed as 64-byte bulk
+  packets with the main loop running only on NAK (the ring buffer fills and
+  pauses the endpoint), status/SKU/version replies through bulk IN, SOFT_RESET
+  mid-raster, and a refused firmware update (26 checks per model).
 - `test/test_protocol_wire.py` — a hand transcription of the reply generators,
   checked against the live capture and the decompiled driver structs. It does
   **not** execute the C; keep it in sync when `protocol.c` changes.
@@ -155,7 +177,8 @@ make renode [MODEL=OP104] RENODE=/path/to/renode
 tarball): `test/renode/smoke.py` checks boot, fault-free main loop, SysTick and
 the LED patterns; `test/renode/head_shift.py` checks the exact bit stream the
 head receives and prints the per-line shift cost; `test/renode/eeprom.py` runs
-the config store against emulated 16 KB and 256 B EEPROMs.
+the config store against emulated 16 KB and 256 B EEPROMs; `test/renode/dfu.py`
+checks the USB DFU request and the hand-over to the boot loader.
 
 Also directly:
 

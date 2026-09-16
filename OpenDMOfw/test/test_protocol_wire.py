@@ -93,56 +93,47 @@ def firmware_version(pid, hw=b"LW5XL-REV.K", fw=b"FWAP000100010921"):
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: send_sku_record()
 # ---------------------------------------------------------------------------
-def crc16_ccitt(data):
-    crc = 0xFFFF
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) if (crc & 0x8000) else (crc << 1)
-            crc &= 0xFFFF
-    return crc
+import zlib
 
-def dots_to_mm(dots, dpi=300):
-    """Transcription of protocol.c :: dots_to_mm() - 25.4 mm/inch, rounded."""
-    den = dpi * 10
-    return (dots * 254 + den // 2) // den
+def dots_to_tenth_mm(dots, dpi=300):
+    """protocol.c :: dots_to_tenth_mm - 254 tenths per inch, rounded."""
+    return (dots * 254 + dpi // 2) // dpi
+
+LABEL_GAP_TENTH_MM = 42
 
 # Defaults = the OP104 default paper (0x0867, 1233 x 1883 dots = S0904980 4x6").
-def firmware_sku_record(sku, label_count, w_mm=None, h_mm=None,
-                        head_dots=1248, dpi=300):
-    if w_mm is None:
-        w_mm = dots_to_mm(1233, dpi)
-    if h_mm is None:
-        h_mm = dots_to_mm(1883, dpi)
+def firmware_sku_record(sku, label_count, w_tmm=None, h_tmm=None,
+                        head_dots=1248, dpi=300, model_default_count=220):
+    if w_tmm is None:
+        w_tmm = dots_to_tenth_mm(1233, dpi)
+    if h_tmm is None:
+        h_tmm = dots_to_tenth_mm(1883, dpi)
     r = bytearray(63)
     r[0] = 0xB6; r[1] = 0xCA          # magic 0xCAB6 LE
     r[2] = 0                          # version
-    slen = 0
-    while slen < 12 and slen < len(sku) and sku[slen]:
-        slen += 1
-    r[3] = slen
+    r[3] = 0x3C                       # payload length, constant on 37/37 tags
     for i in range(12):
         if i < len(sku):
             r[8 + i] = sku[i]
-    r[20] = 0x00; r[21] = 0xFF; r[22] = 0x03; r[23] = 0x01
+    r[20] = 0x00; r[21] = 0xFF; r[22] = 0x04; r[23] = 0x01
     r[24] = 0x01; r[25] = 0x00; r[26] = 0x00
-    pitch_mm = h_mm + 3
-    r[28:30] = (pitch_mm & 0xFFFF).to_bytes(2, "little")
-    r[30] = 2; r[31] = 0
-    r[32] = 2; r[33] = 0
-    r[38] = 1; r[39] = 0
-    r[40:42] = (h_mm & 0xFFFF).to_bytes(2, "little")
-    r[42:44] = (w_mm & 0xFFFF).to_bytes(2, "little")
-    r[44] = 2; r[45] = 0; r[46] = 2; r[47] = 0
-    liner = dots_to_mm(head_dots, dpi) & 0xFFFF
-    r[48:50] = liner.to_bytes(2, "little")
-    r[50:52] = (label_count & 0xFFFF).to_bytes(2, "little")
-    total_mm = min(pitch_mm * label_count, 0xFFFF)
-    r[52:54] = total_mm.to_bytes(2, "little")
-    r[56] = 0x00
-    r[60] = 15; r[61] = 26; r[62] = 0x12
-    crc = crc16_ccitt(bytes(r[8:63]))
-    r[4:6] = (crc & 0xFFFF).to_bytes(2, "little")
+    pitch_tmm = h_tmm + LABEL_GAP_TENTH_MM
+    r[28:30] = (pitch_tmm & 0xFFFF).to_bytes(2, "little")
+    r[30] = 30; r[31] = 0             # marker1 width 3.0 mm (35/37)
+    r[32] = 38; r[33] = 0             # marker1 to label start (S0904980)
+    r[38] = 16; r[39] = 0             # vertical offset 1.6 mm (23/37)
+    r[40:42] = (h_tmm & 0xFFFF).to_bytes(2, "little")
+    r[42:44] = (w_tmm & 0xFFFF).to_bytes(2, "little")
+    # 44-47 printable-area offsets stay zero (37/37)
+    r[48:50] = (dots_to_tenth_mm(head_dots, dpi) & 0xFFFF).to_bytes(2, "little")
+    total = max(model_default_count, label_count)
+    r[50:52] = (total & 0xFFFF).to_bytes(2, "little")
+    r[52:54] = min(pitch_tmm * total // 20, 0xFFFF).to_bytes(2, "little")
+    r[54:56] = ((total // 10) & 0xFFFF).to_bytes(2, "little")
+    r[56] = 0x01                      # counter strategy (37/37)
+    # 57-62 stay zero: genuine tags carry nothing past byte 59
+    crc = zlib.crc32(bytes(r[0:60])) & 0xFFFFFFFF    # 4-7 are still zero here
+    r[4:8] = crc.to_bytes(4, "little")
     return bytes(r)
 
 # ---------------------------------------------------------------------------
@@ -180,24 +171,29 @@ for pid, name, hw in [(0x002A, "5XL", b"LW5XL-REV.K"), (0x0028, "550", b"LW550-R
     check(v[0:len(hw)] == hw and len(v[0:16]) == 16, f"{name}: HwVer field is the per-model string")
     check(len(v[16:32]) == 16, f"{name}: FwVer field is 16 bytes")
 
-print("\n== SKU RECORD (ESC U) well-formedness ==")
+print("\n== SKU RECORD (ESC U) vs 37 genuine roll-tag dumps ==")
 u = firmware_sku_record(b"S0904980", 220)
 check(len(u) == 63, "SKU record is exactly 63 bytes")
 check(u[0] == 0xB6 and u[1] == 0xCA, "magic 0xCAB6 (LE) at [0-1]")
-check(u[3] == len(b"S0904980"), "SKU length field at [3]")
+check(u[3] == 0x3C, "byte 3 is the constant payload length 0x3C, not the SKU length")
 check(u[8:8+8] == b"S0904980", "SKU bytes at [8..]")
-# CRC must be reproducible (self-consistent) over the payload range.
-crc = crc16_ccitt(bytes(u[8:63]))
-check(u[4:6] == (crc & 0xFFFF).to_bytes(2, "little"), "CRC16-CCITT at [4-5] matches payload")
-# Geometry must use 25.4 mm/inch, not a flat 25 (which reported everything ~1.6 % short).
-check(dots_to_mm(1248) == 106 and dots_to_mm(672) == 57,
-      "head width in mm: 1248 dots -> 106, 672 dots -> 57 (25.4 mm/inch)")
-check(dots_to_mm(1233) == 104 and dots_to_mm(1883) == 159,
-      "S0904980 (1233x1883 dots) -> 104x159 mm, matching model.h")
-check(int.from_bytes(u[42:44], "little") == 104 and
-      int.from_bytes(u[40:42], "little") == 159,
-      "SKU record carries 104 mm width at [42-43] and 159 mm length at [40-41]")
-check(int.from_bytes(u[48:50], "little") == 106, "liner width at [48-49] = 106 mm")
+_z = bytearray(u[0:60]); _z[4:8] = b"\x00\x00\x00\x00"
+check(u[4:8] == (zlib.crc32(bytes(_z)) & 0xFFFFFFFF).to_bytes(4, "little"),
+      "CRC-32 (zlib) at [4-7] over bytes 0-59 with 4-7 zeroed")
+check(u[22] == 0x04, "material byte is one real tags use, not the manual's 0x03")
+check(u[44:48] == b"\x00\x00\x00\x00", "printable-area offsets [44-47] zero (37/37)")
+check(u[56] == 0x01, "counter strategy [56] = 0x01 (37/37), not the manual's 0x00")
+check(u[60:63] == b"\x00\x00\x00", "[60-62] zero - genuine tags stop at byte 59")
+check(dots_to_tenth_mm(1233) == 1044 and dots_to_tenth_mm(1883) == 1594,
+      "S0904980 1233x1883 dots -> 1044 x 1594 tenths = 104.4 x 159.4 mm")
+check(int.from_bytes(u[42:44], "little") == 1044 and
+      int.from_bytes(u[40:42], "little") == 1594,
+      "record carries the label as 1044 x 1594 tenths of a mm")
+check(dots_to_tenth_mm(1248) == 1057 and dots_to_tenth_mm(672) == 569,
+      "liner width: 1248 dots -> 1057 tenths, 672 -> 569")
+check(int.from_bytes(u[54:56], "little") == 22, "counter margin [54-55] = count/10")
+check(int.from_bytes(u[52:54], "little") == (1594 + 42) * 220 // 20,
+      "total media length [52-53] is in 2 mm units")
 
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: diagnose()  (GS D backdoor)

@@ -134,7 +134,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **99 checks / 46 scenarios, both models**. Note that
+  compiled + run natively; **111 checks / 49 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -151,9 +151,10 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
 - **Command set** per tech ref p.11–20: `ESC s/L/h/i/T/n/D/G/E/Q/A/C/e/U/V/$/o/q/@/W`,
   plus `ESC M` (media type, 8 bytes — always sent by the driver; an `S_SKIP` state
   consumes it so a non-zero payload can't desync the parser).
-- **Byte order:** two-byte args (`ESC L/n/o`) are **u16 LE**; the `ESC D` header is
-  BPP, Align, then Width=lines (u32 LE) and Height=dots (u32 LE); the driver sends
-  `BPP=1, Align=0x80`. Status/JobID/Index/Count in the reply are LE.
+- **Byte order:** `ESC n` is **u16 LE**, `ESC o` is a single byte, and **`ESC L`
+  is u16 BIG-endian** (D22). The `ESC D` header is BPP, Align, then Width=lines
+  (u32 LE) and Height=dots (u32 LE); the driver sends `BPP=1, Align=2`.
+  Status/JobID/Index/Count in the reply are LE.
 - **`ESC @`** = "restart print engine" → implemented as a full **pipeline reset**
   (not an MCU reboot), so the host recovers without losing USB configuration.
 - **`ESC o`** = set label count (`ESC o <count u16 LE>`): writes the remaining-label
@@ -170,12 +171,9 @@ LabelWriter 550 Series Technical Reference Manual and the decompiled stock drive
 A research pass over DYMO's own published manuals (D21) moved several entries
 out of this list. What is left:
 
-- **ESC U CRC:** the 63-byte record carries a CRC16-CCITT over bytes 8–62,
-  stored LE at bytes 4–5. The tech ref's own row is self-contradictory
-  ("Byte 7…Byte 4 / b15…b0 / CRC" — four bytes, sixteen bits), so both the
-  position and the polynomial/init are assumptions. **One captured `ESC U` reply
-  from any genuine printer with a real roll settles all of it** — no teardown,
-  just a USB cable (FIELDWORK section 1).
+- ~~**ESC U CRC**~~ — **RESOLVED** (D22). It is CRC-32/ISO-HDLC over bytes 0–59
+  with 4–7 zeroed, stored LE at 4–7, reproduced on 37/37 genuine roll tags. The
+  manual's contradictory row was right about the span and wrong about the width.
 - **ESC V version *values*:** the *format* is now fully sourced (p.20: `FWAP`,
   major, minor, `MMYY`, four chars each) and implemented. Only the numbers we
   put in those fields are ours. Same one-command capture settles them.
@@ -431,3 +429,64 @@ printing" (p.7).
 carries only reference designators, the FCC circuit diagram is confidential, and
 the stock MCU is RDP2 so its flash cannot be read back. That is the irreducible
 core of FIELDWORK.
+
+## D22 — Second research pass: the genuine roll tags were in our own repository
+
+A ten-line research sweep over public sources produced 65 findings that survived
+adversarial verification. The largest single result was not on the web at all:
+**the root of this repository already embeds 37 dumps of genuine DYMO 550-series
+roll tags** (`Src/main.c`, the Bluepill tag emulator this project forked), and
+the ESC U consumable record sits at tag offset 12 in every one of them.
+
+Checking our generated record against all 37 — arithmetic run locally, not taken
+on trust — settled the project's biggest open assumption and corrected five
+things the manual states differently from what real tags carry:
+
+| Field | Was | Is, on 37/37 genuine tags |
+|---|---|---|
+| Bytes 4–7 | CRC16-CCITT at 4–5, 6–7 "reserved" | **CRC-32/ISO-HDLC over bytes 0–59 with 4–7 zeroed, LE** |
+| Byte 3 | SKU character count | Constant `0x3C` = the 60-byte payload length |
+| All geometry | whole millimetres | **tenths of a millimetre** (30256 = 1016 × 587 = exactly 4″ × 2.3125″) |
+| Bytes 52–53 | pitch × count, in mm | total media length in **2 mm units** (30270: 45720 × 2 mm = 300 ft exactly) |
+| Byte 56 | `0x00` per the manual | `0x01` |
+| Bytes 44–47, 60–62 | `2,0,2,0` and a fake production date | zero |
+| Byte 22 (material) | `0x03` "paper" per the manual | `0x03` appears on none of the 37; we send `0x04`, S0904980's own value |
+
+**`ESC L` is big-endian.** Independently confirmed three ways: DYMO's own
+open-source CUPS driver writes `(v>>8)` then `v&0xff` and pins it with a unit
+test; Microsoft's GPD documentation makes `<1B>L<0867>` emit bytes `08 67` in
+that order; and read big-endian, 12 of the 14 non-sentinel entries in our own
+LW5XX.GPD-derived paper table are exactly `height_dots + 300`, where byte-swapped
+they are noise. Our little-endian parse made every `ESC L` fall into the raw-length
+branch, so every `ESC G` afterwards hit the 4000-dot feed clamp — roughly 34 cm of
+blank stock per label.
+
+**`ESC c/d/e/g` are a genuine zero-argument density family** (Light 75 %, Medium
+87.5 %, Normal 100 %, Dark 112.5 %; LW450 tech ref p.19, emitted by the CUPS
+driver per job). `ESC d` had been repurposed as our feed backdoor, so a host
+sending `ESC d` followed by `ESC L` would have had the `0x1B` swallowed as a feed
+count. The feed now lives on `GS D 0x02` and the documented `ESC f 1 n`.
+
+Silicon errata (ES0223) that actually applied:
+
+- **2.4.3 — ADEN cannot be set immediately after calibration.** Our
+  `thermal_init()` set ADEN a handful of core cycles after ADCAL cleared, inside
+  the erratum's four-ADC-clock window, on an unbounded poll that ran *after*
+  the watchdog was already started. The failure mode was a silent boot loop.
+  Now: a delay, a bounded retry loop that re-asserts ADEN, and watchdog kicks.
+- **2.4.1 — no two calibrations without an intervening disable.** `thermal_init()`
+  is now idempotent, so the rule is structural rather than a convention.
+- **2.11.12 — I2C stall after the first byte.** We are safe only by arithmetic
+  (APB:I2C-kernel ratio 6, outside the forbidden 1.5–3 band). Recorded as a
+  constraint so nobody lowers SYSCLK for power and silently corrupts EEPROM writes.
+
+And from RM0091: **DTOG must be initialised when a non-control endpoint is
+enabled** — we were leaving the data toggle wherever the previous session left
+it across a re-configuration, while the host restarts from DATA0.
+
+Corrections to our own USB identity, from a published descriptor dump of a
+genuine 0922:0028: `iProduct` carries the vendor prefix, "DYMO LabelWriter 550".
+
+The feed motor is a **LEILI 35BY412-339** two-phase bipolar PM stepper (~35 mm
+can, ~6.5 Ω/phase), which independently validates `MOTOR_DRIVE_4PHASE` — a
+4-lead bipolar motor is exactly two H-bridges driven IN1–IN4.

@@ -51,12 +51,15 @@ static const uint8_t str_lang[4]  = { 4, 3, 0x09, 0x04 };  /* 0x0409 en-US */
 #define USTR(name, ...) static const uint8_t name[] = { sizeof((uint8_t[]){__VA_ARGS__})+2, 3, __VA_ARGS__ }
 /* "DYMO" */
 USTR(str_mfg, 'D',0,'Y',0,'M',0,'O',0);
-/* Product string per model: "LabelWriter 5XL" or "LabelWriter 550". */
+/* Product string per model. The genuine device carries the vendor prefix:
+ * a published lsusb of 0922:0028 reports iProduct = "DYMO LabelWriter 550". */
 #if defined(MODEL_OP57)
-USTR(str_prod, 'L',0,'a',0,'b',0,'e',0,'l',0,'W',0,'r',0,'i',0,'t',0,'e',0,'r',0,
+USTR(str_prod, 'D',0,'Y',0,'M',0,'O',0,' ',0,
+     'L',0,'a',0,'b',0,'e',0,'l',0,'W',0,'r',0,'i',0,'t',0,'e',0,'r',0,
      ' ',0,'5',0,'5',0,'0',0);
 #else
-USTR(str_prod, 'L',0,'a',0,'b',0,'e',0,'l',0,'W',0,'r',0,'i',0,'t',0,'e',0,'r',0,
+USTR(str_prod, 'D',0,'Y',0,'M',0,'O',0,' ',0,
+     'L',0,'a',0,'b',0,'e',0,'l',0,'W',0,'r',0,'i',0,'t',0,'e',0,'r',0,
      ' ',0,'5',0,'X',0,'L',0);
 #endif
 

@@ -59,14 +59,38 @@ static int      s_over_temp;                /* latched: set at 70 C, cleared at 
 
 void thermal_init(void)
 {
+    /* ES0223 2.4.1 "ADC calibration must not be performed twice without an
+     * intervening ADC disable": make this structurally impossible rather than
+     * a convention, so a future re-init path cannot wedge the ADCAL loop. */
+    static int s_inited;
+
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
     gpio_mode(((pin_t){GPIOA, 1}), GPIO_ANALOG);   /* PA1 = ADC_IN1 */
 
-    /* F0 ADC: calibrate while ADEN=0, then enable (RM0091). */
-    ADC1->CR |= ADC_CR_ADCAL;
-    while (ADC1->CR & ADC_CR_ADCAL) {}
-    ADC1->CR |= ADC_CR_ADEN;
-    while (!(ADC1->ISR & ADC_ISR_ADRDY)) {}
+    if (!s_inited) {
+        /* F0 ADC: calibrate while ADEN=0, then enable (RM0091). Every wait is
+         * bounded and kicks the watchdog - an unbounded poll here would turn a
+         * dead ADC into a silent boot loop, since wdt_init() runs first. */
+        uint32_t g = 100000;
+        ADC1->CR |= ADC_CR_ADCAL;
+        while ((ADC1->CR & ADC_CR_ADCAL) && --g) { wdt_kick(); }
+
+        /* ES0223 2.4.3 "ADEN bit cannot be set immediately after the ADC
+         * calibration": ST requires a gap of at least four ADC clock cycles
+         * between clearing ADCAL and setting ADEN. At 48 MHz the few core
+         * cycles between the two statements are shorter than four cycles of
+         * the 14 MHz ADC clock, so we land inside the erratum window without
+         * this delay. ST's workaround is also to re-assert ADEN until ADRDY
+         * comes up, which the loop below does. */
+        delay_us(1);
+        g = 100000;
+        do {
+            ADC1->CR |= ADC_CR_ADEN;
+            wdt_kick();
+        } while (!(ADC1->ISR & ADC_ISR_ADRDY) && --g);
+        s_inited = 1;
+    }
+
     ADC1->CHSELR = (1u << ADC_HEAD_TEMP_CH);
     ADC1->SMPR   = 7;                              /* longest sample time */
     s_have_raw = 0;

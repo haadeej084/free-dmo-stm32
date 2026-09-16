@@ -143,7 +143,7 @@ NRST before trusting your numbering.
 | Head STB1  | PB0 | 18 | same (active-low heat strobe, half 1) |
 | Head STB2  | PB1 | 19 | same (half 2) |
 | Head STB3/4 | PB2 / PB3 | 20 / 39 | only if the head has more than 2 heat lines |
-| Motor A1/STEP | PB4 | 40 | which motor-driver input does pad 40 reach? |
+| Motor A1/STEP | PB4 | 40 | which motor-driver input does pad 40 reach? (motor = LEILI 35BY412-339, 2-phase bipolar, so expect two H-bridges) |
 | Motor A2/DIR  | PB5 | 41 | same |
 | Motor B1   | PB6 | 42 | same |
 | Motor B2   | PB7 | 43 | same |
@@ -512,7 +512,11 @@ irreducible list that genuinely needs the board in front of you.
 ### 1. GPIO routing — *the whole job*
 Section 3. Nothing below can be interpreted before this is done.
 
-### 2. Motor drive and µsteps per line — *unknown, needs counting*
+### 2. Motor µsteps per line — *the motor is now identified; the gearing is not*
+The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
+~35 mm can, ~6.5 Ω/phase. That confirms the 4-phase drive mode the firmware
+defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
+is the drive train between motor and platen.
 Assumed a small dual-H-bridge (TB6612/MP6500 class) or a discrete bridge on 24 V,
 driven **IN1–IN4 directly** (`MOTOR_DRIVE_4PHASE`), `MOTOR_STEPS_PER_LINE = 1`.
 **How:** identify the IC first (report the marking). Then scope the phase pins
@@ -598,6 +602,11 @@ DECISIONS D14) — it only drives the LED — so a wrong result here cannot stop
 printing.
 
 ### 5. VH enable pin and polarity — *unknown, and strobes do nothing without it*
+**Check the external pull first.** The MCU's pins are floating inputs during and
+after reset, so only a board-side resistor can hold the load-switch gate off
+while the MCU is unpowered, in reset, or being flashed. If there is no such
+pull, that is a finding worth reporting on its own — it means the rail's state
+at power-on is undefined.
 Assumed PA8, active-low P-MOS gate.
 **How:** find the 24 V load switch near the head connector, trace its gate to an
 F072 pad. Confirm polarity by measuring VH at the head connector while the

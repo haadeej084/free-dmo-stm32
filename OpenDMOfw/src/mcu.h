@@ -93,8 +93,11 @@ typedef struct { __IO uint32_t KR, PR, RLR, SR, WINR; } IWDG_Type;
 /* ---- CRS (auto-trim HSI48 on USB SOF) ----------------------------------- */
 typedef struct { __IO uint32_t CR, CFGR, ISR, ICR; } CRS_Type;
 #define CRS ((CRS_Type*)0x40006C00u)
-#define CRS_CR_AUTOTRIMEN (1u<<5)
-#define CRS_CR_CEN        (1u<<6)
+/* RM0091 CRS_CR: bit 5 = CEN, bit 6 = AUTOTRIMEN. These were swapped here.
+ * Invisible today because system.c ORs both in one write, but any future code
+ * touching one alone would have hit the wrong bit. */
+#define CRS_CR_CEN        (1u<<5)
+#define CRS_CR_AUTOTRIMEN (1u<<6)
 #define CRS_CFGR_SYNCSRC_Msk (3u<<28)
 #define CRS_CFGR_SYNCSRC_USB (2u<<28)   /* USB SOF (RM0091) */
 

@@ -37,23 +37,23 @@ the driver GPDs' `MaxPrintableWidth`.
 
 ## Data commands (bulk OUT)
 
-Multi-byte fields are little-endian unless noted. `n` = 1 byte, `n1 n2` = u16 LE,
-`n1..n4` = u32 LE.
+Multi-byte fields are little-endian unless noted — **`ESC L` is the exception and
+is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 
 | Bytes | Name | Meaning | Source |
 |-------|------|---------|--------|
 | `1B 73` + JobID(u32) | **ESC s** | Start of print job (mandatory; ID echoed in status) | tech ref p.11 |
-| `1B 4C` + len(u16) | **ESC L** | "Sets the print engine mode between normal label stock and continuous label stock" (tech ref p.11 — it gives no parameter table). We take a u16: `0` = die-cut (roll sets the pitch, clears any override), a plain dot length is used as the feed pitch. The u16 width comes from the driver GPD literal `<1B>L<0867>` | tech ref p.11; driver GPD |
+| `1B 4C` + len(**u16 BE**) | **ESC L** | "Sets the print engine mode between normal label stock and continuous label stock" (tech ref p.11 — it gives no parameter table). We take a u16 **MSB-first**: `0` = die-cut (roll sets the pitch, clears any override), a plain dot length is the feed pitch. Three independent sources for the byte order: DYMO's own CUPS driver writes `(v>>8)` then `v&0xff` and pins it in a unit test; Microsoft's GPD rule makes `<1B>L<0867>` emit bytes `08 67` in that order; and read big-endian, 12 of 14 LW5XX.GPD entries are exactly `height_dots + 300` where byte-swapped they are noise | CUPS driver `SendLabelLength`; GPD; LW5XX.GPD |
 | `1B 68` / `1B 69` | **ESC h / i** | Text / graphics output mode | tech ref p.11 |
 | `1B 74` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high | tech ref p.11 |
 | `1B 6E` + idx(u16) | **ESC n** | Set label index (echoed in status) | tech ref p.12 |
-| `1B 44` + BPP Align W(u32) H(u32) + data | **ESC D** | Start of label print data: **W = number of lines**, **H = number of dots**; then `W × ⌈H·BPP/8⌉` bytes. Driver sends `BPP=1, Align=0x80`. MSB of the first byte = leftmost dot | tech ref p.12; decompiled driver |
+| `1B 44` + BPP Align W(u32) H(u32) + data | **ESC D** | Start of label print data: **W = number of lines**, **H = number of dots**; then `W × ⌈H·BPP/8⌉` bytes. Driver sends `BPP=1, Align=2` (2 = bottom, the only value the manual documents, and what genuine driver captures carry). MSB of the first byte = leftmost dot | tech ref p.12 |
 | `1B 47` | **ESC G** | Feed to print head (short form feed, between labels) | tech ref p.13 |
 | `1B 45` | **ESC E** | Feed to tear position (long form feed) | tech ref p.13 |
 | `1B 51` | **ESC Q** | End of print job (releases the lock) | tech ref p.13 |
 | `1B 41` + lock | **ESC A** | Request status → 32-byte struct on bulk-IN. Lock: 0 read, 1 lock, 2 no-lock-multiple | tech ref p.13 |
 | `1B 43` + duty | **ESC C** | Print density, `0–200` % (0 = off); echoed in status byte 9 | tech ref p.16; capture byte9=0x64 |
-| `1B 65` | **ESC e** | Reset print density to default (100 %) — the driver's "Normal" | tech ref p.16; decompiled driver |
+| `1B 63` / `1B 64` / `1B 65` / `1B 67` | **ESC c / d / e / g** | Zero-argument print-density presets: Light 75 %, Medium 87.5 %, Normal 100 %, Dark 112.5 %. The CUPS driver emits one of these per job for the PPD's darkness choice. **`ESC d` was previously our feed backdoor** — a collision that would have eaten the next command's `ESC`; the feed now lives on `GS D 0x02` and `ESC f 1 n` | LW450 tech ref p.19; CUPS driver `SetPrintDensity` |
 | `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes); always sent by the driver, consumed + ignored | decompiled driver |
 | `1B 55` | **ESC U** | Get SKU info → 63-byte consumable record (below) | tech ref p.16 |
 | `1B 56` | **ESC V** | Get version → 34-byte reply (below) | tech ref p.20 |
@@ -100,45 +100,44 @@ Layout per tech ref p.13–16; values cross-checked against a live capture
 
 ### ESC U — 63-byte consumable record
 
-Sent on `ESC U`. The geometry is in **mm**, derived from the configured paper's
-dot dimensions at the model DPI (25.4 mm/inch, rounded to nearest — see
-`protocol.c::dots_to_mm`). The CRC covers bytes 8–62 (the SKU + geometry)
-and is stored little-endian at bytes 4–5; the magic/version/length are *not*
-covered. See `protocol.c::send_sku_record`.
+This layout is no longer read off the manual alone. **The root of this very
+repository embeds 37 dumps of genuine DYMO 550-series roll tags**
+(`Src/main.c`, the Bluepill tag emulator), and the consumable record sits at
+tag offset 12 in every one. Checking each field against all 37 settled what the
+manual leaves ambiguous — and corrected several things it states outright.
+
+Geometry is in **tenths of a millimetre**, not millimetres: SKU 30256 carries
+`1016 × 587`, i.e. exactly 4″ × 2.3125″. See `protocol.c::send_sku_record`.
 
 | Byte | Field | Value / meaning |
 |------|-------|-----------------|
 | 0–1 | Magic | `0xCAB6` (LE: `B6 CA`) |
 | 2 | Version | `0` |
-| 3 | SKU length | number of chars in the SKU |
-| 4–5 | CRC16-CCITT (LE) | over bytes 8–62 — **assumption** (D12). The manual's own row reads "Byte 7…Byte 4 / b15…b0 / CRC", which is self-contradictory (four bytes, sixteen bits); every other row of that table is consistent, so the likely reading is CRC at 4–5 with 6–7 reserved. A single captured `ESC U` reply from a genuine printer with a real roll would settle it — see FIELDWORK section 1 |
-| 6–7 | Reserved | 0 |
+| 3 | **Payload length** | `0x3C` = 60, **constant on 37/37** regardless of SKU length. An 8-byte header plus 60 payload bytes; the next record's magic begins at offset 68 on every tag. The manual's "Length" row invites reading this as the SKU length — it is not |
+| 4–7 | **CRC-32 (LE)** | CRC-32/ISO-HDLC (zlib: poly `0x04C11DB7` reflected, init/xorout `0xFFFFFFFF`) over **bytes 0–59 with 4–7 zeroed**. Reproduces on **37/37** genuine tags. The manual's row reads "Byte 7…Byte 4 / b15…b0 / CRC" — right about the four-byte span, wrong about the width |
 | 8–19 | SKU | 12 chars, NUL-padded (the configured SKU) |
 | 20 | Brand | `0x00` = DYMO |
 | 21 | Region | `0xFF` = global |
-| 22 | Material | `0x03` = paper |
-| 23 | Label type | `0x01` = die-cut |
+| 22 | Material | Real tags use `0x02/0x04/0x06/0x08` and `0x20/0x23/0x24/0x25/0x26`. The manual's `0x00–0x07` enum does not describe them, and its "paper" value `0x03` appears on **none** of the 37. We send `0x04`, what our default SKU S0904980 carries |
+| 23 | Label type | `0x01` = die-cut (33/37; 3 are `0x02` card, 1 is `0x00` continuous) |
 | 24 | Label color | `0x01` = white |
 | 25 | Content color | `0x00` = black |
-| 26 | Marker type | `0x00` = marker-1 front edge gives both the cut location and the start of label (tech ref p.18) |
+| 26 | Marker type | `0x00` |
 | 27 | Reserved | 0 |
-| 28–29 | Marker pitch (mm) | label length + gap, LE |
-| 30–31 | Marker 1 width (mm) | 2 |
-| 32–33 | Marker 1 to label start (mm) | 2 |
+| 28–29 | Marker pitch (0.1 mm) | label length + gap. Genuine gaps run 42–118 tenths depending on stock (mode 42); we use 42 |
+| 30–31 | Marker 1 width (0.1 mm) | `30` = 3.0 mm (35/37) |
+| 32–33 | Marker 1 to label start (0.1 mm) | per-roll, 15–88; we send `38`, the S0904980 value |
 | 34–37 | Marker 2 | unused (0) |
-| 38–39 | Vertical offset (mm) | 1 |
-| 40–41 | Label length (mm) | from configured paper, LE |
-| 42–43 | Label width (mm) | from configured paper, LE |
-| 44–45 | Printable h-offset (mm) | 2 |
-| 46–47 | Printable v-offset (mm) | 2 |
-| 48–49 | Liner width (mm) | head width in mm, LE |
-| 50–51 | Total label count | the **roll's total** (`MODEL_DEFAULT_COUNT`, or the configured count if larger), LE — not the remaining count, which is status bytes 27–28 |
-| 52–53 | Total length (mm) | pitch × total count (clamped to 0xFFFF), LE |
-| 54–55 | Counter margin | 0 |
-| 56 | Counter strategy | `0x00` = "counting up from 0x0000 to amount of labels + counter margin" (tech ref p.19). This describes the tag's own counter; our remaining-label counter in the status struct counts **down** and is independent of this byte |
-| 57–59 | Reserved | 0 |
-| 60–61 | Production date (DDYY) | day, year |
-| 62 | Production time (HHMM low) | hour/minute. The manual lists production time at "Byte 63, Byte 62", which does not fit the 63-byte record it declares two pages earlier; date at 60–61 plus one time byte at 62 is the only self-consistent reading |
+| 38–39 | Vertical offset (0.1 mm) | `16` = 1.6 mm (23/37) |
+| 40–41 | Label length (0.1 mm) | from the configured paper, LE |
+| 42–43 | Label width (0.1 mm) | from the configured paper, LE |
+| 44–47 | Printable-area offsets | **0 on 37/37** |
+| 48–49 | Liner width (0.1 mm) | head width. Genuine liners are a little wider than the head (1075 vs our 1057 on the 5XL), so this is our best available approximation |
+| 50–51 | Total label count | the roll's total, LE — not the remaining count, which is status bytes 27–28 |
+| 52–53 | Total media length, **2 mm units** | `(pitch × total)/20`. The manual says "length in mm"; the continuous roll 30270 carries `45720`, and 45720 × 2 mm = 91440 mm = exactly 300 ft — a length no u16 could hold in mm |
+| 54–55 | Counter margin | `total / 10` (36/37; the 37th is a known mis-copied dump) |
+| 56 | Counter strategy | **`0x01`** on 37/37, not the `0x00` the manual describes |
+| 57–62 | Padding | 0. Genuine tags carry nothing past byte 59, and the manual's "production date/time" rows have no counterpart in real data |
 
 ### ESC V — 34-byte version reply
 

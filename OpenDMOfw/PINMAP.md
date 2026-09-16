@@ -62,10 +62,13 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   address. `store.c` detects the scheme at init and works on both.
 - **NFC front-end:** SLRC610 on the same I2C bus @ **0x28** — a different device
   address; our firmware ignores it (no tag emulation in scope).
-- **Feed motor driver:** not named in public teardowns; likely a 4-transistor or
-  small dual-H-bridge (TB6612/MP6500 class) on 24 V, driving the four phases
-  directly (**IN1-IN4 expected**, no separate STEP/DIR chip — `motor.c` default
-  is now 4-phase). One raster line = 1/300 inch = **0.08467 mm** (the LW450
+- **Feed motor: identified.** A **LEILI 35BY412-339**, two-phase bipolar PM
+  stepper, 4 leads, ~35 mm can, ~6.5 Ω per phase, can marked "Caution Hot
+  Surface". A 4-lead bipolar motor is driven by two H-bridges on IN1–IN4, which
+  independently validates `MOTOR_DRIVE_4PHASE` as the default in `motor.c`;
+  `MOTOR_DRIVE_STEPDIR` stays only as a fallback. The driver IC itself is still
+  unidentified — but **not** a TB6612, which is rated 15 V and cannot sit on the
+  24 V rail. One raster line = 1/300 inch = **0.08467 mm** (the LW450
   reference confirms the elements are "0.085 mm square ... spaced at 300 per
   inch"); µsteps per line are not in either manual — count them by scoping the
   phase pins during one ESC D line. **Time budget:** DYMO rates the 550 at 62
@@ -85,6 +88,11 @@ the thermistor divider R_p / direction (one 25 °C reading pins it).
   and the emitter may need its own drive pin — none of which `pins.h` models yet.
 - **Head interface:** STB **active-low**, DI1/DI2 driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
+- **VH enable needs an external pull to OFF.** The MCU's GPIOs are floating
+  inputs during and after reset, so whatever holds the load-switch gate in that
+  window has to be on the board, not in firmware. Verify that pull before the
+  first 24 V test; firmware now also writes the off level *before* switching the
+  pin to an output, so it never drives the gate through an undefined ODR.
 - **FCC RGDLW550 internal photos** are too low-res for GPIO traces; the circuit
   diagram is confidential. The MCU is an **STM32F072CB** on both Rev E and Rev K
   photos; the Rev E shot reads as the LQFP48 (`...CBT6`) while the Rev K close-up

@@ -8,6 +8,10 @@ void head_reset(void);
  * shift -> latch -> strobe with a thermally limited dwell. */
 void head_print_line(const uint8_t *bits, uint16_t nbytes);
 void head_set_density(uint8_t d);      /* 0 = heat off; 1..16 base dwell */
+/* The strobe time one segment gets, for a density (1..16) and a thermal scale
+ * (256 = 1.0), including the energy ceiling. Exposed so the arithmetic can be
+ * tested on the host without a head: see test/test_thermal.c. */
+uint32_t head_dwell_us(uint8_t density, uint16_t thermal_scale);
 /* Microseconds of strobe the last head_print_line() spent: the COMMANDED dwell
  * times HEAD_STROBE_SEGMENTS. The true energised time per segment differs by
  * the head driver's edge skew (see head.c). The feed step can subtract this

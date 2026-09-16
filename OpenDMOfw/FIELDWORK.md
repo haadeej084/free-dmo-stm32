@@ -661,6 +661,23 @@ register split, change those two numbers; `head.c` handles unequal halves.
 **How:** print `opsend.py testpattern`. If the right half of the pattern is
 mirrored, reverse the DI2 index in `head_print_line()`.
 
+### 6b. Strobe polarity — *do this before the first 24 V test*
+`model.h`'s `MODEL_STB_ACTIVE_LEVEL` says a LOW level fires the heat drivers.
+That is an assumption: the published KF3002 timing charts draw the strobe
+idling low and pulsing high, and other variants of the same family name the pin
+`/STB1` (DECISIONS D28). If it is wrong, the head fires continuously the moment
+the 24 V rail comes up.
+**How:** keep `OP_FLAG_VH_INHIBIT` set (`opsend.py vh off`). Power VH from a
+bench supply current-limited to ~100 mA instead of the brick. Assert each
+strobe pin in turn with `opsend.py diag 7 <port> <pin> 1` — no, that command
+refuses the strobes on purpose; use `diag 1 1` (one head line) once per
+candidate polarity instead, with the head connected and the current meter
+watched. The polarity that draws essentially no current with the strobe idle,
+and a brief current pulse only while printing, is the right one.
+**If in doubt, leave it as is and report the measurement** — this is exactly
+the kind of thing that is cheap to measure and expensive to guess.
+**Patch:** `MODEL_STB_ACTIVE_LEVEL` in `src/model.h`, one line.
+
 ### 7. Host acceptance — *the actual goal*
 With a plausible SKU configured, does **D.MO Connect** show a valid roll and
 print end to end?

@@ -83,6 +83,7 @@ flash: $(BUILD)/$(TARGET).bin
 # of them fails the target, not only the last one.
 USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
 E2E_TEST_SRC = test/test_e2e.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c src/printer/protocol.c
+THERMAL_TEST_SRC = test/test_thermal.c src/printer/thermal.c src/printer/head.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -99,6 +100,9 @@ test:
 	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-e2etest-$$m $(E2E_TEST_SRC); \
 	  /tmp/opendmo-e2etest-$$m; \
+	  $$HOSTCC -Wall -Wextra -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	    -o /tmp/opendmo-thermaltest-$$m $(THERMAL_TEST_SRC) -lm; \
+	  /tmp/opendmo-thermaltest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

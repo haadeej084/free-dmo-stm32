@@ -88,7 +88,10 @@
    * sequentially to split peak current. Verify half count on the board. */
   #define MODEL_STROBE_SEGMENTS 2
   /* Dots clocked in on DI1 and DI2. ASSUMED 336 + 336: the head part number,
-   * and so its register split, is not confirmed (FIELDWORK section 3). */
+   * and so its register split, is not confirmed (FIELDWORK section 3). A
+   * KF3002 variant with an UNEQUAL split exists - the GD31A puts dots 1-384 on
+   * DI1 and 385-640 on DI2, with four strobes of 256/128/128/128 - so this is
+   * a real possibility, not a formality. head.c handles unequal halves. */
   #define MODEL_DI1_DOTS        336
   #define MODEL_DI2_DOTS        336
   #define MODEL_DEFAULT_SKU     "30387"  /* Internet Postage, biggest 550 roll */
@@ -128,6 +131,23 @@
   #define MODEL_HW_VERSION      "LW5XL-REV.K"
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
 #endif
+
+/* Strobe polarity: which level FIRES the heat drivers.
+ *
+ * ASSUMED, and genuinely unknown for our head. This was previously recorded as
+ * "confirmed active-low from the ROHM KF3002 timing chart"; re-reading the
+ * chart withdraws that. In KF3002-GL50A and -GD31A Fig.2 the STROBE trace
+ * idles LOW and pulses HIGH (DRIVER OUT idles high and pulses low), and inside
+ * the same figure /LATCH carries a drawn overbar while STROBE does not. But
+ * KF3002-GM50A, KF3004-GM50A and KD3004-DC72A spell the pin "/STB1" in text -
+ * so ROHM do mark it when a variant is active-low, and at least one KF3002
+ * variant is. Polarity is per-variant, and the GK11C has no public datasheet.
+ *
+ * Getting this wrong means the head fires continuously the moment VH comes up,
+ * which is why OP_FLAG_VH_INHIBIT exists and why FIELDWORK now has a
+ * current-limited polarity check before the first 24 V test. One constant, one
+ * place to flip. */
+#define MODEL_STB_ACTIVE_LEVEL 0     /* 0 = Low fires (current assumption) */
 
 /* Derived values used by the rest of the firmware. */
 #define HEAD_DOTS            MODEL_HEAD_DOTS

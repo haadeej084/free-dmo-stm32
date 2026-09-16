@@ -44,15 +44,50 @@
 #include "../system.h"
 #include "../pins.h"
 
-/* Base strobe time per half at density 8, before the thermal scale. 270 us
- * puts a dot at roughly 0.116 mJ at the KF3002 family's ~0.43 W/dot, which is
- * about the knee of the published optical-density curve and sits inside the
- * family's typical TON band. The old 400 us started above saturation, so the
- * whole 1..16 density range clustered at maximum black with nothing to trade.
- * Still provisional until measured on a bench - see FIELDWORK measurement 2
- * for the per-line time budget this has to fit inside. */
+/* Base strobe time per half at density 8 (= ESC C 100 %), before the thermal
+ * scale.
+ *
+ * ANALOGUE, not sourced for our head: ROHM publish no datasheet for the
+ * KF3002-GK11C (bar marking 3C56-9638) - it is in neither the SF2023 nor the
+ * SF2024 catalogue. 270 us is pinned to the KF3002 FAMILY's rated operating
+ * point instead, all at Rave 1250 ohm and VH 24 V:
+ *   GL50A: Po 0.43  W/dot, SLT 0.83 ms, TON 0.28  ms
+ *   GD31A: Po 0.42  W/dot, SLT 0.82 ms, TON 0.308 ms
+ *   GM50A: Po 0.434 W/dot, SLT 0.41 ms, TON 0.263 ms
+ * 270 us sits inside that 263-308 us band and within 4 % of the GL50A's
+ * 0.28 ms; at 0.43 W that is 0.116 mJ/dot against its rated 0.120 mJ/dot.
+ *
+ * Do NOT justify this from a density curve: the three siblings' Fig.4 disagree
+ * by a factor 1.9 in energy-for-OD-1.0 at identical electrical spec, and none
+ * of them is measured on DYMO stock. Only a bench sweep on a genuine roll can
+ * put a real density scale under this (FIELDWORK measurement 2). */
 #define HEAD_BASE_DWELL_US 270
+
+/* Energy ceiling, not a time ceiling. The previous 2000 us clamp was not
+ * derived from anything: at an ASSUMED Po of 0.43 W/dot it allows 0.86 mJ/dot,
+ * four times ROHM's flat maximum rating of 0.215 mJ/dot, and 4.8x the family's
+ * rated operating energy. ROHM's maximum-energy envelope is a function of
+ * scanning line time (ANALOGUE, GL50A/GD31A Fig.5): ~0.155 mJ/dot at 0.65 ms,
+ * 0.177 at 0.92 ms, 0.21 at 1.0 ms. At the 550's rated 0.92 ms per line,
+ * 0.177 mJ/dot is 412 us.
+ *
+ * Nothing the genuine driver can ask for is clipped by this: DYMO's darkest
+ * preset is ESC g = 112.5 %, which is 380 us at 25 C. ESC C 200 % on a cold
+ * head would have been 675 us - above ROHM's flat maximum, and 1350 us of
+ * strobe against a 920 us per-line budget, i.e. the printer would also have
+ * run half speed. Raise this only with a measured Po for the fitted head. */
+#define HEAD_MAX_DWELL_US  410
 #define VH_SETTLE_US       2000     /* load-switch rise time before the first strobe */
+
+/* Extra dwell for the second and later segments, compensating the rail sag
+ * their predecessors caused. ANALOGUE: a shipping 24 V mechanism adds a fixed
+ * 10 us to the second heat group "to compensate for the voltage drop during
+ * the second group's heating". Our VH is an unregulated wall brick, so the sag
+ * is at least as large - but the magnitude does not transfer (10 us was 4 % of
+ * their pulse on their supply), and a wrong value darkens one half of every
+ * label. Kept at 0 until the rail can be measured; the knob exists so the
+ * mechanism is recorded rather than forgotten. */
+#define HEAD_SEGMENT_SAG_US 0
 
 static uint8_t  s_density = 8;
 static int      s_vh_on;
@@ -86,7 +121,7 @@ void head_init(void)
     gpio_mode(PIN_HEAD_DI2,   GPIO_OUT);  gpio_set(PIN_HEAD_DI2, 0);
     gpio_mode(PIN_HEAD_LATCH, GPIO_OUT);  gpio_set(PIN_HEAD_LATCH, 1);
     for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
-        gpio_set(k_strobe[s], 1);           /* active-low: idle high = off */
+        gpio_set(k_strobe[s], !MODEL_STB_ACTIVE_LEVEL);  /* idle = not firing */
         gpio_mode(k_strobe[s], GPIO_OUT);   /* level before mode, as for VH */
     }
     /* The 24 V heat rail starts OFF and is switched on only around an actual
@@ -138,7 +173,8 @@ void head_idle_tick(uint32_t idle_ms)
 
 void head_reset(void)
 {
-    for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) gpio_set(k_strobe[s], 1);
+    for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++)
+        gpio_set(k_strobe[s], !MODEL_STB_ACTIVE_LEVEL);
     gpio_set(PIN_HEAD_LATCH, 1);   /* HOLD */
     gpio_set(PIN_HEAD_CLK, 0);
     gpio_set(PIN_HEAD_DI1, 0);
@@ -149,14 +185,36 @@ void head_reset(void)
 
 void head_set_density(uint8_t d) { if (d <= 16) s_density = d; }  /* 0 = heat off */
 
+uint32_t head_dwell_us(uint8_t density, uint16_t thermal_scale)
+{
+    uint32_t dwell = (uint32_t)HEAD_BASE_DWELL_US * density / 8u;
+    dwell = dwell * thermal_scale / 256u;
+    if (dwell > HEAD_MAX_DWELL_US) dwell = HEAD_MAX_DWELL_US;
+    return dwell;
+}
+
 uint32_t head_last_strobe_us(void) { return s_last_strobe_us; }
 
 static void strobe(pin_t p, uint32_t us)
 {
-    gpio_set(p, 0);                 /* active-low: Low = fire the heat driver */
+    gpio_set(p, MODEL_STB_ACTIVE_LEVEL);        /* fire the heat drivers */
     while (us > 1000) { delay_us(1000); us -= 1000; }
     delay_us(us);
-    gpio_set(p, 1);                 /* High = off */
+    gpio_set(p, !MODEL_STB_ACTIVE_LEVEL);       /* off */
+}
+
+/* Dots set in one half of the line. A half with no dots is not worth a strobe:
+ * firing it prints nothing, draws no heater current and only costs time. This
+ * also gives the per-line dot count that any future current-aware scheme needs
+ * (a shipping mechanism bin-packs its groups by exactly this count). */
+static uint16_t dots_in(const uint8_t *bits, uint16_t from, uint16_t to, uint16_t nbytes)
+{
+    uint16_t n = 0;
+    for (uint16_t i = from; i < to && i < nbytes; i++) {
+        uint8_t v = bits[i];
+        while (v) { n += (uint16_t)(v & 1u); v = (uint8_t)(v >> 1); }
+    }
+    return n;
 }
 
 void head_print_line(const uint8_t *bits, uint16_t nbytes)
@@ -248,24 +306,38 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
     }
 #endif
 
-    /* 2) latch: Low = THROUGH (datasheet timing chart) */
+    /* 2) latch: Low = THROUGH (datasheet timing chart). tw(LAT) min is 100 ns
+     *    and we hold 1 us. */
     gpio_set(PIN_HEAD_LATCH, 0);
     delay_us(1);
     gpio_set(PIN_HEAD_LATCH, 1);
+    /* t setup(STB) min 300 ns from the latch rising edge to a strobe, per the
+     * KF3002 timing chart - 15 core cycles at 48 MHz. The dwell arithmetic
+     * below happens to cover it today, but that is the compiler's choice, not
+     * ours; make it explicit. */
+    for (int i = 0; i < 20; i++) __asm volatile("nop");
 
-    /* 3) dwell = base * density/8 * thermal scale/256 */
-    uint32_t dwell = (uint32_t)HEAD_BASE_DWELL_US * s_density / 8u;
-    dwell = dwell * thermal_dwell_scale() / 256u;
-    if (dwell > 2000) dwell = 2000; /* hard upper limit per line */
+    /* 3) dwell = base * density/8 * thermal scale/256, capped by energy */
+    uint32_t dwell = head_dwell_us(s_density, thermal_dwell_scale());
 
-    /* 4) fire the halves sequentially (peak current / number of segments).
-     *    DYMO sizes the supply for "an average of 37% of the total dots per
-     *    line at full speed" (450 TRM p.7), so the peak of an all-black line
-     *    is well above the rail's continuous rating - splitting it is not
-     *    optional. */
+    /* 4) fire the halves sequentially. The HEAD does not require this: both
+     *    published KF3002 siblings rate "maximum number of dots energized
+     *    simultaneously" at the full dot count. It is a SUPPLY constraint -
+     *    DYMO size the 550's brick for "an average of 37 % of the total dots
+     *    per line at full speed" (450 TRM p.7) on a 42 W supply, while a full
+     *    line of KF3002-class dots would draw hundreds of watts from the bulk
+     *    capacitor. A half with no dots in it is skipped entirely. */
+    uint32_t fired = 0;
+    const uint16_t half = (uint16_t)((HEAD_DI1_DOTS + 7) / 8);
     vh_enable();
-    for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++)
-        strobe(k_strobe[s], dwell);
+    for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
+        uint16_t from = (uint16_t)(s * half), to = (uint16_t)(from + half);
+        if (HEAD_STROBE_SEGMENTS == 2 && dots_in(bits, from, to, nbytes) == 0)
+            continue;                        /* nothing to print in this half */
+        uint32_t us = dwell + (uint32_t)(s ? HEAD_SEGMENT_SAG_US : 0);
+        strobe(k_strobe[s], us);
+        fired += us;
+    }
 
-    s_last_strobe_us = dwell * (uint32_t)HEAD_STROBE_SEGMENTS;
+    s_last_strobe_us = fired;
 }

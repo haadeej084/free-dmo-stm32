@@ -83,6 +83,12 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   i.e. **0.92 ms and 1.08 ms per line**. Anything slower than that is not
   genuine-speed, which is why `head.c` shifts via BSRR and the motor step
   overlaps the strobe.
+- **Strobe polarity is an assumption, not a fact.** `MODEL_STB_ACTIVE_LEVEL`
+  in `model.h` says Low fires. The published KF3002 timing charts actually draw
+  STROBE idling low and pulsing high, while other variants of the same family
+  name the pin `/STB1`; polarity is per-variant and our variant has no public
+  datasheet (DECISIONS D16/D28). Check it with a current-limited supply before
+  the first 24 V test — FIELDWORK measurement 5b.
 - **Head voltage sense — an input we do NOT have.** The genuine engine "measure[s]
   the print voltage and the head temperature before each print cycle" and
   suspends printing below 19.3 V, resuming at 21 V (LW450 reference p.7). That

@@ -275,6 +275,31 @@ extern uint32_t host_uid[3];
 #define USB          (&host_usb)
 #define USB_PMA_BASE ((uintptr_t)host_pma)
 #define UID_BASE     ((uintptr_t)host_uid)
+
+/* The peripherals the printer-side modules touch, so their arithmetic can be
+ * tested natively (test/test_thermal.c). Only the tests that actually use a
+ * given peripheral define its storage, so the USB tests are unaffected.
+ *
+ * The ADC goes through a function rather than a plain struct: a conversion is
+ * several register accesses, and a test that wants a DIFFERENT sample per
+ * conversion (a median filter has three) needs a hook. host_adc() is called on
+ * every access, so a test can load the next sample when it sees ADSTART set. */
+#undef ADC1
+#undef RCC
+#undef GPIOA
+#undef GPIOB
+#undef GPIOC
+#undef TIM3
+ADC_Type *host_adc(void);
+extern RCC_Type  host_rcc;
+extern GPIO_Type host_gpioa, host_gpiob, host_gpioc;
+extern TIM_Type  host_tim3;
+#define ADC1  host_adc()
+#define RCC   (&host_rcc)
+#define GPIOA (&host_gpioa)
+#define GPIOB (&host_gpiob)
+#define GPIOC (&host_gpioc)
+#define TIM3  (&host_tim3)
 #endif
 
 #endif /* OP57_MCU_H */

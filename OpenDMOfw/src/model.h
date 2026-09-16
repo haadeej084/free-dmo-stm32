@@ -58,7 +58,9 @@
   /* 57 mm head, presents as the 550-class printer. */
   #define MODEL_NAME            "OP57"
   #define MODEL_PID             0x0028
-  #define MODEL_USB_PRODUCT     "LabelWriter 550"
+  /* The genuine 550 reports the product string WITH the vendor prefix:
+   * a published lsusb of 0922:0028 shows "DYMO LabelWriter 550". */
+  #define MODEL_USB_PRODUCT     "DYMO LabelWriter 550"
   /* IEEE-1284 device ID. MFG+MDL must yield the driver-model match ID
    * USBPRINT\DYMOLabelWriter_550C80D (NameModel(20) + OS checksum); the CID
    * field reproduces the genuine compatible ID 1284_CID_DYMOLabelWriter_550B. */
@@ -80,7 +82,7 @@
   /* 1248-dot / 105.7 mm head, presents as the 5XL-class printer. */
   #define MODEL_NAME            "OP104"
   #define MODEL_PID             0x002A
-  #define MODEL_USB_PRODUCT     "LabelWriter 5XL"
+  #define MODEL_USB_PRODUCT     "DYMO LabelWriter 5XL"  /* vendor prefix, as on the 550 */
   /* MFG+MDL must yield USBPRINT\DYMOLabelWriter_5XLB920; the CID field
    * reproduces the genuine compatible ID 1284_CID_DYMOLabelWriter_5XLB. */
   #define MODEL_IEEE_ID         "MFG:DYMO;MDL:LabelWriter 5XL;CID:DYMOLabelWriter_5XLB;CLS:PRINTER;DES:DYMO LabelWriter 5XL;"

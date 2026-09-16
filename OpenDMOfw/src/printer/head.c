@@ -37,7 +37,14 @@
 #include "../system.h"
 #include "../pins.h"
 
-#define HEAD_BASE_DWELL_US 400      /* base strobe time per half; calibrate on hardware */
+/* Base strobe time per half at density 8, before the thermal scale. 270 us
+ * puts a dot at roughly 0.116 mJ at the KF3002 family's ~0.43 W/dot, which is
+ * about the knee of the published optical-density curve and sits inside the
+ * family's typical TON band. The old 400 us started above saturation, so the
+ * whole 1..16 density range clustered at maximum black with nothing to trade.
+ * Still provisional until measured on a bench - see FIELDWORK measurement 2
+ * for the per-line time budget this has to fit inside. */
+#define HEAD_BASE_DWELL_US 270
 #define VH_SETTLE_US       2000     /* load-switch rise time before the first strobe */
 
 static uint8_t  s_density = 8;
@@ -63,8 +70,8 @@ void head_init(void)
     gpio_mode(PIN_HEAD_DI2,   GPIO_OUT);  gpio_set(PIN_HEAD_DI2, 0);
     gpio_mode(PIN_HEAD_LATCH, GPIO_OUT);  gpio_set(PIN_HEAD_LATCH, 1);
     for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
-        gpio_mode(k_strobe[s], GPIO_OUT);
         gpio_set(k_strobe[s], 1);           /* active-low: idle high = off */
+        gpio_mode(k_strobe[s], GPIO_OUT);   /* level before mode, as for VH */
     }
     /* The 24 V heat rail starts OFF and is switched on only around an actual
      * print (head_idle_tick drops it again). The genuine printer does the same
@@ -72,8 +79,14 @@ void head_init(void)
      * after 30 s idle - and on a board where this pin is still an assumption,
      * "off unless printing" is the difference between a wrong guess costing
      * nothing and a wrong guess cooking the head. */
-    gpio_mode(PIN_HEAD_VH, GPIO_OUT);
+    /* Level FIRST, then mode: gpio_set writes ODR, and switching the pin to an
+     * output before ODR holds the off level would drive whatever ODR happened
+     * to contain for one instruction. On the VH gate that instant is 24 V.
+     * The board should also pull this net to the OFF level externally, so the
+     * rail is dead whenever the MCU is unpowered or in reset - verify that
+     * before the first 24 V test (FIELDWORK measurement 5). */
     gpio_set(PIN_HEAD_VH, !HEAD_VH_ON_LEVEL);
+    gpio_mode(PIN_HEAD_VH, GPIO_OUT);
     s_vh_on = 0;
 }
 

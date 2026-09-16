@@ -41,12 +41,13 @@ def cmd_density(duty):              return b"\x1b\x43" + bytes([max(0, min(200, 
 def cmd_graphics():                 return b"\x1b\x69"              # ESC i (graphics mode)
 def cmd_text():                     return b"\x1b\x68"              # ESC h (text mode)
 def cmd_media_type():               return b"\x1b\x4d" + bytes(8)   # ESC M + 8B (mtDefault)
-def cmd_label_length(length):       return b"\x1b\x4c" + length.to_bytes(2, "little")
+def cmd_label_length(length):       return b"L" + length.to_bytes(2, "big")  # ESC L is BIG-endian
 def cmd_label_index(idx):           return b"\x1b\x6e" + idx.to_bytes(2, "little")
 def cmd_set_count(count):           return b"\x1b\x6f" + count.to_bytes(2, "little")  # ESC o
 def cmd_raster(lines, dots, data):
-    # ESC D: BPP=1, Align=0x80, Width(#lines) u32 LE, Height(#dots) u32 LE, data
-    return (b"\x1b\x44" + bytes([1, 0x80])
+    # ESC D: BPP=1, Align=2 (bottom - the only value tech ref p.12 documents,
+    # and what genuine driver captures show), Width(#lines) u32 LE, Height u32 LE
+    return (b"\x1b\x44" + bytes([1, 0x02])
             + lines.to_bytes(4, "little") + dots.to_bytes(4, "little") + data)
 def cmd_short_feed():               return b"\x1b\x47"              # ESC G (between labels)
 def cmd_form_feed():                return b"\x1b\x45"              # ESC E (to tear bar)
@@ -60,7 +61,9 @@ def cmd_sku_info():                 return b"\x1b\x55"              # ESC U
 def cmd_config(count, sku):
     s = sku.encode("ascii")[:23]
     return bytes([0x1d, 0x43, len(s), count & 0xFF, (count >> 8) & 0xFF]) + s   # GS C
-def cmd_feed(n):                    return bytes([0x1b, 0x64, n & 0xFF])        # ESC d
+# ESC d is a genuine zero-argument density opcode (Medium), so the feed goes
+# through the documented ESC f 1 n "skip n lines" (LW450 tech ref p.10).
+def cmd_feed(n):                    return bytes([0x1b, 0x66, 0x01, n & 0xFF])  # ESC f 1 n
 def cmd_diag(sub, args=()):
     # GS D <sub> [args...]  - 0x01/0x02/0x08 take one byte, 0x07 takes three
     return bytes([0x1d, 0x44, sub & 0xFF]) + bytes(a & 0xFF for a in args)
@@ -253,7 +256,7 @@ def main():
     if a.cmd == "status":
         print(read_status(dev))
     elif a.cmd == "feed":
-        send(dev, cmd_feed(a.lines)); print(f"feed {a.lines} lines (backdoor ESC d)")
+        send(dev, cmd_feed(a.lines)); print(f"feed {a.lines} lines (ESC f 1 n)")
     elif a.cmd == "density":
         send(dev, cmd_density(a.value)); print(f"density set to {a.value} %")
     elif a.cmd == "config":

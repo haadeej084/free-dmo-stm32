@@ -237,6 +237,13 @@ static void handle_standard_setup(const usb_setup_t *s)
             *btable_rx_addr(EP_DATA) = BUF_EP1_RX;
             *btable_rx_cnt (EP_DATA) = RX_COUNT_64;
             ep_init(EP_DATA, USB_EP_TYPE_BULK, EP_DATA);
+            /* RM0091 30.6.2 on DTOG_RX/DTOG_TX: "This bit can also be toggled
+             * by the software to initialize its value (mandatory when the
+             * endpoint is not a control one)." A re-configuration without this
+             * leaves the toggle wherever the previous session left it, and the
+             * host restarts from DATA0. */
+            ep_dtog_clear_tx(EP_DATA);
+            ep_dtog_clear_rx(EP_DATA);
             ep_set_rx_stat(EP_DATA, STAT_RX(USB_EP_STAT_VALID));
             ep_set_tx_stat(EP_DATA, STAT_TX(USB_EP_STAT_NAK));
         }
@@ -260,7 +267,11 @@ static void handle_standard_setup(const usb_setup_t *s)
         static const uint8_t alt = 0;
         usb_ctrl_send(&alt, 1, s->wLength);
         break; }
-    case 11: /* SET_INTERFACE */
+    case 11: /* SET_INTERFACE - same DTOG reset rule as SET_CONFIGURATION */
+        if (s_configured) {
+            ep_dtog_clear_tx(EP_DATA);
+            ep_dtog_clear_rx(EP_DATA);
+        }
         usb_ctrl_ack();
         break;
     case 1: /* CLEAR_FEATURE: clear ENDPOINT_HALT (feature 0) */

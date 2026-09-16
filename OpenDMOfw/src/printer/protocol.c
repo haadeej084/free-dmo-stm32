@@ -17,6 +17,8 @@
  *   ESC Q                end of print job (releases the lock)
  *   ESC A <lock>         request status -> 32-byte struct on bulk-IN
  *   ESC C <duty>         print density, 0-200 % (0 = printing disabled)
+ *   ESC c / d / e / g     zero-argument density presets: Light 75 %,
+ *                         Medium 87.5 %, Normal 100 %, Dark 112.5 %
  *   ESC e                reset density to default (100 %)
  *   ESC U                get SKU info -> 63-byte consumable record
  *   ESC V                get version -> 34-byte reply
@@ -34,7 +36,6 @@
  * Backdoor commands (never sent by the stock host, kept for configuration and
  * driver-less bring-up via tools/opsend.py):
  *   GS C len lo hi sku.. 1D 43 .. set roll config (SKU + count) in EEPROM
- *   ESC d n                1B 64 xx  feed n dot lines
  *   GS D sub [arg]         1D 44 ..  self-test / diagnostic (see diagnose()):
  *                                0x01 <n> strobe head n lines, 0x02 <n> step motor,
  *                                0x03 EEPROM self-test, 0x04 diagnostic snapshot.
@@ -70,7 +71,7 @@ typedef enum {
     S_CMD,          /* waiting for a command start byte */
     S_AFTER_ESC,    /* saw 0x1B */
     S_ARG1,         /* one argument byte  (s_arg1 = which command) */
-    S_ARG2,         /* two argument bytes, u16 LE (s_arg1 = which command) */
+    S_ARG2,         /* two argument bytes: LE for ESC n, BE for ESC L */
     S_ARG4,         /* four argument bytes, u32 LE (s_arg1 = which command) */
     S_ESC_D,        /* ESC D: BPP, Align, W(4), H(4) then raster */
     S_RASTER,       /* consuming raster lines for one label */
@@ -267,26 +268,60 @@ static void send_status(void)
     usbp_send_reply(r, sizeof(r));
 }
 
-/* ---- ESC U: 63-byte consumable record (tech ref p.16-19) -------- */
-static uint16_t crc16_ccitt(const uint8_t *d, uint16_t n)
+/* ---- ESC U: 63-byte consumable record (tech ref p.16-19) --------
+ *
+ * This layout is no longer read off the manual alone. The repository root of
+ * this very project (free-dmo-stm32, Src/main.c) embeds 37 dumps of GENUINE
+ * DYMO 550-series roll tags, and the consumable record sits at tag offset 12
+ * in every one of them. Checking our fields against all 37 settled several
+ * things the manual gets wrong or leaves ambiguous:
+ *
+ *   - Byte 3 is a CONSTANT 0x3C (60) in 37/37, regardless of SKU length. It is
+ *     the payload length: an 8-byte header plus 60 payload bytes, and the next
+ *     record's magic begins at exactly offset 68 on every tag. It is not the
+ *     SKU length, which is what we used to send.
+ *   - Bytes 4-7 are a 32-bit CRC, not a CRC16 with two reserved bytes. It is
+ *     plain CRC-32/ISO-HDLC (zlib) over bytes 0..59 with 4..7 zeroed, stored
+ *     little-endian: 37/37. The manual's "Byte 7...Byte 4 | b15...b0 | CRC" row
+ *     is right about the span and wrong about the width.
+ *   - Every geometry field is in units of 0.1 mm, not mm. SKU 30256 carries
+ *     1016 x 587 = 101.6 x 58.7 mm, i.e. exactly 4" x 2.3125". We used to
+ *     report whole mm, so the host saw every dimension ten times too small.
+ *   - Bytes 52-53 are the total media length in 2 mm units, not mm. The
+ *     continuous roll 30270 carries 45720, and 45720 x 2 mm = 91440 mm = 300 ft
+ *     exactly - a length no u16 could hold in mm.
+ *   - Bytes 44-47 (printable-area offsets) and 60-62 are zero in 37/37; byte 56
+ *     (counter strategy) is 0x01 in 37/37, not the 0x00 the manual describes;
+ *     bytes 54-55 (counter margin) carry count/10 in 36/37.
+ *
+ * Constants below are taken from the genuine record for our own default SKU
+ * S0904980 where the field is per-roll rather than universal.
+ */
+
+/* CRC-32/ISO-HDLC (zlib): poly 0x04C11DB7 reflected, init 0xFFFFFFFF, xorout
+ * 0xFFFFFFFF. Bit-at-a-time; 60 bytes once per ESC U is not worth a table. */
+static uint32_t crc32_iso(const uint8_t *d, uint16_t n)
 {
-    uint16_t crc = 0xFFFF;
+    uint32_t c = 0xFFFFFFFFu;
     for (uint16_t i = 0; i < n; i++) {
-        crc ^= (uint16_t)d[i] << 8;
+        c ^= d[i];
         for (int b = 0; b < 8; b++)
-            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+            c = (c & 1u) ? ((c >> 1) ^ 0xEDB88320u) : (c >> 1);
     }
-    return crc;
+    return ~c;
 }
 
-/* Dots -> mm at the model DPI, rounded to nearest. 25.4 mm per inch: using a
- * flat 25 here (as an earlier revision did) reports every dimension ~1.6 %
- * short, e.g. S0904980 as 102x156 mm instead of its real 104x159 mm. */
-static uint16_t dots_to_mm(uint16_t dots)
+/* Dots -> TENTHS of a millimetre at the model DPI, rounded to nearest.
+ * 254 tenths per inch. */
+static uint16_t dots_to_tenth_mm(uint16_t dots)
 {
-    uint32_t den = (uint32_t)MODEL_DPI * 10u;
-    return (uint16_t)(((uint32_t)dots * 254u + den / 2u) / den);
+    return (uint16_t)(((uint32_t)dots * 254u + MODEL_DPI / 2u) / MODEL_DPI);
 }
+
+/* Inter-label gap, in tenths. Genuine rolls carry 42-118 depending on the
+ * stock (mode 42); 57 is the value on our default S0904980. Per-roll in
+ * reality, so this is a default rather than a constant. */
+#define LABEL_GAP_TENTH_MM 42
 
 static void send_sku_record(void)
 {
@@ -295,56 +330,60 @@ static void send_sku_record(void)
     uint8_t r[63];
     for (int i = 0; i < 63; i++) r[i] = 0;
 
-    /* mm values from the configured paper's dot dimensions at MODEL_DPI */
-    uint16_t w_mm = dots_to_mm(p->width_dots);
-    uint16_t h_mm = dots_to_mm(p->height_dots);
+    /* 0.1 mm values from the configured paper's dot dimensions at MODEL_DPI */
+    uint16_t w_tmm = dots_to_tenth_mm(p->width_dots);
+    uint16_t h_tmm = dots_to_tenth_mm(p->height_dots);
 
     r[0] = 0xB6; r[1] = 0xCA;                    /* magic 0xCAB6 LE */
     r[2] = 0;                                    /* version */
-    uint8_t slen = 0;
-    while (slen < 12 && c->sku[slen]) slen++;
-    r[3] = slen;                                 /* length */
-    /* bytes 6..7 undocumented: reserved 0 */
+    r[3] = 0x3C;                                 /* payload length: 60 (37/37) */
+    /* bytes 4-7 hold the CRC, computed last */
     for (int i = 0; i < 12; i++)                 /* SKU, NUL-padded */
         if (i < OP_SKU_MAX && c->sku[i]) r[8 + i] = (uint8_t)c->sku[i];
     r[20] = 0x00;                                /* brand: DYMO */
     r[21] = 0xFF;                                /* region: global */
-    r[22] = 0x03;                                /* material: paper */
-    r[23] = 0x01;                                /* label type: die */
+    /* Material: the manual's 0x00-0x07 enum does not describe real tags, which
+     * use 0x02/0x04/0x06/0x08 and 0x20/0x23/0x24/0x25/0x26. 0x03 ("paper")
+     * appears on none of the 37. 0x04 is what our default SKU S0904980 carries. */
+    r[22] = 0x04;
+    r[23] = 0x01;                                /* label type: die-cut (33/37) */
     r[24] = 0x01;                                /* label color: white */
     r[25] = 0x00;                                /* content color: black */
     r[26] = 0x00;                                /* marker type 0 */
-    uint16_t pitch_mm = (uint16_t)(h_mm + 3);    /* label length + gap */
-    r[28] = (uint8_t)(pitch_mm & 0xFF); r[29] = (uint8_t)(pitch_mm >> 8);
-    r[30] = 2; r[31] = 0;                        /* marker1 width 2 mm */
-    r[32] = 2; r[33] = 0;                        /* marker1 to label start 2 mm */
+    uint16_t pitch_tmm = (uint16_t)(h_tmm + LABEL_GAP_TENTH_MM);
+    r[28] = (uint8_t)(pitch_tmm & 0xFF); r[29] = (uint8_t)(pitch_tmm >> 8);
+    r[30] = 30; r[31] = 0;                       /* marker1 width 3.0 mm (35/37) */
+    r[32] = 38; r[33] = 0;                       /* marker1 to label start; per-roll, 38 = S0904980 */
     /* marker2 unused (type 0) */
-    r[38] = 1; r[39] = 0;                        /* vertical offset 1 mm */
-    r[40] = (uint8_t)(h_mm & 0xFF); r[41] = (uint8_t)(h_mm >> 8);   /* label length mm */
-    r[42] = (uint8_t)(w_mm & 0xFF); r[43] = (uint8_t)(w_mm >> 8);   /* label width mm */
-    r[44] = 2; r[45] = 0;                        /* printable area h-offset 2 mm */
-    r[46] = 2; r[47] = 0;                        /* printable area v-offset 2 mm */
-    uint16_t liner_mm = dots_to_mm(HEAD_DOTS);   /* liner width = head width */
-    r[48] = (uint8_t)(liner_mm & 0xFF);
-    r[49] = (uint8_t)(liner_mm >> 8);
+    r[38] = 16; r[39] = 0;                       /* vertical offset 1.6 mm (23/37) */
+    r[40] = (uint8_t)(h_tmm & 0xFF); r[41] = (uint8_t)(h_tmm >> 8);   /* label length */
+    r[42] = (uint8_t)(w_tmm & 0xFF); r[43] = (uint8_t)(w_tmm >> 8);   /* label width  */
+    /* bytes 44-47 printable-area offsets: zero on 37/37 genuine rolls */
+    uint16_t liner_tmm = dots_to_tenth_mm(HEAD_DOTS);
+    r[48] = (uint8_t)(liner_tmm & 0xFF);         /* liner is a little wider than */
+    r[49] = (uint8_t)(liner_tmm >> 8);           /* the head; head width is our best guess */
     /* Bytes 50-51 are the roll's TOTAL label count and 52-53 the roll's total
-     * length (tech ref p.19), not what is left on it - the remaining count is
-     * the status struct's job (bytes 27-28). Reporting the remaining count here
-     * would make the "roll" appear to shrink as it is used. */
+     * media length, not what is left on it - the remaining count is the status
+     * struct's job (bytes 27-28). Reporting the remaining count here would make
+     * the "roll" appear to shrink as it is used. */
     uint16_t total_count = MODEL_DEFAULT_COUNT;
     if (c->label_count > total_count) total_count = c->label_count;
     r[50] = (uint8_t)(total_count & 0xFF);
     r[51] = (uint8_t)(total_count >> 8);
-    uint32_t total_mm = (uint32_t)pitch_mm * total_count;
-    if (total_mm > 0xFFFF) total_mm = 0xFFFF;
-    r[52] = (uint8_t)(total_mm & 0xFF); r[53] = (uint8_t)(total_mm >> 8);
-    /* counter margin = 0 */
-    r[56] = 0x00;                                /* counter strategy: count up from 0 */
-    r[60] = 15; r[61] = 26;                      /* production date DDYY (15-26) */
-    r[62] = 0x12;                                /* production time HHMM (low byte) */
+    uint32_t total_2mm = ((uint32_t)pitch_tmm * total_count) / 20u;   /* 2 mm units */
+    if (total_2mm > 0xFFFF) total_2mm = 0xFFFF;
+    r[52] = (uint8_t)(total_2mm & 0xFF); r[53] = (uint8_t)(total_2mm >> 8);
+    uint16_t margin = (uint16_t)(total_count / 10u);   /* 36/37 genuine rolls */
+    r[54] = (uint8_t)(margin & 0xFF); r[55] = (uint8_t)(margin >> 8);
+    r[56] = 0x01;                                /* counter strategy (37/37) */
+    /* bytes 57-62 zero: genuine tags carry nothing past byte 59, and the
+     * manual's "production date/time" rows have no counterpart in real data */
 
-    uint16_t crc = crc16_ccitt(&r[8], 55);       /* ASSUMPTION: CRC over payload */
-    r[4] = (uint8_t)(crc & 0xFF); r[5] = (uint8_t)(crc >> 8);
+    uint32_t crc = crc32_iso(r, 60);             /* bytes 0..59, 4..7 already zero */
+    r[4] = (uint8_t)(crc & 0xFF);
+    r[5] = (uint8_t)((crc >> 8) & 0xFF);
+    r[6] = (uint8_t)((crc >> 16) & 0xFF);
+    r[7] = (uint8_t)((crc >> 24) & 0xFF);
     usbp_send_reply(r, sizeof(r));
 }
 
@@ -609,7 +648,15 @@ void protocol_task(void)
             case 'C': s_arg1 = 'C'; s_state = S_ARG1; break;    /* density       */
             case 'T': s_arg1 = 'T'; s_state = S_ARG1; break;    /* speed         */
             case 'q': s_arg1 = 'q'; s_state = S_ARG1; break;    /* tray          */
-            case 'd': s_arg1 = 'd'; s_state = S_ARG1; break;    /* feed (backdoor) */
+            /* The zero-argument print-density family (LW450 tech ref p.19,
+             * and emitted by the CUPS driver's SetPrintDensity for the PPD's
+             * Light/Medium/Normal/Dark choices). ESC d used to be our feed
+             * backdoor, which collided head-on with a genuine opcode: a host
+             * sending ESC d then ESC L would have had the 0x1B eaten as a feed
+             * count. The feed lives on GS D 0x02 and ESC f 1 n instead. */
+            case 'c': set_density(75);  s_state = S_CMD; break;  /* Light   75 %   */
+            case 'd': set_density(88);  s_state = S_CMD; break;  /* Medium  87.5 % */
+            case 'g': set_density(113); s_state = S_CMD; break;  /* Dark   112.5 % */
             case 'D': s_hcnt = 0; s_state = S_ESC_D; break;     /* raster header */
             case 'W': s_hcnt = 0; s_state = S_ESC_W; break;     /* control cmd   */
             case 'M': s_w_payload = 8; s_state = S_SKIP; break; /* media type +8B */
@@ -621,7 +668,7 @@ void protocol_task(void)
                 s_job_active = 0; s_label_index = 0;
                 s_raster_dots = 0;   /* no printed height carries into the next job */
                 s_state = S_CMD; break;
-            case 'e': set_density(100); s_state = S_CMD; break;  /* density reset */
+            case 'e': set_density(100); s_state = S_CMD; break;  /* Normal 100 % */
             case 'U': send_sku_record(); s_state = S_CMD; break;
             case 'V': send_version();    s_state = S_CMD; break;
             case '$':                                 /* 0x24, per the tech ref */
@@ -635,7 +682,6 @@ void protocol_task(void)
             switch (s_arg1) {
             case 'A': send_status(); break;
             case 'C': set_density(c); break;
-            case 'd': motor_step_lines(c); break;
             case 'o': store_get_mut()->label_count = c; store_save(); break;
             /* 'T' speed, 'q' tray, '?': accept and ignore */
             }
@@ -646,21 +692,29 @@ void protocol_task(void)
             if (s_arg2 == 0) { s_arg2++; s_arg4[0] = c; break; }
             s_arg4[1] = c;
             {
-                uint16_t v = (uint16_t)(s_arg4[0] | (c << 8));
+                /* ESC n is u16 LE; ESC L is u16 BIG-endian. Three independent
+                 * sources: DYMO's own CUPS driver (SendLabelLength writes
+                 * (v>>8) then v&0xff, with a unit test pinning ESC L 12 34 for
+                 * 0x1234), Microsoft's GPD rule that <1B>L<0867> puts bytes
+                 * 08 67 on the wire in that order, and our own paper table -
+                 * read big-endian, 12 of 14 LW5XX.GPD entries are exactly
+                 * height_dots + 300, while byte-swapped they are noise. */
+                uint16_t v_le = (uint16_t)(s_arg4[0] | (c << 8));
+                uint16_t v_be = (uint16_t)(((uint16_t)s_arg4[0] << 8) | c);
                 switch (s_arg1) {
                 case 'L': {
                     /* Paper code from the driver GPD (e.g. "<1B>L<0867>"). Known
                      * codes set the stock; an unknown value in a plausible dot
                      * range is treated as a raw max label length. */
-                    const paper_t *p = paper_find(v);
+                    const paper_t *p = paper_find(v_be);
                     if (p) { s_paper = p; s_len_override = 0; }
                     /* 0 = die-cut: the roll sets the pitch, so fall back to the
                      * paper table. It must CLEAR a previous raw override -
                      * 0 is what the stock driver sends for every die-cut job. */
-                    else if (v == 0) s_len_override = 0;
-                    else if (v >= 50 && v <= 32767) s_len_override = v;
+                    else if (v_be == 0) s_len_override = 0;
+                    else if (v_be >= 50 && v_be <= 32767) s_len_override = v_be;
                     break; }
-                case 'n': s_label_index = v; break;
+                case 'n': s_label_index = v_le; break;
                 }
             }
             s_state = S_CMD;

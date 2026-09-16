@@ -84,9 +84,9 @@ static void feed_bytewise(const unsigned char *d, int n){
     for (int i=0;i<n;i++){ protocol_feed(&d[i],1); protocol_task(); }
 }
 
-/* ESC D header: BPP=1, Align=0, W(lines) u32 LE, H(dots) u32 LE. */
+/* ESC D header: BPP=1, Align=2, W(lines) u32 LE, H(dots) u32 LE. */
 static void esc_d(unsigned char *o, unsigned lines, unsigned dots){
-    o[0]=0x1B; o[1]='D'; o[2]=1; o[3]=0;
+    o[0]=0x1B; o[1]='D'; o[2]=1; o[3]=2;      /* Align 2 = bottom (tech ref p.12) */
     o[4]=lines&0xFF; o[5]=(lines>>8)&0xFF; o[6]=(lines>>16)&0xFF; o[7]=(lines>>24)&0xFF;
     o[8]=dots&0xFF;  o[9]=(dots>>8)&0xFF;  o[10]=(dots>>16)&0xFF; o[11]=(dots>>24)&0xFF;
 }
@@ -258,7 +258,7 @@ int main(void){
 
     /* 19c) ESC L u16 LE paper code 0x0867 is bytes 67 08 (5XL shipping). */
     reset_state();
-    unsigned char el[] = { 0x1B, 'L', 0x67, 0x08 };
+    unsigned char el[] = { 0x1B, 'L', 0x08, 0x67 };   /* ESC L is BIG-endian */
     protocol_feed(el, sizeof el); protocol_task();
     unsigned char n1[] = { 0x1B, 'n', 3, 0 };
     protocol_feed(n1, sizeof n1); protocol_task();
@@ -364,13 +364,13 @@ int main(void){
     CHECK(g_lines == 0 && g_reply[2] == 0);        /* nothing fired */
     CHECK(g_reply[3] == 0);                        /* thermal_ok reported false */
 
-    /* 28) ESC U geometry uses 25.4 mm/inch: the liner width at [48-49] is the
-     *     head width in mm (OP104 1248 dots -> 106, OP57 672 -> 57), not the
-     *     ~1.6 % short value a flat 25 mm/inch produced. */
+    /* 28) ESC U geometry is in TENTHS of a millimetre, proven against 37 genuine
+     *     roll-tag dumps in this repo's own Src/main.c (SKU 30256 carries
+     *     1016 x 587 = exactly 4" x 2.3125"). The liner at [48-49] is the head
+     *     width in tenths: OP104 1248 dots -> 1057, OP57 672 -> 569. */
     reset_state(); strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 220;
     {
-        unsigned den   = (unsigned)MODEL_DPI * 10u;
-        unsigned liner = ((unsigned)HEAD_DOTS * 254u + den / 2u) / den;
+        unsigned liner = ((unsigned)HEAD_DOTS * 254u + MODEL_DPI / 2u) / MODEL_DPI;
         protocol_feed(u, sizeof u); protocol_task();
         CHECK(g_reply_len == 63);
         CHECK((unsigned)(g_reply[48] | (g_reply[49] << 8)) == liner);
@@ -441,7 +441,7 @@ int main(void){
     /* 34) ESC L 0 (die-cut) must CLEAR a previous raw length override — 0 is
      *     what the stock driver sends for every die-cut job. */
     reset_state();
-    unsigned char l1000[] = { 0x1B, 'L', 0xE8, 0x03 };   /* 1000 dots, raw */
+    unsigned char l1000[] = { 0x1B, 'L', 0x03, 0xE8 };   /* 1000 dots, raw, BE */
     protocol_feed(l1000, sizeof l1000); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
     CHECK(g_feed == 1000 + 20);                    /* override + gap */
@@ -502,7 +502,7 @@ int main(void){
      *     has a nominal height of 32000 dots; without the clamp one ESC G would
      *     spool out 2.7 metres of paper. */
     reset_state();
-    unsigned char lbig[] = { 0x1B, 'L', 0xFF, 0x7F };   /* 32767 raw dot length */
+    unsigned char lbig[] = { 0x1B, 'L', 0x7F, 0xFF };   /* 32767 raw dot length, BE */
     protocol_feed(lbig, sizeof lbig); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
     CHECK(g_feed > 0 && g_feed <= 4000);
@@ -575,6 +575,62 @@ int main(void){
     unsigned char vh0[] = { 0x1D, 'D', 0x08, 0 };
     protocol_feed(vh0, sizeof vh0); protocol_task();
     CHECK(!(g_cfg.flags & OP_FLAG_VH_INHIBIT));
+
+    /* 45) ESC U record header, checked against the 37 genuine roll-tag dumps in
+     *     this repo's own Src/main.c: byte 3 is a constant 0x3C (the 60-byte
+     *     payload length, NOT the SKU length), and bytes 4-7 are a CRC-32/zlib
+     *     over bytes 0..59 with 4..7 zeroed, stored little-endian. */
+    reset_state(); strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 220;
+    protocol_feed(u, sizeof u); protocol_task();
+    CHECK(g_reply_len == 63);
+    CHECK(g_reply[3] == 0x3C);                     /* record length, not strlen */
+    {
+        unsigned char tmp[60];
+        memcpy(tmp, g_reply, 60);
+        tmp[4] = tmp[5] = tmp[6] = tmp[7] = 0;
+        unsigned long crc = 0xFFFFFFFFul;
+        for (int i = 0; i < 60; i++) {
+            crc ^= tmp[i];
+            for (int b = 0; b < 8; b++)
+                crc = (crc & 1ul) ? ((crc >> 1) ^ 0xEDB88320ul) : (crc >> 1);
+        }
+        crc = ~crc & 0xFFFFFFFFul;
+        unsigned long got = (unsigned long)g_reply[4] | ((unsigned long)g_reply[5] << 8)
+                          | ((unsigned long)g_reply[6] << 16) | ((unsigned long)g_reply[7] << 24);
+        CHECK(got == crc);
+    }
+    CHECK(g_reply[56] == 0x01);                    /* counter strategy, 37/37 */
+    CHECK(g_reply[44] == 0 && g_reply[45] == 0 &&
+          g_reply[46] == 0 && g_reply[47] == 0);   /* printable offsets, 37/37 */
+    CHECK(g_reply[60] == 0 && g_reply[61] == 0 && g_reply[62] == 0);
+    {   /* margin is a tenth of the count the record itself reports, which is
+         * max(model default, configured) - so derive it, do not hardcode. */
+        int total = g_reply[50] | (g_reply[51] << 8);
+        CHECK((g_reply[54] | (g_reply[55] << 8)) == total / 10);
+    }
+
+    /* 46) The zero-argument density family. ESC d used to be our feed backdoor
+     *     and would have eaten the next command's ESC; it is a genuine opcode. */
+    reset_state();
+    unsigned char dens[] = { 0x1B, 'c', 0x1B, 'n', 41, 0 };
+    protocol_feed(dens, sizeof dens); protocol_task();
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[9] == 75);                       /* ESC c = Light 75 % */
+    CHECK(g_reply[5] == 41);                       /* and it consumed no argument */
+    reset_state();
+    unsigned char dens2[] = { 0x1B, 'd', 0x1B, 'g' };
+    protocol_feed(dens2, sizeof dens2); protocol_task();
+    CHECK(g_feed == 0);                            /* ESC d no longer feeds paper */
+    protocol_feed(q, sizeof q); protocol_task();
+    CHECK(g_reply[9] == 113);                      /* ESC g = Dark 112.5 % */
+
+    /* 47) ESC L direction, stated as a value the little-endian reading cannot
+     *     produce: 0x0064 = 100 dots. Read LE it would be 25600. */
+    reset_state();
+    unsigned char lbe[] = { 0x1B, 'L', 0x00, 0x64 };
+    protocol_feed(lbe, sizeof lbe); protocol_task();
+    protocol_feed(g, sizeof g); protocol_task();
+    CHECK(g_feed == 100 + 20);                     /* override 100 + gap */
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);
     return fails ? 1 : 0;

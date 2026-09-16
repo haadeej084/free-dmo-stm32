@@ -5,7 +5,7 @@
 > This is a **prototype / concept**, not a finished product. The **software layer is
 > complete and verified** (both models build clean; every software-testable path is
 > tested), but the firmware **has not yet been run on a real board**. Before it prints,
-> someone with a genuine LabelWriter 550/5XL must do the **hardware fieldwork** in
+> someone with a genuine LabelWriter 550 must do the **hardware fieldwork** in
 > [`FIELDWORK.md`](FIELDWORK.md) — which is down to **seven** items: GPIO routing,
 > the motor drive train, the thermistor divider resistor, the top-of-form sensor,
 > the VH enable pin, the half-2 dot order, and host acceptance.
@@ -20,26 +20,28 @@
 > [`FIELDWORK.md`](FIELDWORK.md) lists exactly what to measure — reach out at
 > **opendymofw@secret.fyi**.
 >
-> **Stock 550 MCUs are reported to ship at RDP Level 2** (assumed likewise for the
-> 5XL; see DECISIONS D13 for the evidence). SWD debug and the system bootloader
+> **Stock 550 MCUs are reported to ship at RDP Level 2** (see DECISIONS D13 for
+> the evidence). SWD debug and the system bootloader
 > are then disabled; `st-flash write` will not take until RDP has already been lowered
 > (that mass-erases flash). This image is for an F072 you are already allowed to
 > program (replacement chip, or a chip whose RDP was lowered). A factory printer
 > still uses the Bluepill I2C tag-emulator path until then.
 
-> **Check the MCU first.** The image targets an STM32F072CB. That is the MCU on
-> the USB-only 550; FCC photos of the network models (5XL, 550 Turbo) show a
-> larger ST chip instead (DECISIONS D24), so read the marking on a 5XL board.
+> **Which printers.** The image runs on the **LabelWriter 550**, whose mainboard
+> carries an **STM32F072** (48-pin). The **5XL and 550 Turbo** use an
+> **STM32F407VET6** with an Ethernet PHY instead — read on several boards
+> (DECISIONS D25) — so this image does **not** run on them. The 4" build below
+> keeps the 5XL geometry, identity and paper table ready for an F407 port.
 
-Firmware that runs **in place on a genuine D.mo LabelWriter 550 / 5XL mainboard**
+Firmware that runs **in place on a genuine D.mo LabelWriter 550 mainboard**
 (STM32F072, flashed over SWD once the chip is writable) and makes the printer **print on any
-roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only (the network
-"LabelWriter Print Server" coprocessor is out of scope). One codebase builds both models:
+roll**, by defeating the three layers of D.mo's roll DRM. It is USB-only. One codebase
+builds two head geometries:
 
-| Model | Build | USB PID | Print head | Head width | Resolution |
-|-------|-------|---------|-----------|------------|------------|
-| LabelWriter **5XL** (4" class) | `make` (default) | `0x002A` | 1248 dots (156 B) | 105.7 mm | 300 dpi |
-| LabelWriter **550**            | `make MODEL=OP57` | `0x0028` | 672 dots (84 B)   | 56.9 mm  | 300 dpi |
+| Model | Build | USB PID | Print head | Head width | Resolution | Board |
+|-------|-------|---------|-----------|------------|------------|-------|
+| LabelWriter **550**            | `make` (default) | `0x0028` | 672 dots (84 B)   | 56.9 mm  | 300 dpi | STM32F072 — runs |
+| LabelWriter **5XL** (4" class) | `make MODEL=OP104` | `0x002A` | 1248 dots (156 B) | 105.7 mm | 300 dpi | STM32F407 on the real board — needs a port |
 
 Only the **dot count** is a spec value — the tech reference states 672 and 1248
 dots at 300 dpi — and the mm width follows from it. (DYMO's own prose calls the
@@ -98,7 +100,7 @@ prints end-to-end.
 
 ```
 src/                  firmware (C, hand-rolled USB FS device stack)
-  model.h             per-model geometry + USB identity (OP104=5XL default, OP57=550)
+  model.h             per-model geometry + USB identity (OP57=550 default, OP104=4" head)
   printer/protocol.c  genuine D.mo wire-protocol parser (see PROTOCOL.md)
   printer/paper.h     paper table from the real driver GPDs (feed pitch + ESC U mm)
   usb/usb_desc.c      USB descriptors: VID/PID/strings/IEEE-1284 device ID
@@ -107,7 +109,7 @@ tools/opsend.py       driver-less host sender (libusb) that speaks the real prot
 pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico icon)
 test/test_protocol.c  host unit test of the parser (mocked hardware)
 test/test_usb.c       host unit test of the USB stack (register-level peripheral model)
-test/renode/          the real image in the Renode emulator (boot, LED, head shift)
+test/renode/          the real image in the Renode emulator (boot, LED, head shift, EEPROM)
 tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 ```
 
@@ -116,15 +118,15 @@ tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 Two equivalent drivers produce `build/<MODEL>/opendmo-<MODEL>.{elf,bin,map}`:
 
 ```sh
-make                 # OP104 / 5XL (default)
-make MODEL=OP57      # OP57 / 550
+make                 # OP57 / 550 (default)
+make MODEL=OP104     # OP104 / 4" head geometry
 ```
 
 On a host without `make`, use the equivalent shell driver:
 
 ```sh
-./build.sh           # OP104 (default)
-./build.sh OP57      # OP57
+./build.sh           # OP57 (default)
+./build.sh OP104     # OP104
 ./build.sh all       # both
 ```
 
@@ -133,7 +135,7 @@ against a board before flashing).
 
 ## Verification criteria
 
-- D.MO Connect enumerates the device as a genuine LabelWriter 550/5XL.
+- D.MO Connect enumerates the device as a genuine LabelWriter 550.
 - It shows a **valid roll** with the configured SKU and count (no "empty"/"JOKER").
 - A label prints end-to-end from that software — correct size, content, feed.
 - Changing the configured SKU/count (backdoor `GS C` or EEPROM) changes what the host

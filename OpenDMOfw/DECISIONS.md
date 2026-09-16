@@ -122,11 +122,12 @@ Reasoned but not tested on silicium — verify before production:
    tune the absolute values.
 6. **`COUNT_RX` encoding** `0x8400` = BLSIZE=1/NUM_BLOCK=1 = 64 B.
 
-## D9 — Multi-model from one codebase (5XL default, 550 option)
+## D9 — Multi-model from one codebase (550 default, 4" geometry option)
 
-Width-parametrised via `src/model.h` + a build define. **Default = 5XL**
-(**1248 dots**, 156 B/line, 105.7 mm at 300 dpi); **550** is `make MODEL=OP57`
-(**672 dots**, 84 B/line, 56.9 mm). Head widths come from the tech reference and
+Width-parametrised via `src/model.h` + a build define. **Default = 550**
+(**672 dots**, 84 B/line, 56.9 mm at 300 dpi); the **4" / 5XL geometry** is
+`make MODEL=OP104` (**1248 dots**, 156 B/line, 105.7 mm). The default was the
+5XL until D25 established that the 5XL board carries an STM32F407. Head widths come from the tech reference and
 the driver GPDs' `MaxPrintableWidth`; the mm figures are derived from the dot
 count at 300 dpi, not quoted independently. Only head
 geometry, strobe-segment count, and USB identity (PID/product/MDL) differ; USB
@@ -144,7 +145,7 @@ core, protocol, motor, thermics, and config are shared.
 - **A6** IWDG watchdog (per-line kick, bounded cool-down wait), LED fault patterns
   (overheat / paper-out), and a **unique serial from the MCU UID**.
 - **A7** Host unit test of the parser (`test/test_protocol.c`, mocked hardware),
-  compiled + run natively; **117 checks / 52 scenarios, both models**. Note that
+  compiled + run natively; **121 checks / 54 scenarios, both models**. Note that
   `test/test_protocol_wire.py` is a *hand transcription* of the reply generators
   and checks that transcription against the capture and the driver structs — it
   does not execute `protocol.c`. `test_protocol.c` is the executable regression
@@ -653,15 +654,9 @@ words from a four-entry table built once per line: 11 898 instructions
     crystal, on a **6-wire** cable (consistent with I2C + PWDN + IRQ + power);
   - button board `LW550 Button RevB`, main boards `LW550_Rev E 20200812` and a
     2021 revision;
-  - **the 550 Turbo and 5XL main boards, which carry an RJ45 LAN jack, show one
-    large ST QFP of about 14 mm next to it** (scaled against the USB-B
-    receptacle), i.e. a 100-pin-class part, and no 48-pin F072 is evident at
-    that resolution. The USB-only 550 shows the small 48-pin class MCU. So the
-    network models' print-engine MCU is **not established** as an STM32F072CB,
-    and an OP104 image can only be used on a 5XL whose MCU has been read as
-    one (FIELDWORK section 5, step 1). The Rev K photos this repo started from
-    did show an F072CB next to a DYMO-marked BGA; which model and revision that
-    board came from is not recorded.
+  - the 550 Turbo and 5XL main boards, which carry an RJ45 LAN jack, show one
+    large ST QFP of about 14 mm next to it — identified in D25 as an
+    STM32F407VET6.
   - Not legible anywhere: motor-driver, EEPROM, load-switch and regulator
     markings, the paper-sensor type, and any trace to an MCU pin.
 - **Motor:** LEILI 35BY412 = 7.5°/step (48 steps/rev); low-resistance bipolar
@@ -669,3 +664,65 @@ words from a four-entry table built once per line: 11 898 instructions
   train or roller diameter. One full step per line fits the rated speed
   (~1360 rpm); two does not. `MOTOR_STEPS_PER_LINE` stays 1, now as an
   estimate with a reason rather than a placeholder.
+
+## D25 — The 5XL is a different board; the 550 is the target
+
+### MCU identification (markings read from full-resolution community photos)
+
+- **LabelWriter 5XL: STM32F407VET6** on three boards — "LW5XL DATE 20221017
+  Rev: I" (`STM32F407 VET6 … PHL 7B 306`) and "LW5XL DATE 20200624 RevD"
+  (free-dmo/free-dmo-stm32 issue #50), and a 2022 5XL (issue #2). The RevD
+  underside carries a **KSZ8081** RMII Ethernet PHY (EEVblog thread "Dymo 550
+  Thermal Printer DRM Hacking", page 200).
+- **LabelWriter 550 Turbo: STM32F407VET6** — "Revision I" (EEVblog page 175,
+  two boards), board silkscreen "LW550T DATE 20221017 Rev: I".
+- **LabelWriter 550: STM32F072, 48-pin UFQFPN** — "LW550B_Rev:E 20200812"
+  reads `STM32F 072C?U6`; the fifth character (8 or B) is not legible
+  (EEVblog page 25). The owner's own Rev K photos show the same 48-pin QFN
+  beside the 12 MHz crystal. A Rev K owner reports two changes from Rev H: a
+  different U2 stepper driver and a 3-wire label-sensor flex.
+- No board shows a separate network coprocessor; the "DYMO BGA" in an older
+  PINMAP table is not supported by any photo and has been removed.
+
+### Consequences
+
+- **The image targets the 550.** `make` now builds OP57 by default. OP104
+  stays: its 1248-dot geometry, 5XL USB identity, paper table and all the
+  protocol code are exactly what an STM32F407 port needs, and it keeps being
+  built and tested so that nothing rots. It does not run on a genuine 5XL.
+- **Linked for 64 KB.** The image is ~11.7 KB; declaring 64 KB makes it fit an
+  F072C8 as well as a CB, and the linker would fail the build first.
+- **An F407 port is a separate job**: different core (Cortex-M4), USB OTG FS
+  (DWC2) instead of the F0 device peripheral, I2C v1, different ADC/GPIO/RCC,
+  and a completely unmeasured pin map on a board with Ethernet in the way.
+
+### Also in this pass
+
+- **`ESC W` length (bug).** The decompiled `ControlCommand` builds the header
+  as `len = payload + 6 − 2`, i.e. the length counts the four bytes after
+  `ESC W`. The parser skipped `len` bytes after those four, swallowing four
+  bytes of the next command. It now skips `len − 4`. Test 51.
+- **`ESC R` (firmware update) is refused cleanly.** DYMO Connect's updater
+  (`SecureFwUpdateCommand`, object `0xF100`) sends `ESC R 00 01 00 F1`, a
+  128-byte signed header, and waits for `ESC r <status>`; `ReflashCommand`
+  (`ESC R 04 03 00 00`) reboots a genuine printer into its bootloader. We
+  ignore the reflash, consume the 128 bytes and answer `ESC r 01`, so an
+  update attempt aborts with an error instead of streaming an image through
+  the command parser. Test 52.
+- **No stock firmware is obtainable.** DYMO Connect fetches
+  `Software/dymoconnect/updates/Updates.xml` from
+  `dymoreleasecontent.blob.core.windows.net/dymo-release/` (fallback
+  `printdymolabel.azurewebsites.net`); its `<Firmware>` entries (HardwareVersion,
+  FirmwareVersion, ProductID, DownloadURL, MD5) are empty today, the blob
+  container is not listable, the image is only held in memory, and the
+  128-byte "secure header" handshake implies a signed image checked on the
+  printer. Stock 550 parts are RDP2. So the pin map cannot come from a dump.
+- **Config EEPROM in Renode** (`test/renode/eeprom.py`): the real image
+  against a 16 KB 2-byte / 64-byte-page part and a 256 B 1-byte / 8-byte-page
+  part — defaults persisted at 0x100 resp. 0 with the right addressing, the
+  low 256 bytes of the big part untouched, stored and legacy-offset records
+  loaded, bad density sanitised, a write-protected part left alone with the
+  firmware running on RAM defaults. One scenario is deliberately absent and
+  documented: Renode's EEPROM commits bytes before the STOP condition, which
+  a real 24Cxx does not, so a pre-stored record on the small part cannot be
+  tested faithfully with it.

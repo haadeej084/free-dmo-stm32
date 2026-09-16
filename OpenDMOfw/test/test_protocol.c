@@ -208,7 +208,7 @@ int main(void){
      *     (payload looks like commands), then the parser RESUMES at the command
      *     state — it must not stay inside the payload. */
     reset_state();
-    unsigned char w[] = { 0x1B, 'W', 4, 0, 0, 0,   /* len=4 dir=0 obj=0 */
+    unsigned char w[] = { 0x1B, 'W', 8, 0, 0, 0,   /* len=8: 4 header + 4 payload */
                           0x1B, 'A', 0x00, 0x1B }; /* 4 adversarial payload bytes */
     protocol_feed(w, sizeof w); protocol_task();
     CHECK(g_reply_len == -1);                      /* no reply from within the payload */
@@ -299,16 +299,17 @@ int main(void){
     protocol_feed(fw, k); protocol_task();
     CHECK(g_lines == 3);                           /* full-width lines print cleanly */
 
-    /* 23) ESC W length clamp: len=255 clamps to 250, so a command after 250
-     *     padding bytes is still parsed (not eaten). */
+    /* 23) ESC W maximum length: len=255 is 4 header bytes + 251 payload bytes
+     *     (decompiled ControlCommand: len = payload + 6 - 2), so a command
+     *     right after 251 payload bytes is parsed, not eaten. */
     reset_state();
-    unsigned char wb[6 + 250 + 4];
+    unsigned char wb[6 + 251 + 4];
     wb[0]=0x1B; wb[1]='W'; wb[2]=0xFF; wb[3]=0; wb[4]=0; wb[5]=0;   /* len=255 */
-    for (int i=0;i<250;i++) wb[6+i] = 0;          /* 250 zero payload bytes */
-    wb[6+250]=0x1B; wb[7+250]='n'; wb[8+250]=9; wb[9+250]=0;        /* ESC n 9 */
+    for (int i=0;i<251;i++) wb[6+i] = 0;          /* 251 zero payload bytes */
+    wb[6+251]=0x1B; wb[7+251]='n'; wb[8+251]=9; wb[9+251]=0;        /* ESC n 9 */
     protocol_feed(wb, sizeof wb); protocol_task();
     protocol_feed(q, sizeof q); protocol_task();
-    CHECK(g_reply[5] == 9 && g_reply[6] == 0);     /* parsed after the clamped skip */
+    CHECK(g_reply[5] == 9 && g_reply[6] == 0);     /* parsed right after the payload */
 
     /* 24) ESC $ (0x24) is the tech-ref byte for "restore factory settings" and
      *     the one tools/opsend.py sends. It must reset the config AND leave the
@@ -676,6 +677,39 @@ int main(void){
         protocol_feed(yz, sizeof yz); protocol_task();
         protocol_feed(q, sizeof q); protocol_task();
         CHECK(g_reply[5] == 7);
+    }
+
+    /* 51) The framing byte counts the header: a genuine read request with no
+     *     payload is ESC W 04 00 objLo objHi. The old parser skipped 4 more
+     *     bytes and ate the next command. */
+    reset_state();
+    {
+        unsigned char wr[] = { 0x1B, 'W', 4, 0, 0x01, 0x70,   /* HardwareConfig read */
+                               0x1B, 'n', 13, 0 };
+        protocol_feed(wr, sizeof wr); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 13 && g_reply[6] == 0);
+    }
+
+    /* 52) Firmware update attempt (DYMO Connect SecureFwUpdateCommand): ESC R
+     *     00 01 00 F1, then a 128-byte signed header, then the host waits for
+     *     ESC r <status>. We must consume exactly the header, refuse with a
+     *     non-zero status, and parse normally afterwards. Reflash (ESC R 04 03
+     *     00 00) is ignored. */
+    reset_state();
+    {
+        unsigned char rf[] = { 0x1B, 'R', 4, 3, 0, 0 };
+        protocol_feed(rf, sizeof rf); protocol_task();
+        CHECK(g_reply_len == -1);                  /* no reboot, no reply */
+        unsigned char up[6 + 128];
+        up[0]=0x1B; up[1]='R'; up[2]=0; up[3]=1; up[4]=0x00; up[5]=0xF1;
+        for (int i = 0; i < 128; i++) up[6 + i] = (i % 2) ? 0x1B : 'A'; /* hostile */
+        protocol_feed(up, sizeof up); protocol_task();
+        CHECK(g_reply_len == 3 && g_reply[0] == 0x1B && g_reply[1] == 'r' && g_reply[2] != 0);
+        unsigned char i14[] = { 0x1B, 'n', 14, 0 };
+        protocol_feed(i14, sizeof i14); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && g_reply[5] == 14);
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

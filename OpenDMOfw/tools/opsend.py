@@ -12,7 +12,7 @@ Install:  pip install pyusb pillow
 
 Examples:
   python opsend.py status
-  python opsend.py --model OP57 feed 30
+  python opsend.py --model OP104 feed 30      # 4" test build (default OP57)
   python opsend.py density 120
   python opsend.py testpattern
   python opsend.py image label.png
@@ -221,7 +221,7 @@ def send_job(dev, lines, dots, data, job_id=1, length=0):
 # ---- CLI -------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="OpenDMOfw D.mo wire-protocol sender")
-    ap.add_argument("--model", choices=MODELS, default="OP104")
+    ap.add_argument("--model", choices=MODELS, default="OP57")
     ap.add_argument("--vid", type=lambda s: int(s, 0))
     ap.add_argument("--pid", type=lambda s: int(s, 0))
     sub = ap.add_subparsers(dest="cmd", required=True)

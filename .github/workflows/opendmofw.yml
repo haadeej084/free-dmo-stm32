@@ -21,22 +21,22 @@ jobs:
           # libnewlib is needed explicitly for --specs=nano.specs; relying on
           # apt Recommends is how this breaks on a --no-install-recommends runner.
           sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi
-      - name: Build OP104 and OP57
+      - name: Build OP57 (default) and OP104
         working-directory: OpenDMOfw
-        run: make && make MODEL=OP57
+        run: make && make MODEL=OP104
       - name: Host tests
         working-directory: OpenDMOfw
         run: make test
       - name: Worst-case stack depth
         working-directory: OpenDMOfw
-        run: make stack && make stack MODEL=OP57
+        run: make stack && make stack MODEL=OP104
       - name: Install Renode
         run: |
           curl -sSL -o renode.tar.gz https://github.com/renode/renode/releases/download/v1.17.0/renode-1.17.0.linux-portable.tar.gz
           mkdir -p "$HOME/renode" && tar xzf renode.tar.gz -C "$HOME/renode" --strip-components=1
-      - name: Firmware image in Renode (boot, LED, SysTick, head shift)
+      - name: Firmware image in Renode (boot, LED, SysTick, head shift, EEPROM)
         working-directory: OpenDMOfw
-        run: make renode RENODE="$HOME/renode/renode" && make renode MODEL=OP57 RENODE="$HOME/renode/renode"
+        run: make renode RENODE="$HOME/renode/renode" && make renode MODEL=OP104 RENODE="$HOME/renode/renode"
 
   pc-patch:
     # net48 + WinForms, so this half only builds on Windows.

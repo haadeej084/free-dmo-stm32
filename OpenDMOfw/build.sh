@@ -4,13 +4,12 @@
 # This box has no `make`, so this script replicates the Makefile target-for-target
 # (same flags, same object layout) and drives arm-none-eabi-gcc directly.
 #
-#   ./build.sh            -> OP104 (5XL, 1248 dots / 300 dpi) [default]
-#   ./build.sh OP57       -> OP57  (550,   672 dots / 300 dpi)
+#   ./build.sh            -> OP57  (550, 672 dots / 300 dpi) [default]
+#   ./build.sh OP104      -> OP104 (4" head geometry, 1248 dots / 300 dpi)
 #   ./build.sh all        -> both
 #
-# Note: unlike the Makefile this passes -DMODEL_<MODEL> for every model,
-# including -DMODEL_OP104. model.h only tests MODEL_OP57, so both drivers
-# produce the same OP104 image.
+# Like the Makefile, this passes -DMODEL_<MODEL>; model.h defaults to OP57
+# when neither is defined and refuses both at once.
 #
 # Output: build/<MODEL>/opendmo-<MODEL>.{elf,bin,map}
 set -euo pipefail
@@ -53,9 +52,9 @@ build_model() {
   arm-none-eabi-size "$BUILD/$TARGET.elf"
 }
 
-MODEL_ARG="${1:-OP104}"
+MODEL_ARG="${1:-OP57}"
 case "$MODEL_ARG" in
-  all)   build_model OP104; build_model OP57 ;;
+  all)   build_model OP57; build_model OP104 ;;
   OP104) build_model OP104 ;;
   OP57)  build_model OP57 ;;
   *)     echo "unknown model '$MODEL_ARG' (use OP104, OP57 or all)" >&2; exit 2 ;;

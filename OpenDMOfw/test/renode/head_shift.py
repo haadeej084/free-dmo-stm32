@@ -18,7 +18,7 @@ conversion used below (1.2 to 2.0 clock cycles per instruction at 48 MHz on a
 Cortex-M0 fetching from flash with one wait state) is an estimate, stated as
 a range.
 
-Usage:  RENODE=/path/to/renode python3 test/renode/head_shift.py [OP104|OP57]
+Usage:  RENODE=/path/to/renode python3 test/renode/head_shift.py [OP57|OP104]
 """
 import os, re, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,7 +26,7 @@ from smoke import elf_symbols, symbol  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "OP104"
+MODEL = sys.argv[1] if len(sys.argv) > 1 else "OP57"
 ELF = os.path.join(ROOT, "build", MODEL, f"opendmo-{MODEL}.elf")
 RENODE = os.environ.get("RENODE", "renode")
 

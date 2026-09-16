@@ -1,19 +1,20 @@
 # OpenDMOfw - firmware build
 # Toolchain: arm-none-eabi-gcc (bare-metal, no vendor-SDK needed).
-# Output: build/OP104/opendmo-OP104.* (default) or build/OP57/opendmo-OP57.*.
+# Output: build/<MODEL>/opendmo-<MODEL>.{elf,bin,map}
 
-# Default build = OP104 (5XL, 4"/300 dpi), plain `make`. Build the 57 mm
-# (550) variant with:
-#   make MODEL=OP57
-ifeq ($(MODEL),OP57)
-TARGET   := opendmo-OP57
-BUILD    := build/OP57
-MODELDEF := -DMODEL_OP57
-else
-TARGET   := opendmo-OP104
-BUILD    := build/OP104
-MODELDEF :=
+# Default build = OP57: the LabelWriter 550, the model whose mainboard carries
+# the STM32F072 this firmware is written for. OP104 (1248-dot / 4" head) is the
+# 5XL geometry; genuine 5XL and 550 Turbo boards use an STM32F407VET6 instead
+# (DECISIONS D25), so that image has no board to run on until a port exists.
+#   make                 # OP57, LabelWriter 550
+#   make MODEL=OP104     # 4" head geometry
+MODEL    ?= OP57
+ifneq ($(filter $(MODEL),OP57 OP104),$(MODEL))
+$(error MODEL must be OP57 or OP104)
 endif
+TARGET   := opendmo-$(MODEL)
+BUILD    := build/$(MODEL)
+MODELDEF := -DMODEL_$(MODEL)
 
 CROSS    := arm-none-eabi-
 CC       := $(CROSS)gcc
@@ -84,22 +85,36 @@ USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb
 
 test:
 	python3 test/test_protocol_wire.py
-	@set -e; 	HOSTCC=$$(command -v cc || command -v gcc || true); 	if [ -z "$$HOSTCC" ]; then echo "skip native C tests (no host C compiler)"; exit 0; fi; 	for m in OP104 OP57; do 	  $$HOSTCC -Wall -Wextra -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m 	    test/test_protocol.c src/printer/protocol.c; 	  /tmp/opendmo-test-$$m; 	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); 	  /tmp/opendmo-usbtest-$$m; 	done
+	@set -e; \
+	HOSTCC=$$(command -v cc || command -v gcc || true); \
+	if [ -z "$$HOSTCC" ]; then echo "skip native C tests (no host C compiler)"; exit 0; fi; \
+	for m in OP57 OP104; do \
+	  $$HOSTCC -Wall -Wextra -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m \
+	    test/test_protocol.c src/printer/protocol.c; \
+	  /tmp/opendmo-test-$$m; \
+	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); \
+	  /tmp/opendmo-usbtest-$$m; \
+	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the
 # linker script's _Min_Stack_Size (0x800). See tools/stack_depth.py.
 STACK_LIMIT := 2048
 stack:
 	@rm -rf $(BUILD)/stack && mkdir -p $(BUILD)/stack
-	@for f in $(SRC); do 	  $(CC) $(CFLAGS) -fcallgraph-info=su -c $$f -o $(BUILD)/stack/$$(basename $$f .c).o || exit 1; 	done
+	@for f in $(SRC); do \
+	  $(CC) $(CFLAGS) -fcallgraph-info=su -c $$f -o $(BUILD)/stack/$$(basename $$f .c).o || exit 1; \
+	done
 	python3 tools/stack_depth.py --limit $(STACK_LIMIT) $(BUILD)/stack/*.ci
 
-# The real image in the Renode emulator (boot/LED/SysTick smoke test and the
-# head shift bit-stream + cost check). Needs Renode: RENODE=/path/to/renode.
+# The real image in the Renode emulator: boot/LED/SysTick smoke test, the head
+# shift bit stream + cost, and the config EEPROM on both known parts. Needs
+# Renode: RENODE=/path/to/renode.
 RENODE ?= renode
 renode: $(BUILD)/$(TARGET).elf
-	RENODE=$(RENODE) python3 test/renode/smoke.py $(if $(filter OP57,$(MODEL)),OP57,OP104)
-	RENODE=$(RENODE) python3 test/renode/head_shift.py $(if $(filter OP57,$(MODEL)),OP57,OP104)
+	RENODE=$(RENODE) python3 test/renode/smoke.py $(MODEL)
+	RENODE=$(RENODE) python3 test/renode/head_shift.py $(MODEL)
+	RENODE=$(RENODE) python3 test/renode/eeprom.py $(MODEL)
 
 clean:
 	rm -rf $(BUILD)

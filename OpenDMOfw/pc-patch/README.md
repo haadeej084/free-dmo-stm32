@@ -1,7 +1,8 @@
 # pc-patch — D.MO roll patch (PC side)
 
 PC-side companion to the **OpenDMOfw** printer firmware in this repo: together they make
-**D.MO Connect** accept and drive **any** roll in a LabelWriter 550 / 5XL. OpenDMOfw handles the
+**D.MO Connect** accept and drive **any** roll in a LabelWriter 550 (the 5XL uses a different MCU;
+see OpenDMOfw DECISIONS D25). OpenDMOfw handles the
 printer side (the firmware presents a genuine D.mo device and defeats the roll-tag DRM); this tool
 handles the PC side — D.MO Connect's own roll validation in `DYMO.LabelAPI.dll`.
 

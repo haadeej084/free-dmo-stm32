@@ -259,6 +259,17 @@ int main(void)
             CHECK(head_dwell_sag_us(8, 256, 9999, 336) ==
                   head_dwell_sag_us(8, 256,  336, 336));
             CHECK(head_dwell_sag_us(8, 256, 336, 0) == head_dwell_us(8, 256));
+#if HEAD_SAG_FULL_US > 0
+            /* ...and in the armed build, the sag is actually ADDED. Every check
+             * above is one-sided - an upper bound, a zero case, a monotonicity
+             * that a constant satisfies - so all of them stayed true with the
+             * sag silently dropped, which is precisely what this second build
+             * exists to rule out. */
+            CHECK(head_dwell_sag_us(8, 256, 336, 336) ==
+                  head_dwell_us(8, 256) + HEAD_SAG_FULL_US);
+            CHECK(head_dwell_sag_us(8, 256, 168, 336) >
+                  head_dwell_us(8, 256));
+#endif
         }
         /* monotone in density and in temperature scale */
         int mono = 1;

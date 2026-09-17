@@ -14,8 +14,10 @@
 #define OPENDMO_HOST_PERIPH_H
 #include "mcu.h"
 
-RCC_Type  host_rcc;
-GPIO_Type host_gpioa, host_gpiob, host_gpioc;
-TIM_Type  host_tim3;
+RCC_Type     host_rcc;
+GPIO_Type    host_gpioa, host_gpiob, host_gpioc;
+TIM_Type     host_tim3;
+IWDG_Type    host_iwdg;
+SysTick_Type host_systick;
 
 #endif

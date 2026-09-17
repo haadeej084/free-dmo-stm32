@@ -1422,3 +1422,56 @@ looking for what that gap was hiding. See the strategy note in `TASKS.md`:
 mutation testing is now the top of the queue, because 98 % line coverage on
 `protocol.c` buys a 46 % mutation score, and that number is the project's blind
 spot expressed as a gate rather than as a lesson.
+
+## D34 — A test that re-implements the thing it tests is not a test
+
+`GS D 0x07` toggles an arbitrary pin so a fieldworker can find a signal by
+driving a candidate and watching what moves. Cycle 1 gave it a guard, because
+the command has no polarity table: "drive it low for a millisecond" is exactly
+how the active-low 24 V gate is switched **on**, and on a strobe it is an
+unmetered heat pulse outside the thermal gate.
+
+    if (pin_is_head_hot(g, pin)) return 0;       /* src/system.c */
+
+Cycle 4's completeness critic deleted that line and ran everything the project
+has: `make test` on both models, all five Renode scripts, `make stack`. **All
+green.**
+
+The reason is exact and is the finding, not the guard. `test_protocol.c` did not
+*mock* `sys_pin_toggle()` — it **re-implemented** it, and re-implemented a
+different one: its copy refuses PA11–PA14 and omits `pin_is_head_hot()`
+altogether. Scenario 43 toggles PB4 and PA12 and is answered entirely by the
+test's own copy. `system.c` was compiled by no host suite and reached by no
+Renode assertion, so the real function had never run outside the firmware.
+
+A mutation run put a number on it: **3 of 33 real mutants killed, 9.1 %** — the
+worst in the tree, against `protocol.c`'s 46 % and `usb_core.c`'s 67 %.
+
+### What changed
+
+`test/test_system.c` compiles the real `src/system.c` and asserts the refusal
+list from `pins.h` rather than from a copy: the VH gate and every fitted strobe
+are refused, the USB and SWD pins are refused, the **spare** strobes stay
+toggleable (finding them is the point, so the guard must be a list and not a
+blanket), and an ordinary pin comes back with its mode *and its level* exactly
+as they were.
+
+Two incidental notes, because they are the reason the harness did not exist:
+
+* `mcu.h`'s host redirect grew `IWDG` and `SysTick`. `sys_pin_toggle()` calls
+  `wdt_kick()` and `delay_ms()`, both of which live in `system.c` and therefore
+  cannot be stubbed by a test — before this, a host build segfaulted on the
+  first watchdog kick.
+* The tests pass `n = 0` pulses. `delay_ms()` spins on a millisecond counter
+  that only SysTick advances, and nothing advances it on a host. Both properties
+  this harness cares about — the refusal list and the save/restore — sit outside
+  that loop, so zero pulses exercises them exactly.
+
+### The general rule
+
+When a test provides its own version of the code under test, it stops measuring
+that code and starts measuring itself. Two of this project's cycles have now
+produced the same shape — cycle 3's `test_protocol.c` head mock discarded the
+bytes it was handed, making the whole raster-geometry engine unobservable, and
+this. **Mock the boundary, never the behaviour.** If a mock has an `if` in it
+that mirrors an `if` in the firmware, that branch is untested by construction.

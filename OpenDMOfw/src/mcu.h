@@ -290,16 +290,28 @@ extern uint32_t host_uid[3];
 #undef GPIOB
 #undef GPIOC
 #undef TIM3
+#undef IWDG
+#undef SysTick
 ADC_Type *host_adc(void);
-extern RCC_Type  host_rcc;
-extern GPIO_Type host_gpioa, host_gpiob, host_gpioc;
-extern TIM_Type  host_tim3;
-#define ADC1  host_adc()
-#define RCC   (&host_rcc)
-#define GPIOA (&host_gpioa)
-#define GPIOB (&host_gpiob)
-#define GPIOC (&host_gpioc)
-#define TIM3  (&host_tim3)
+extern RCC_Type     host_rcc;
+extern GPIO_Type    host_gpioa, host_gpiob, host_gpioc;
+extern TIM_Type     host_tim3;
+/* IWDG and SysTick joined the list when system.c got its first host harness:
+ * sys_pin_toggle() calls wdt_kick() and delay_ms(), which are IN system.c, so
+ * they cannot be stubbed out by the test - they have to hit storage instead of
+ * a hardcoded peripheral address. Before this, a host build of system.c
+ * segfaulted on the first watchdog kick, which is why the file had no harness
+ * and why its hot-pin guard could be deleted with every suite still green. */
+extern IWDG_Type    host_iwdg;
+extern SysTick_Type host_systick;
+#define ADC1    host_adc()
+#define RCC     (&host_rcc)
+#define GPIOA   (&host_gpioa)
+#define GPIOB   (&host_gpiob)
+#define GPIOC   (&host_gpioc)
+#define TIM3    (&host_tim3)
+#define IWDG    (&host_iwdg)
+#define SysTick (&host_systick)
 #endif
 
 #endif /* OP57_MCU_H */

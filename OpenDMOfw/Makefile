@@ -97,6 +97,12 @@ THERMAL_TEST_SRC = test/test_thermal.c src/printer/thermal.c src/printer/head.c
 # writes, so the harness records their order and asserts on it - a
 # final-state test cannot see a coil that is shorted only between two writes.
 MOTOR_TEST_SRC = test/test_motor.c src/printer/motor.c
+# system.c was compiled by no host suite and reached by no Renode assertion.
+# A mutation run measured 3 of 33 real mutants killed, and the concrete cost
+# was that the hot-pin guard on GS D 0x07 - the one stopping a host command
+# from driving the 24 V heat gate - could be DELETED with every suite green,
+# because test_protocol.c re-implements sys_pin_toggle() instead of calling it.
+SYSTEM_TEST_SRC = test/test_system.c src/system.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -122,6 +128,9 @@ test:
 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
 	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); \
 	  /tmp/opendmo-motortest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-systest-$$m $(SYSTEM_TEST_SRC); \
+	  /tmp/opendmo-systest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

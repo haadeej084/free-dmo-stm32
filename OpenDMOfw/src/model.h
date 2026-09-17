@@ -165,6 +165,27 @@
  * says so at build time. */
 #define MODEL_LINE_PERIOD_US   800
 
+/* How many DATA lines the head's shift register is fed on.
+ *
+ *   1 = one data line, HEAD_DOTS clocks  <- what the vendor's firmware does
+ *   2 = two data lines, HEAD_DOTS/2 clocks, the halves shifted in parallel
+ *
+ * THE VENDOR DRIVES ONE LINE. The LabelWriter 450 application - which the owner
+ * reports drives this very mechanism correctly when its mainboard is fitted to
+ * a 550 - feeds the head 84 bytes = 672 dots over SSP1 MOSI on a SINGLE pin,
+ * and its run-length path bit-bangs that same pair as GPIO with ONE clock pulse
+ * PER DOT. The complete GPIO inventory of that image contains no second head
+ * data pin at all. See DECISIONS D36.
+ *
+ * This firmware clocked 336 times on two lines. If the fitted head is one
+ * 672-stage chain, that fills half of it twice and no label is ever correct; if
+ * it is two 336-stage chains daisy-chained DO1 -> DI2 on the flex, then driving
+ * DI2 from the MCU is a bus conflict against the head's own output. Either way
+ * the two-line path is the unverified alternative, so it is no longer the
+ * default - but it is kept, because a 550 flex that really does bring out two
+ * independent data pins remains possible and one continuity check settles it. */
+#define MODEL_HEAD_SHIFT_LINES 1
+
 #define MODEL_STB_ACTIVE_LEVEL 0     /* 0 = Low fires (current assumption) */
 
 /* Derived values used by the rest of the firmware. */

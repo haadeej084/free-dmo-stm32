@@ -982,7 +982,10 @@ What it shows, and what it does **not** settle for us:
 
 * the 450 drives the head's shift register from **hardware SPI** (SSP1 at
   PCLK/4, 8-bit frames), not bit-banged GPIO — a datapoint for our own
-  two-write BSRR shift, not an argument against it;
+  two-write BSRR shift, **OVERTURNED by D36** - it IS an argument against it,
+  and this sentence was wrong when written. What it missed is not that the 450
+  uses SPI, but that it feeds the head from ONE data pin for all 672 dots,
+  which is a statement about the HEAD and not about the mainboard;
 * compressed rasters on the 450 are a simple run length: a count byte `n < 0x80`
   emits `n + 1` zero bits, `n >= 0x80` emits `n − 0x7F` one bits, bit-banged
   with the SPI function temporarily disabled;
@@ -1606,3 +1609,84 @@ same time.**
 The Seiko SLP, the strongest non-DYMO sibling candidate, is also out: its head is
 576 dots, not 672, and its command language is single-byte opcodes unrelated to
 DYMO's ESC dialect.
+
+## D36 — The head takes 672 clocks on ONE data line, not 336 on two
+
+This is the finding that decides whether this firmware can ever print a correct
+label, and it was sitting in evidence the project had already gathered.
+
+### What the vendor does
+
+The LabelWriter 450 application drives exactly **one** head data pin and one
+head clock pin. Both are SSP1: the mux routine writes IOCON FUNC=2 on the two
+pin registers, and SSP1 is configured 8-bit, CPOL=0 CPHA=0, at PCLK/4. Every
+line is exactly 84 bytes = **672 SSP clocks on MOSI**, padded with leading and
+trailing zero bytes to that length.
+
+The conclusive part is the run-length path. It takes those same two pins over as
+plain GPIO, holds the data line at one level for the run, and emits **one clock
+pulse per dot** in a loop. A 672-dot line is 672 clock pulses on a single data
+line — not 336 on two.
+
+A complete GPIO inventory of the 20480-byte image contains **no second head data
+pin at all**. PIO1_21, which is SSP1's MISO, is driven low seven times and never
+high: DYMO deliberately use MOSI and SCK only.
+
+And the owner reports that a 450 mainboard fitted to a 550 **prints correctly**.
+So the head being fed 672 clocks on one line is the 550's own head.
+
+### What this firmware did
+
+`head_print_line()` computed `hb = HEAD_DI1_DOTS / 8 = 42` bytes and ran
+42 × 8 = **336** clock pulses, driving DI1 with bytes 0–41 and DI2 with bytes
+42–83 in parallel.
+
+Two possibilities, and the firmware was wrong under both:
+
+* If the fitted head is one **672-stage chain**, 336 clocks fill half of it,
+  twice. No label is ever correct.
+* If it is two **336-stage chains daisy-chained** DO1 → DI2 on the flex, then
+  driving DI2 from the MCU is a **bus conflict** against the head's own output.
+
+### What changed
+
+`MODEL_HEAD_SHIFT_LINES` now names the topology, and **1 is the default**: one
+data line, `HEAD_DOTS` clocks, byte 0 bit 7 first. The two-line path is kept
+behind `2`, because a 550 flex that genuinely brings out two independent data
+pins remains possible and one continuity check settles it — but it is now the
+*alternative*, not the assumption.
+
+`test/renode/head_shift.py` reads the switch out of `model.h` rather than
+assuming, so the test cannot drift from the firmware, and it asserts on the real
+image: 672 clocks, the stream equal to the pattern, and DI2 never moving.
+
+### Honesty about what this is not
+
+This is **not** a new discovery. D29 already recorded that the 450 drives the
+head from hardware SPI and bit-bangs the run-length path with SPI disabled; D30
+already tabulated exactly one Data pin and one Clock pin. Both entries had the
+facts. What nobody had done was hold them against `head.c` — and D29 went
+further and drew the opposite conclusion in as many words, calling the SSP1
+finding "a datapoint for our own two-write BSRR shift, not an argument against
+it". That sentence has been corrected in place.
+
+The lesson is worth more than the fix: **evidence already in the repository can
+sit next to the code it contradicts for several cycles without anyone comparing
+them.** Two of this project's most serious defects — this and the cycle-2 feed
+axis — were both of that shape.
+
+### Open, and cheap to close
+
+`FIELDWORK` now asks the bench visit a yes/no question that costs one continuity
+check: **does the 550 head flex bring out one data pin or two?** If one,
+`MODEL_HEAD_SHIFT_LINES` stays 1 and `HEAD_DI2_DOTS` is meaningless. If two, it
+becomes 2 and the byte order — which half enters first — is measurement 6.
+
+### One number to distrust
+
+`head_shift.py`'s instruction-cost line now reports 672 instructions for a
+672-clock line, which is one instruction per clock and therefore impossible; the
+two-line path reported 13896. The ASSERTIONS are unaffected — they compare the
+recorded bit stream, not the count — but the cost figure is a reporting line
+that has clearly stopped measuring what it claims. It is on the ledger to fix,
+and until it is, the per-line time budget should not be argued from it.

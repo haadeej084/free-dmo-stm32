@@ -341,6 +341,24 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
     const uint32_t d1 = 1u << PIN_HEAD_DI1.pin;
     const uint32_t d2 = 1u << PIN_HEAD_DI2.pin;
     const uint32_t ck = 1u << PIN_HEAD_CLK.pin;
+#if MODEL_HEAD_SHIFT_LINES == 1
+    /* ONE data line, HEAD_DOTS clocks - the vendor's own topology (D36).
+     * Byte 0 bit 7 first, exactly as the two-line paths feed DI1; the rest of
+     * the line follows on the SAME pin instead of in parallel on a second one. */
+    (void)pdi2; (void)d2;
+    {
+        const uint16_t nb = (uint16_t)(HEAD_BYTES);
+        for (uint16_t b = 0; b < nb; b++) {
+            uint8_t v = (b < nbytes) ? bits[b] : 0u;
+            for (uint8_t m = 0x80u; m; m >>= 1) {
+                pdi1->BSRR = (v & m) ? d1 : (d1 << 16);
+                pclk->BSRR = ck;
+                __asm volatile("nop");
+                pclk->BSRR = ck << 16;
+            }
+        }
+    }
+#else
 #if (HEAD_DI1_DOTS == HEAD_DI2_DOTS) && (HEAD_DI1_DOTS % 8 == 0) && HEAD_SHIFT_SAME_PORT
     /* Fastest path: equal byte-aligned halves, CLK/DI1/DI2 on one port.
      * Two BSRR writes per dot: (a) both data bits plus CLK low in one atomic
@@ -406,6 +424,7 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
         __asm volatile("nop");
         pclk->BSRR = ck << 16;
     }
+#endif
 #endif
 
     /* 2) latch: Low = THROUGH (datasheet timing chart). tw(LAT) min is 100 ns

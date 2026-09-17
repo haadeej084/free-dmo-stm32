@@ -31,6 +31,17 @@ ELF = os.path.join(ROOT, "build", MODEL, f"opendmo-{MODEL}.elf")
 RENODE = os.environ.get("RENODE", "renode")
 
 DOTS = {"OP104": 1248, "OP57": 672}[MODEL]
+
+
+def _shift_lines():
+    """MODEL_HEAD_SHIFT_LINES from src/model.h - the firmware is the authority."""
+    import re as _re
+    src = open(os.path.join(ROOT, "src", "model.h"), encoding="utf-8").read()
+    m = _re.search(r"^#define\s+MODEL_HEAD_SHIFT_LINES\s+(\d+)", src, _re.M)
+    return int(m.group(1)) if m else 2
+
+
+SHIFT_LINES = _shift_lines()
 HALF = DOTS // 2
 BUDGET_MS = {"OP104": 1.08, "OP57": 0.92}[MODEL]
 CLK, DI1, DI2 = 5, 6, 7            # pins.h: PA5, PA6, PA7
@@ -128,12 +139,26 @@ def check(sent):
     for i in range(DOTS // 8 * 1):
         byte = data[i] if i < len(data) else 0
         bits += [(byte >> (7 - k)) & 1 for k in range(8)]
-    if len(s1) != HALF:
-        fails.append(f"{len(s1)} clock pulses, expected {HALF}")
-    if s1 != bits[:HALF]:
-        fails.append("DI1 stream differs from the first half of the pattern")
-    if s2 != bits[HALF:DOTS]:
-        fails.append("DI2 stream differs from the second half of the pattern")
+    # MODEL_HEAD_SHIFT_LINES decides the topology this build was compiled for.
+    # 1 (the default, and what the vendor's own firmware does): the whole line
+    #   goes out on DI1, HEAD_DOTS clocks, byte 0 bit 7 first.
+    # 2: the two halves go out in parallel on DI1 and DI2, HEAD_DOTS/2 clocks.
+    # Reading it from the source rather than assuming keeps this test honest
+    # when someone flips the switch after a continuity check on the flex.
+    if SHIFT_LINES == 1:
+        if len(s1) != DOTS:
+            fails.append(f"{len(s1)} clock pulses, expected {DOTS}")
+        if s1 != bits[:DOTS]:
+            fails.append("the DI1 stream is not the pattern, byte 0 bit 7 first")
+        if any(s2):
+            fails.append("DI2 moved, but this build shifts on one data line")
+    else:
+        if len(s1) != HALF:
+            fails.append(f"{len(s1)} clock pulses, expected {HALF}")
+        if s1 != bits[:HALF]:
+            fails.append("DI1 stream differs from the first half of the pattern")
+        if s2 != bits[HALF:DOTS]:
+            fails.append("DI2 stream differs from the second half of the pattern")
     return fails, int(delay.group(1)) - int(enter.group(1))
 
 
@@ -205,7 +230,9 @@ def main():
             total += 1
             print(f"FAIL {MODEL} sent={sent}: " + "; ".join(fails))
         else:
-            print(f"ok   {MODEL} sent={sent}: {HALF} clocks, DI1/DI2 streams exact")
+            n = DOTS if SHIFT_LINES == 1 else HALF
+            how = "one data line" if SHIFT_LINES == 1 else "DI1/DI2 in parallel"
+            print(f"ok   {MODEL} sent={sent}: {n} clocks on {how}, stream exact")
             if sent == DOTS // 8:
                 cost = n
     f = check_interlock()

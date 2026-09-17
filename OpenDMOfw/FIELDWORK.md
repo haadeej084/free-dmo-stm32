@@ -609,8 +609,24 @@ corrects it in one feed.
 > indexes answers it from the image already in `scratchpad`. Do that before
 > spending bench time here; if it comes back four-entries-cycled-three-times,
 > this constant is wrong by a factor of four and every label is the wrong
-> length. That confirms the 4-phase drive mode the firmware
-defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
+> length. **That sentence used to claim the 450 count "confirms the 4-phase drive mode".
+It says the opposite.** The 450 mainboard drives this mechanism with
+**STEP / DIR / ENABLE to a driver IC** — three pins, one pulse per step, no
+phase table anywhere in its image — and the microstep indexer is inside that
+driver. The old justification ("a 4-lead bipolar motor is two H-bridges on
+IN1–IN4") is a non-sequitur: *every* bipolar stepper is two H-bridges; the
+question is whether the MCU sequences them or a driver IC does.
+
+> ### Do this FIRST, and it costs nothing
+> **Read the marking on U2 and its mode straps.** The 550 board has its own
+> driver (a Rev K report notes a different U2), so the 450 proves the interface
+> for the 450's board and not ours — but the part number on U2 decides the whole
+> 4-phase-versus-STEP/DIR question in one look, before any feed test. On the 450
+> the strap signature is visible in the image: two pins driven high and one low
+> once at boot and never touched again.
+>
+> If U2 is a STEP/DIR driver, `MOTOR_DRIVE` must become `MOTOR_DRIVE_STEPDIR`
+> and the microstep ratio comes off its datasheet rather than off a feed test. What remains
 is the drive train between motor and platen.
 Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
 driven **IN1–IN4 directly** (`MOTOR_DRIVE_4PHASE`), `MOTOR_STEPS_PER_LINE = 1`.
@@ -749,6 +765,29 @@ simply never marks the paper.
 > being wrong is survivable; **both wrong at once is the one case where the
 > safety handler becomes the hazard.** So confirm both, and report both, before
 > the head sees 24 V from anything other than a current-limited bench supply.
+
+### 5b. How many DATA pins and how many STROBE pins does the flex bring out?
+*Two continuity checks, and between them they decide whether the firmware can
+print at all.*
+
+**Data pins.** DECISIONS D36: the vendor's own firmware feeds this head **672
+clocks on ONE data line**, and its image contains no second head data pin. The
+firmware now defaults to that (`MODEL_HEAD_SHIFT_LINES 1`). Confirm it: does the
+flex bring out one data pin or two?
+* **One** → leave the default; `HEAD_DI2_DOTS` is meaningless.
+* **Two** → set `MODEL_HEAD_SHIFT_LINES 2`, and measurement 6 (which half enters
+  first) becomes live. Be careful here: if the two are a daisy chain (DO1 → DI2)
+  rather than two independent inputs, driving DI2 from the MCU is a bus conflict
+  against the head's own output, and the answer is still 1.
+
+**Strobe pins.** `MODEL_STROBE_SEGMENTS` is 2, and the genuine firmware fires
+**one strobe for all 672 dots** — it never drives a second. D30 keeps the split
+for a supply reason that still stands (the 550 ships a 42 W brick against the
+450's 60 W, and we have a load switch the 450 does not), but the split depends
+on a second strobe net **existing on the flex**. If there is only one:
+`HEAD_STROBE_SEGMENTS` must become 1 **and the energy ceiling has to be
+re-derived for a whole-line strobe**. Finding that out after flashing rather than
+before is the difference between a printer that works and one that does not.
 
 ### 6. Half-2 dot order — *assumption, easiest to spot in print*
 `head.c` sends dot `i` to DI1 and dot `half + i` to DI2 on the same clock. Some

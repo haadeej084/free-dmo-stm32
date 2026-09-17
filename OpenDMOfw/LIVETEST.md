@@ -14,6 +14,42 @@ itself.
 
 ---
 
+## TO DO — tick these off during the session
+
+Each line says what to bring back. Anything you cannot get, leave unticked and
+say so; a step that fails costs only itself.
+
+- [ ] **0. Capture running** before the printer is plugged in.
+      → `550_enum.pcapng`
+- [ ] **1. Device ID** — `python3 tools/probe_genuine.py --out 550_devid.txt`
+      → the IEEE-1284 string verbatim *(closes a Hardware-only item)*
+- [ ] **2. ESC V** — same run
+      → the version reply, byte for byte
+- [ ] **3. Status struct, six states** — `ESC A` once per state, each labelled
+  - [ ] 3a idle, roll fitted, cover closed
+  - [ ] 3b **out of paper**
+  - [ ] 3c **cover open**
+  - [ ] 3d mid-job (poll during a long print)
+  - [ ] 3e immediately after the last label ejects
+  - [ ] 3f third-party roll, if one is to hand *(also the DRM question)*
+      → six 32-byte dumps, each labelled with its state
+- [ ] **4. ESC U** — the roll record
+      → the reply **plus the SKU on the box** (e.g. `S0722370` / `30252`)
+- [ ] **5. Print two labels, measure with a ruler**
+      → (a) printed length of one label, (b) gap between the two prints, in mm
+      → and the roll SKU
+- [ ] **6. Density ladder** — same label at each darkness setting, strip kept in order
+      → photo under even light, marked; or captures if the setting is not exposed
+- [ ] **7. Full job capture** — one ordinary address label via DYMO Connect
+      → `550_print_address.pcapng`
+
+**Bring back:** the `.pcapng` files, `550_devid.txt`, the six status dumps, the
+two measurements in mm, the roll SKU, and the density strip. Drop them anywhere
+and say where — they get replayed through the real parser and the answers land
+in `model.h`, `PROTOCOL.md` and the paper table.
+
+---
+
 ## 0. Before anything: start the capture
 
 Everything below is worth more as a capture than as a screenshot, because the

@@ -59,7 +59,7 @@ tag / DRM / authentication.
 
 ## Remaining: hardware bring-up (cannot be done in software; needs a board)
 
-Narrowed to **eight** measurements — see `FIELDWORK.md` section 8. The count was
+Narrowed to **nine** measurements — see `FIELDWORK.md` section 8. The count was
 seven until DECISIONS D28 withdrew the strobe-polarity claim and put it back on
 the list as measurement 6b, paired with the VH gate polarity (measurement 5).
 Much of what could be settled from the datasheets has been: DI1/DI2 topology,

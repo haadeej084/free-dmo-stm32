@@ -6,7 +6,7 @@
 > complete and verified** (both models build clean; every software-testable path is
 > tested), but the firmware **has not yet been run on a real board**. Before it prints,
 > someone with a genuine LabelWriter 550 must do the **hardware fieldwork** in
-> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **eight** items: GPIO routing,
+> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **nine** items: GPIO routing,
 > the motor drive train, the thermistor divider resistor, the top-of-form sensor,
 > the VH enable pin, the strobe polarity, the half-2 dot order, and host
 > acceptance.

@@ -10,7 +10,7 @@ own published manuals, the head datasheet or a board photo could answer has been
 read and folded into the firmware already (DECISIONS D21) — thermal limits, the
 VH rail voltage, the version-reply format, what the paper sensor actually senses,
 the per-line time budget. Section 4 lists what is settled so you do not measure
-it again. What is left is **eight measurements** — seven, plus the strobe
+it again. What is left is **nine measurements** — seven, plus the strobe
 polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
 datasheet reading. Plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
@@ -558,7 +558,18 @@ The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
 photos of both the 550 and the 5XL), 7.5° per step = 48 steps/rev. One full
 step per line is the estimate that fits the rated speed (DECISIONS D24), and it
 is what `MOTOR_STEPS_PER_LINE` holds; the measurement below confirms or
-corrects it in one feed. That confirms the 4-phase drive mode the firmware
+corrects it in one feed.
+
+> **This one may be settled without a bench.** D30 reads DYMO's own LabelWriter
+> 450 firmware as driving **12 motor steps per dot line — 3600 steps/inch** — on
+> a mechanism a 450 mainboard drives correctly when fitted to a 550, while D24
+> says 300. They cannot both be full steps (twelve would be 18750 rpm), so the
+> 450's twelve are microsteps and our `1` is right **only if it microsteps
+> exactly 12:1**. Counting the entries in the table the 450's CT32B0 step ISR
+> indexes answers it from the image already in `scratchpad`. Do that before
+> spending bench time here; if it comes back four-entries-cycled-three-times,
+> this constant is wrong by a factor of four and every label is the wrong
+> length. That confirms the 4-phase drive mode the firmware
 defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
 is the drive train between motor and platen.
 Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
@@ -585,7 +596,27 @@ sensible integer. 300 lines must advance exactly **25.4 mm**.
 **Patch:** `MOTOR_STEPS_PER_LINE` and, if the motor stalls or sings,
 `MOTOR_STEP_US` in `motor.c`.
 
-### 3. Thermistor divider — *two readings, then read the numbers off a table*
+### 3. Thermistor divider — *no meter: two ADC readings and a thermometer*
+> **The meter is gone from this one.** `tools/calib_thermistor.py` solves the
+> divider from the raw ADC code alone. The NTC curve is known (30 kOhm at 25 °C,
+> B = 3950), so ONE reading at a known temperature is one equation in one
+> unknown and pins `R_p`; a SECOND reading with the head warmer settles the
+> topology, because the wrong pull direction makes `R_p` move by a large factor
+> while the right one holds. Run:
+>
+> ```
+> opsend.py diag 4                      # thermistor_raw, printer cold
+> ...print a few lines to warm the head, then diag 4 again...
+> python3 tools/calib_thermistor.py --code 1638 --temp 21 --code2 2100 --temp2 34
+> ```
+>
+> It prints the three `THERMAL_*_RAW` defines and `THERMAL_HOTTER_IS_HIGHER`
+> ready to paste. What you still need is a **thermometer and a cold printer** -
+> the arithmetic is only as good as the temperature you type, and the curve moves
+> about 4 %/K near 25 °C. The prose below is kept as the fallback for a board
+> where the ADC reads nothing at all.
+
+
 The head's built-in NTC is **30 kOhm at 25 °C, B = 3950** (ROHM datasheet), and
 the temperatures that matter are DYMO's own, not invented: the LabelWriter 450
 manual states the engine "halt[s] printing if the print head temperature exceeds
@@ -707,6 +738,53 @@ the kind of thing that is cheap to measure and expensive to guess.
 **Patch:** `MODEL_STB_ACTIVE_LEVEL` in `src/model.h`, one line.
 **Pair this with measurement 5** — see the note there. The fault-safe handler's
 guarantee rests on these two polarities together, not on either one alone.
+
+### 8. Po at the fitted head — *the one number that unlocks the energy model*
+**This was missing from this list**, although `DECISIONS.md` D30 closes by naming
+it as the single measurement that unblocks everything about the head's energy:
+`HEAD_BASE_DWELL_US` (270) and `HEAD_MAX_DWELL_US` (410) are both derived from an
+**assumed** Po of 0.43 W/dot and Rave of 1250 Ω, taken from published KF3002
+siblings — and the head actually fitted (`3C56-9638`) is in no public ROHM
+catalogue. No amount of further disassembly or research moves those constants;
+this does.
+
+**Why it matters more than it looks.** At the assumed Po, today's 337.5 µs sits
+at 0.906 of ROHM's maximum-energy envelope and the 450-transposed 405 µs at
+0.991 — but if the real Po is 17 % higher, today is still at 0.99 while the
+ported value is at **1.19**. Today's number absorbs a 20 % error in an unmeasured
+constant. That is the whole reason D30 declined to port the genuine dwell.
+
+**How.** Two readings, both with the head connected and the rail from a
+current-limited bench supply, never the brick:
+1. **VH at the head connector under load**, during a printed line. The rail is an
+   unregulated wall brick, so the figure that matters is the loaded one, not 24 V
+   nominal.
+2. **Four-wire resistance across one dot**, head cold and disconnected. A
+   two-wire meter reading is dominated by the lead and connector resistance at
+   these values and will read high.
+
+Then `Po = V_loaded² / R_dot`, and `HEAD_MAX_DWELL_US = 0.177 mJ / Po`.
+
+**Report both raw numbers**, not the computed Po — the 0.177 mJ comes off a
+curve that itself depends on line time (see below), and a later reader needs to
+redo that arithmetic rather than inherit it.
+
+> **Carry this forward, because it is counter-intuitive and easy to get backwards:**
+> ROHM's rated pulse energy is **not a flat constant**. It rises with scanning
+> line time, so a **faster** printer has a **lower** ceiling. `head.c` carries a
+> `_Static_assert` that refuses to build if `MODEL_LINE_PERIOD_US` leaves the
+> band the current ceiling was derived for.
+
+**Two cheaper experiments that inform it**, in descending order of value:
+- **Scope the 450 board's strobe line while it drives the 550 mechanism.** This
+  is the one experiment the owner's mainboard-swap report makes possible, and it
+  gives the genuine dwell at the genuine rail directly.
+- **Total head current on a full-width black line.** Near 12 A means the head
+  does no hardware dot grouping; a fraction of it means every energy figure in
+  D30 divides by the group count.
+
+**Patch:** `HEAD_MAX_DWELL_US` in `src/printer/head.c`, and then `D30`'s deferred
+port becomes a decision rather than a guess.
 
 ### 7. Host acceptance — *the actual goal*
 With a plausible SKU configured, does **D.MO Connect** show a valid roll and

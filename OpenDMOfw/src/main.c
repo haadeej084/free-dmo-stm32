@@ -29,12 +29,33 @@ static void io_init(void)
 }
 
 /* LED status: on = configured/ready; slow blink = unconfigured;
- * fast blink = head overheated; double blink = paper out. */
+ * fast blink = head overheated OR heat locked out; double blink = paper out.
+ *
+ * The 5 Hz branch covers every state in which this printer CANNOT PUT A DOT ON
+ * A LABEL. Until cycle 4 it covered only over-temperature, and the other such
+ * state - OP_FLAG_VH_INHIBIT set, where vh_enable() is a no-op and no strobe
+ * can heat anything - showed a SOLID READY LIGHT. The printer would accept the
+ * job, feed the label, advance to the tear bar and eject it blank, with the
+ * panel saying "ready" throughout.
+ *
+ * That state is not exotic. D32 makes it the AUTOMATIC outcome of a config
+ * record that fails its checksum, and it is the compiled default of the
+ * OPENDMO_SAFE_BRINGUP image FIELDWORK tells a fieldworker to build first - so
+ * the person most likely to meet it is the one with the least to go on.
+ *
+ * 5 Hz is also what the LW550 User Guide documents as "an error has occurred",
+ * so this makes the panel more conformant, not less.
+ *
+ * Deliberately NOT included: thermal_sensor_fault(). A printer with an
+ * unbelievable thermistor still prints, at 0.625x dwell (D33) - it is degraded,
+ * not stopped, and the host is told through status byte 8. Blinking an error at
+ * an operator whose printer is working would train them to ignore the light. */
 static void led_update(void)
 {
     uint32_t now = millis();
     int paper = (gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
-    if (!thermal_ok()) {                 /* overheated: 5 Hz */
+    int locked = (store_get()->flags & OP_FLAG_VH_INHIBIT) != 0;
+    if (!thermal_ok() || locked) {       /* cannot print: 5 Hz */
         gpio_set(PIN_LED, (int)((now / 100) & 1));
     } else if (!paper) {                 /* paper out: double blink every ~1.2 s */
         uint32_t p = now % 1200;

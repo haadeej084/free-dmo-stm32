@@ -26,7 +26,34 @@ static op_config_t g_cfg;
 
 void head_init(void){}
 void head_reset(void){}
-void head_print_line(const unsigned char *b, unsigned short n){ (void)b;(void)n; g_lines++; }
+/* KEEP THE BYTES. This mock used to throw away everything handed to the head
+ * and count calls, which made the whole raster-geometry engine unobservable:
+ * the centering offset, the head-width clamp and the over-wide discard could
+ * all be changed without a single check noticing. A parser test that does not
+ * look at what it printed is only testing that it did not crash. */
+static unsigned char g_last[HEAD_BYTES];
+static unsigned      g_last_n;
+void head_print_line(const unsigned char *b, unsigned short n){
+    g_last_n = n < HEAD_BYTES ? n : HEAD_BYTES;
+    for (unsigned i = 0; i < g_last_n; i++) g_last[i] = b[i];
+    for (unsigned i = g_last_n; i < HEAD_BYTES; i++) g_last[i] = 0;
+    g_lines++;
+}
+/* Index of the first and last set dot in the last line handed to the head, or
+ * -1 if it was blank. These two numbers are the geometry. */
+static int last_first_dot(void){
+    for (unsigned i = 0; i < g_last_n; i++)
+        for (int k = 7; k >= 0; k--)
+            if (g_last[i] & (1u << k)) return (int)(i * 8 + (7 - k));
+    return -1;
+}
+static int last_last_dot(void){
+    int r = -1;
+    for (unsigned i = 0; i < g_last_n; i++)
+        for (int k = 7; k >= 0; k--)
+            if (g_last[i] & (1u << k)) r = (int)(i * 8 + (7 - k));
+    return r;
+}
 void head_set_density(unsigned char d){ g_density = d; }
 void motor_init(void){}
 void motor_enable(int on){ (void)on; }
@@ -39,7 +66,16 @@ static int g_vh_on = 0;
 int  head_vh_is_on(void){ return g_vh_on; }
 void head_vh_off(void){ g_vh_on = 0; }
 static unsigned short g_adc[10] = {10,20,30,40,50,60,70,80,90,100};
-void thermal_scan_adc(unsigned short *out){ for (int i=0;i<10;i++) out[i]=g_adc[i]; }
+/* Record the rail state AT THE MOMENT the pins float. The scan switches
+ * PA0-PA7, PB0 and PB1 into analog mode one at a time, and PB0/PB1 are the two
+ * fitted heat strobes - so a strobe is tri-stated during this call. protocol.c
+ * drops the 24 V rail first for exactly that reason, and a final-state check
+ * cannot see whether it did. */
+static int g_vh_during_scan;
+void thermal_scan_adc(unsigned short *out){
+    g_vh_during_scan = g_vh_on;
+    for (int i=0;i<10;i++) out[i]=g_adc[i];
+}
 static unsigned short g_idr[3] = {0x1111, 0x2222, 0x4444};
 unsigned short sys_port_idr(unsigned char port){ return port < 3 ? g_idr[port] : 0; }
 static int g_toggle_port = -1, g_toggle_pin = -1, g_toggle_n = -1;
@@ -72,7 +108,10 @@ unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }
 op_config_t *store_get_mut(void){ return &g_cfg; }
-int store_save(void){ return 0; }
+/* A part that ACKs a write and stores nothing - write-protected, wrong device
+ * fitted, worn cell - is the case store_save() used to report as success. */
+static int g_store_fail;
+int store_save(void){ return g_store_fail ? -1 : 0; }
 int store_selftest(void){ return 1; }
 void store_load(void){}
 void usb_ep_rx_ready(unsigned char ep){ (void)ep; }
@@ -596,6 +635,12 @@ int main(void){
     CHECK((g_reply[22] | (g_reply[23] << 8)) == 0x1111);
     CHECK((g_reply[26] | (g_reply[27] << 8)) == 0x4444);
     CHECK(g_vh_on == 0);
+    /* ORDER, not final state. Moving head_vh_off() to after the scan used to
+     * pass the entire host suite on both models - and the source comment at
+     * that line calls a floating strobe with 24 V behind it "the one mistake
+     * that costs a print head". Same shape as the motor test: assert the
+     * sequence, because the sequence is the safety property. */
+    CHECK(g_vh_during_scan == 0);
 
     /* 43) GS D 0x07 toggle: three argument bytes, and the pins that carry this
      *     very command are refused instead of ending the session. */
@@ -612,12 +657,31 @@ int main(void){
     CHECK(g_reply[5] == 31);
 
     /* 44) GS D 0x08 VH interlock: persisted in the config, and setting it drops
-     *     the rail immediately. */
+     *     the rail immediately. The reply carries TWO different facts - r[2] is
+     *     the live interlock, already in force because head.c gates on the RAM
+     *     copy, and r[3] says whether it reached the EEPROM. They are separate
+     *     because a part can ACK a write and store nothing (write-protected,
+     *     wrong device fitted, worn cell), and an operator who armed the
+     *     interlock, read a confirming reply and power-cycled would have found
+     *     it gone. */
     reset_state(); g_vh_on = 1;
     unsigned char vh1[] = { 0x1D, 'D', 0x08, 1 };
     protocol_feed(vh1, sizeof vh1); protocol_task();
-    CHECK(g_reply_len == 3 && (g_cfg.flags & OP_FLAG_VH_INHIBIT));
+    CHECK(g_reply_len == 4 && (g_cfg.flags & OP_FLAG_VH_INHIBIT));
+    CHECK(g_reply[2] & OP_FLAG_VH_INHIBIT);        /* live */
+    CHECK(g_reply[3] == 1);                        /* and persisted */
     CHECK(g_vh_on == 0);
+    /* A store that silently fails must be reported as not persisted, while the
+     * live interlock still stands. */
+    {
+        g_store_fail = 1;
+        unsigned char vh1b[] = { 0x1D, 'D', 0x08, 1 };
+        protocol_feed(vh1b, sizeof vh1b); protocol_task();
+        CHECK(g_reply_len == 4);
+        CHECK(g_reply[2] & OP_FLAG_VH_INHIBIT);    /* still in force */
+        CHECK(g_reply[3] == 0);                    /* but not stored */
+        g_store_fail = 0;
+    }
     unsigned char vh0[] = { 0x1D, 'D', 0x08, 0 };
     protocol_feed(vh0, sizeof vh0); protocol_task();
     CHECK(!(g_cfg.flags & OP_FLAG_VH_INHIBIT));
@@ -1134,6 +1198,66 @@ int main(void){
         reset_state();
         protocol_self_test();
         CHECK(g_lines == 400);
+    }
+
+    /* 66) RASTER GEOMETRY, asserted on the bytes the head was actually handed.
+     *
+     *     A narrow raster is centered on the head and a wide one is clipped,
+     *     and until now nothing could see either: the mock discarded the line
+     *     and counted the call. The mutation survivors were exactly here -
+     *     s_xoff could be forced to 0 and the s_use clamp inverted with the
+     *     whole suite still green.
+     *
+     *     The full-width case is the anchor: it must start at dot 0 and end at
+     *     the last dot of the head, so the narrow cases below are measured
+     *     against a known edge rather than against each other. */
+    {
+        reset_state();
+        {
+            unsigned char j[32 + HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, HEAD_DOTS); n += 12;
+            for (unsigned i = 0; i < HEAD_BYTES; i++) j[n++] = 0xFF;
+            protocol_feed(j, (unsigned)n); protocol_task();
+            CHECK(g_lines == 1);
+            CHECK(last_first_dot() == 0);
+            CHECK(last_last_dot() == HEAD_DOTS - 1);
+        }
+        /* A raster half the head width is centered: the margin on each side is
+         * (HEAD_DOTS - 8*bpl)/2 rounded to whole BYTES, which is what
+         * begin_raster() computes as s_xoff. */
+        {
+            reset_state();
+            const unsigned bpl = HEAD_BYTES / 2;
+            unsigned char j[32 + HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, bpl * 8); n += 12;
+            for (unsigned i = 0; i < bpl; i++) j[n++] = 0xFF;
+            protocol_feed(j, (unsigned)n); protocol_task();
+            CHECK(g_lines == 1);
+            unsigned xoff = (HEAD_BYTES - bpl) / 2;
+            CHECK(last_first_dot() == (int)(xoff * 8));
+            CHECK(last_last_dot() == (int)(xoff * 8 + bpl * 8 - 1));
+        }
+        /* An OVER-wide raster is clipped to the head, not wrapped, and the
+         * surplus bytes are consumed so the block stays aligned - the command
+         * after it must still parse. */
+        {
+            reset_state();
+            const unsigned bpl = HEAD_BYTES + 4;
+            static unsigned char j[64 + 2 * HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, bpl * 8); n += 12;
+            for (unsigned i = 0; i < bpl; i++) j[n++] = 0xFF;
+            j[n++] = 0x1B; j[n++] = 'n'; j[n++] = 33; j[n++] = 0;
+            for (int off = 0; off < n; off += 64) {
+                int chunk = (n - off < 64) ? (n - off) : 64;
+                protocol_feed(&j[off], (unsigned)chunk);
+                protocol_task();
+            }
+            CHECK(g_lines == 1);
+            CHECK(last_first_dot() == 0);
+            CHECK(last_last_dot() == HEAD_DOTS - 1);   /* clipped, not wrapped */
+            protocol_feed(q, sizeof q); protocol_task();
+            CHECK(g_reply[5] == 33);                   /* still in step */
+        }
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

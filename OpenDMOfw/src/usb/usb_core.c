@@ -176,15 +176,26 @@ static void ep_halt(uint8_t addr, int stall)
     else             ep_set_rx_stat(n, STAT_RX(stall ? USB_EP_STAT_STALL : USB_EP_STAT_VALID));
     if (!stall) { if (addr & 0x80) ep_dtog_clear_tx(n); else ep_dtog_clear_rx(n); }
 }
+/* The endpoint register IS the Halt bit - there is no separate flag to drift
+ * out of step with it. Split by direction so the data path can ask without
+ * constructing an endpoint address. */
+static int ep_tx_halted(int n)
+{
+    return ((USB->EPR[n] & USB_EP_STAT_TX) >> 4) == USB_EP_STAT_STALL;
+}
+static int ep_rx_halted(int n)
+{
+    return ((USB->EPR[n] & USB_EP_STAT_RX) >> 12) == USB_EP_STAT_STALL;
+}
 static int ep_is_halted(uint8_t addr)
 {
-    int n = addr & 0x0F; uint16_t r = USB->EPR[n];
-    if (addr & 0x80) return ((r & USB_EP_STAT_TX) >> 4)  == USB_EP_STAT_STALL;
-    return              ((r & USB_EP_STAT_RX) >> 12) == USB_EP_STAT_STALL;
+    int n = addr & 0x0F;
+    return (addr & 0x80) ? ep_tx_halted(n) : ep_rx_halted(n);
 }
 
 /* ---- state -------------------------------------------------------------- */
 static uint8_t  s_pending_addr;      /* SET_ADDRESS: applied only in the status stage */
+static uint8_t  s_addr_pending;      /* ...and whether there IS one (0 is a valid address) */
 static int      s_configured;
 static const uint8_t *s_ctrl_ptr;    /* in-progress control IN */
 static uint16_t s_ctrl_len;
@@ -259,7 +270,11 @@ static void handle_standard_setup(const usb_setup_t *s)
         handle_get_descriptor(s);
         break;
     case 5: /* SET_ADDRESS - address activates only after the status stage */
+        /* Address 0 is a LEGAL address (USB 2.0 9.4.6: it returns the device to
+         * the Default state), so it cannot double as the "nothing pending"
+         * sentinel. A separate flag keeps the two apart. */
         s_pending_addr = (uint8_t)(s->wValue & 0x7F);
+        s_addr_pending = 1;
         usb_ctrl_ack();
         break;
     case 9: /* SET_CONFIGURATION */
@@ -308,6 +323,14 @@ static void handle_standard_setup(const usb_setup_t *s)
         break; }
     case 11: /* SET_INTERFACE - same DTOG reset rule as SET_CONFIGURATION */
         if (s_configured) {
+            /* USB 2.0 9.4.5 names SET_INTERFACE alongside CLEAR_FEATURE and
+             * SET_CONFIGURATION as one of the three things that clear Halt. It
+             * is the second of the two recovery routes chapter 9 gives a host
+             * after a STALL, and without this it reported success and did
+             * nothing. Clear before the DTOG reset, so the endpoint comes out
+             * of this request in one consistent state. */
+            if (ep_tx_halted(EP_DATA)) ep_set_tx_stat(EP_DATA, STAT_TX(USB_EP_STAT_NAK));
+            if (ep_rx_halted(EP_DATA)) ep_set_rx_stat(EP_DATA, STAT_RX(USB_EP_STAT_VALID));
             ep_dtog_clear_tx(EP_DATA);
             ep_dtog_clear_rx(EP_DATA);
         }
@@ -374,6 +397,18 @@ static int ep_tx_busy(int n)
 int usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len)
 {
     uint32_t t0 = millis();
+    /* A host-set Halt outranks anything we want to say. USB 2.0 9.4.5 lets only
+     * CLEAR_FEATURE, SET_CONFIGURATION, SET_INTERFACE and - for this class -
+     * the printer SOFT_RESET clear it; a device-side data write is none of
+     * those, and this function used to end with STAT_TX = VALID unconditionally.
+     * A single "ESC A" already in the host's queue was enough: protocol_task()
+     * answered through here and the pipe came un-halted underneath the host.
+     *
+     * Checked BEFORE the 50 ms busy wait, so a halted endpoint costs nothing.
+     * Dropping the reply is already a supported outcome of this function - the
+     * busy path returns 0 the same way, and every usbp_send_reply() call site
+     * ignores the result. */
+    if (ep_tx_halted(ep)) return 0;
     if (len > EP_MAXPKT) len = EP_MAXPKT;
     while (ep_tx_busy(ep)) {
         wdt_kick();
@@ -386,6 +421,9 @@ int usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len)
 }
 void usb_ep_rx_ready(uint8_t ep)
 {
+    /* Same rule on the OUT side: this is the parser saying "I have room again",
+     * which is flow control, not a Halt-clearing request. */
+    if (ep_rx_halted(ep)) return;
     rx_reopen(ep);
 }
 int usb_is_configured(void) { return s_configured; }
@@ -398,11 +436,19 @@ int usb_is_configured(void) { return s_configured; }
  * Deliberately NOT touching DTOG: a class request is not a configuration event
  * (USB 2.0 8.5.2), and Linux usblp issues SOFT_RESET without resetting its own
  * toggle, so zeroing ours would desynchronise it. */
-void usb_ep_flush_in(uint8_t ep)
+void usb_ep_soft_reset(uint8_t ep)
 {
     if (!s_configured) return;            /* BTABLE entry not set up yet */
     ep_set_tx_stat(ep, STAT_TX(USB_EP_STAT_NAK));
     *btable_tx_cnt(ep) = 0;
+    /* "This request clears all stall conditions" - BOTH pipes, not just IN.
+     * Until now the only thing that cleared a host-set OUT halt on SOFT_RESET
+     * was protocol_reset_apply() calling usb_ep_rx_ready(), which is now
+     * correctly refused for a halted endpoint - so the un-halting has to happen
+     * here, where the spec puts it. NAK rather than VALID: clearing the Halt is
+     * this function's job, re-arming the endpoint is the parser's, and the
+     * parser does it a moment later through usb_ep_rx_ready(). */
+    if (ep_rx_halted(ep)) ep_set_rx_stat(ep, STAT_RX(USB_EP_STAT_NAK));
 }
 
 /* ---- IRQ ---------------------------------------------------------------- */
@@ -422,9 +468,9 @@ static void on_ctr(void)
         if (epr & USB_EP_CTR_TX) {
             ep_clear_ctr_tx(EP_CTRL);
             /* SET_ADDRESS takes effect as soon as the status IN completes. */
-            if (s_pending_addr) {
+            if (s_addr_pending) {
                 USB->DADDR = USB_DADDR_EF | s_pending_addr;
-                s_pending_addr = 0;
+                s_pending_addr = 0; s_addr_pending = 0;
             }
             if (s_ctrl_len) ctrl_tx_chunk();     /* next descriptor chunk */
             else if (s_ctrl_zlp) {
@@ -465,7 +511,7 @@ void USB_IRQHandler(void)
         ep_set_tx_stat(EP_CTRL, STAT_TX(USB_EP_STAT_NAK));
         USB->DADDR = USB_DADDR_EF | 0;
         s_configured = 0;
-        s_pending_addr = 0;
+        s_pending_addr = 0; s_addr_pending = 0;
         s_ctrl_len = 0;
         s_ctrl_zlp = 0;
         return;

@@ -325,6 +325,56 @@ int main(void)
     CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);
     CHECK(host_in(EP_DATA, b, 64) == NAK);
 
+    /* 15a) A HOST-SET HALT SURVIVES THE DATA PATH.
+     *
+     * USB 2.0 9.4.5 lets only CLEAR_FEATURE, SET_CONFIGURATION, SET_INTERFACE
+     * and - for this class - the printer SOFT_RESET clear Halt. A device-side
+     * data write is none of those, but usb_ep_write() used to end with
+     * STAT_TX = VALID unconditionally, so a single reply un-halted the pipe
+     * underneath the host. No special traffic was needed: one "ESC A" already
+     * in the host's queue is answered through usb_ep_write().
+     *
+     * Everything below passed identically before the fix, which is why it is
+     * here: the whole suite was blind to it. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);           /* host halts IN */
+    CHECK(usbp_send_reply((const uint8_t *)"status", 6) == 0);  /* reply dropped */
+    CHECK(host_in(EP_DATA, b, 64) == STALL);             /* still halted */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 1);                          /* GET_STATUS agrees */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x82) == 0);           /* CLEAR_FEATURE may */
+    CHECK(host_in(EP_DATA, b, 64) == NAK);
+
+    /* 15b) ...and the same on OUT: the parser saying "I have room again" is
+     *      flow control, not a Halt-clearing request. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x02) == 0);           /* host halts OUT */
+    usb_ep_rx_ready(EP_DATA);                            /* parser re-arms */
+    CHECK(host_out(EP_DATA, (const uint8_t *)"x", 1) == STALL);
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 1);
+
+    /* 15c) SOFT_RESET clears BOTH stall conditions, which is what Printer Class
+     *      1.1 4.2.3 says and what the OUT side did not do: the only thing that
+     *      used to clear a host-set OUT halt was the parser's re-arm, and that
+     *      is now correctly refused. Halt both, then reset. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);              /* SOFT_RESET */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 0);                          /* IN un-halted */
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 0);                          /* OUT un-halted too */
+    usb_ep_rx_ready(EP_DATA);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"x", 1) == 0);
+
+    /* 15d) SET_INTERFACE is the SECOND recovery route chapter 9 gives a host
+     *      after a STALL. It used to report success and do nothing. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x02) == 0);
+    CHECK(ctrl_nodata(0x00, 11, 0, 0) == 0);             /* SET_INTERFACE */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 0);
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 0);
+
     /* 16) Re-configuration resets both toggles to DATA0 (RM0091 30.6.2). */
     host_usb.EPR[EP_DATA] |= USB_EP_DTOG_TX | USB_EP_DTOG_RX;
     CHECK(ctrl_nodata(0x00, 9, 1, 0) == 0);

@@ -160,15 +160,49 @@ int main(void)
     CHECK(thermal_ok());                        /* released at the resume point */
 
     /* 5) A single ADC outlier must not move the reading - this gate runs for
-     *    every printed line, so one glitch must not drop a line or unlatch. */
+     *    every printed line, so one glitch must not drop a line or unlatch.
+     *
+     *    THIS TEST USED TO BE UNABLE TO FAIL. It sampled around code_of(25.0),
+     *    and 25 C is the CLAMPED COLD END of thermal_dwell_scale() - so the
+     *    low-outlier case returned 320 whether the median worked or not, and
+     *    every comparison in sample_median3() survived mutation. Replacing the
+     *    whole filter with `return a;` (first-of-three) passed all of it.
+     *
+     *    That is not cosmetic: a min-of-three filter means ONE glitch-low
+     *    sample out of three suppresses the D7 over-temperature latch.
+     *
+     *    The fix is to sample in the MIDDLE of the curve, where all three of
+     *    first / min / max give visibly different answers from the median, and
+     *    to assert on the raw reading rather than on a scale that saturates. */
     {
-        uint16_t hot = code_of(25.0);
-        uint16_t spike[3] = { hot, 4095, hot };     /* one high outlier */
+        uint16_t mid = code_of(45.0);               /* mid-band: nothing clamps */
+        uint16_t lo  = code_of(20.0);
+        uint16_t hi  = code_of(68.0);
+        /* Every arrangement of {lo, mid, hi}: the median is `mid` in all six,
+         * while first-of-three, min-of-three and max-of-three each differ in at
+         * least one of them. */
+        uint16_t perm[6][3] = {
+            { lo, mid, hi }, { lo, hi, mid }, { mid, lo, hi },
+            { mid, hi, lo }, { hi, lo, mid }, { hi, mid, lo },
+        };
+        int bad = 0;
+        for (int i = 0; i < 6; i++) {
+            adc_queue(perm[i], 3); g_ms += 1000;
+            uint16_t got = thermal_read_raw();
+            if (got != mid) {
+                printf("     perm %d: got %u, expected the median %u\n", i, got, mid);
+                bad++;
+            }
+        }
+        CHECK(bad == 0);
+        /* And the two extremes still behave, now asserted on the raw value so a
+         * saturating scale cannot hide the answer. */
+        uint16_t spike[3] = { mid, 4095, mid };
         adc_queue(spike, 3); g_ms += 1000;
-        CHECK(thermal_dwell_scale() == 320);
-        uint16_t dip[3] = { hot, 0, hot };          /* one low outlier */
+        CHECK(thermal_read_raw() == mid);
+        uint16_t dip[3] = { mid, 0, mid };
         adc_queue(dip, 3); g_ms += 1000;
-        CHECK(thermal_dwell_scale() == 320);
+        CHECK(thermal_read_raw() == mid);
     }
 
     /* 6) The reading is cached: three conversions per sample, not per call. */

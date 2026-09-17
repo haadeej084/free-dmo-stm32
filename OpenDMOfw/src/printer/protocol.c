@@ -663,9 +663,16 @@ static void diagnose(uint8_t sub)
         if (arg) m->flags |= OP_FLAG_VH_INHIBIT;
         else     m->flags &= (uint8_t)~OP_FLAG_VH_INHIBIT;
         if (m->flags & OP_FLAG_VH_INHIBIT) head_vh_off();
-        store_save();
+        /* Two different facts, reported separately. r[2] is the LIVE interlock,
+         * which head.c gates on and which is already in force. r[3] says whether
+         * it reached the EEPROM - PROTOCOL.md promises this subcommand persists
+         * the bit, and a part that ACKs without storing (write-protected, wrong
+         * device fitted, worn cell) used to make store_save() return 0 anyway.
+         * An operator who armed the interlock, read the confirming reply and
+         * power-cycled would have found it gone. */
         r[2] = m->flags;
-        usbp_send_reply(r, 3);
+        r[3] = (store_save() == 0) ? 1u : 0u;      /* persisted */
+        usbp_send_reply(r, 4);
         break; }
     case 0x05: {                              /* firmware build id (ASCII) */
         const char *b = OPENDMO_BUILD;

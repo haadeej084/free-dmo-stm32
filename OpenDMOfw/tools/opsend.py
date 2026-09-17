@@ -169,6 +169,12 @@ def parse_diag(r):
         out["lines"] = r[2]
     elif sub == 0x03:                     # EEPROM self-test
         out["eeprom_match"] = bool(r[2])
+    elif sub == 0x08 and len(r) >= 4:     # VH interlock
+        out["flags"] = r[2]
+        out["vh_inhibit"] = bool(r[2] & 2)
+        # Two different facts: the interlock is in force either way, but a part
+        # that ACKs without storing means it will be gone at the next power-up.
+        out["persisted"] = bool(r[3])
     elif sub == 0x05:                     # firmware build id
         out["build"] = r[2:].split(b"\x00", 1)[0].decode("ascii", "replace")
     elif sub == 0x06 and len(r) >= 29:    # full pin/ADC scan

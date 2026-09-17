@@ -256,10 +256,29 @@ void store_load(void)
     s_addrw = 2;
 }
 
+/* Read the record back and check it. store_save() used to return 0 whenever the
+ * I2C transfers were ACKed, which is a much weaker statement than "it is
+ * stored": a 24Cxx with /WP tied high, a footprint fitted with the wrong
+ * device, or a worn cell ACKs address and data and performs no write cycle at
+ * all. Measured on a register-level part model: only the fully ABSENT part was
+ * caught, and only because its address NAKs.
+ *
+ * That matters most for GS D 0x08. The live interlock is honoured either way -
+ * head.c gates on the RAM copy - but PROTOCOL.md promises the subcommand
+ * PERSISTS the bit, and an operator who arms it, reads the confirming reply and
+ * power-cycles would have found it gone. store_load()'s own boot-time write
+ * already verified itself this way (persist_and_verify); store_save() simply
+ * did not. One extra 33-byte read per save, and saves happen once per label,
+ * not once per line. */
 int store_save(void)
 {
     s_cfg.sum = cfg_sum(&s_cfg);
     if (eeprom_write(cfg_off(), (const uint8_t*)&s_cfg, sizeof(op_config_t)) != 0)
+        return -1;
+    op_config_t tmp;
+    if (eeprom_read(cfg_off(), (uint8_t*)&tmp, sizeof tmp) != 0)
+        return -1;
+    if (tmp.magic != CFG_MAGIC || cfg_sum(&tmp) != tmp.sum)
         return -1;
     return 0;
 }

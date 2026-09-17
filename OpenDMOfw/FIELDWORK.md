@@ -182,8 +182,33 @@ NRST before trusting your numbering.
 | I2C SCL    | PB8 | 45 | confirm PB8 vs PB6 (SCL); trace EEPROM SCL |
 | I2C SDA    | PB9 | 46 | confirm PB9 vs PB7 (SDA); trace EEPROM SDA |
 
-**Method.** Board unpowered. Continuity mode between each F072 pad and the pins
-of the **head flex connector**, the **motor-driver IC**, and the **EEPROM**. The
+> ## Do this FIRST: eight of the nineteen need no meter
+>
+> Flash the firmware, plug the printer in, and run
+> **`python3 tools/discover_pins.py all`**. The printer is its own instrument:
+>
+> * `GS D 0x06` returns all ten ADC channels **and** the input register of ports
+>   A, B and C in one reply. Take a scan, change one thing in the world, take
+>   another, diff them — the bit that moved *is* the pin. That finds the **paper
+>   sensor**, the **button** and the **thermistor channel** with nothing but your
+>   hand.
+> * `GS D 0x07` toggles a candidate pin and restores it, and **refuses** the VH
+>   gate, every fitted strobe, and the USB/SWD pins — so an automated sweep
+>   cannot damage anything or end the session. Watch the mechanism: the **four
+>   motor phases** announce themselves by twitching, the **LED** by blinking.
+> * The **I2C pair** needs nothing at all: `store.c`'s boot-time ladder already
+>   probes it and reports through `GS D 0x03` / `0x04`.
+>
+> That is 8 nets discovered and 2 self-reported. **Seven are left for the meter**
+> — the head's six logic lines and the VH gate — because the head is a
+> write-only shift register with no serial output (D30: "No MISO"), so there is
+> nothing to read back and nothing to watch that does not involve heat.
+>
+> Seven nets is under an hour. Nineteen is an afternoon.
+
+**Method for the seven that remain.** Board unpowered. Continuity mode between
+each F072 pad and the pins of the **head flex connector**, the **motor-driver
+IC**, and the **EEPROM**. The
 head side is already constrained by the ROHM pin order (CLK, DI1, DI2, LAT,
 STB1/2, VH, VDD, GND, TM), so matching "which F072 pad reaches which flex pin"
 gives you the full map.

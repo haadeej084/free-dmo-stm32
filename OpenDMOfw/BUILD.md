@@ -157,12 +157,12 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (159 checks / 64 scenarios). This is the regression test: it links and runs
+  (179 checks). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB
   peripheral, with a scripted host: enumeration, descriptors, bulk transfers,
-  printer-class requests, HALT/STALL handling (108 checks per model).
+  printer-class requests, HALT/STALL handling (127 checks per model).
 - `test/test_e2e.c` — the USB stack, printer class and protocol parser together
   against the same peripheral model: a 120-line job pushed as 64-byte bulk
   packets with the main loop running only on NAK (the ring buffer fills and
@@ -171,6 +171,16 @@ make test
 - `test/test_protocol_wire.py` — a hand transcription of the reply generators,
   checked against the live capture and the decompiled driver structs. It does
   **not** execute the C; keep it in sync when `protocol.c` changes.
+- `test/test_thermal.c` — `thermal.c` + `head.c`: the NTC curve, the dwell law
+  and the energy ceiling, built twice (the second build arms `HEAD_SAG_FULL_US`;
+  39 and 41 checks per model).
+- `test/test_motor.c` — `motor.c`: phase ORDER, break-before-make, exactly one
+  step per line, idle release (12 checks per model).
+- `test/test_system.c` — the real `sys_pin_toggle()` and its hot-pin guard
+  (18 checks per model).
+- `test/test_store.c` — `store.c` against a register-level I2C EEPROM model
+  (`test/i2c_eeprom_model.h`): ACK/NAK per byte, the stale-NACKF case, bus
+  recovery, and the checksummed record (27 scenarios per model).
 
 Two further checks, both also run in CI:
 
@@ -184,7 +194,9 @@ tarball): `test/renode/smoke.py` checks boot, fault-free main loop, SysTick and
 the LED patterns; `test/renode/head_shift.py` checks the exact bit stream the
 head receives and prints the per-line shift cost; `test/renode/eeprom.py` runs
 the config store against emulated 16 KB and 256 B EEPROMs; `test/renode/dfu.py`
-checks the USB DFU request and the hand-over to the boot loader.
+checks the USB DFU request and the hand-over to the boot loader;
+`test/renode/fault.py` forces HardFault, NMI, an unused vector and a fault
+before `SystemInit()` and checks the safe state (VH off, strobes idle).
 
 Also directly:
 

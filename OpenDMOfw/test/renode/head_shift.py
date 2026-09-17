@@ -50,7 +50,7 @@ CFG_FLAGS_OFF = 31                 # op_config_t: magic u32 + sku[24] + count u1
 FLAG_PAPER_FORCE = 0x01
 FLAG_VH_INHIBIT = 0x02
 BUF = 0x20000B00                   # unused heap area of the image
-DWELL_US = 270 * 2                 # HEAD_BASE_DWELL_US at density 8, two segments
+DWELL_US = 270 * 2                 # head.c HEAD_BASE_DWELL_US (270) at density 8, x MODEL_STROBE_SEGMENTS (2)
 
 
 def pattern(nbytes):

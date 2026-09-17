@@ -25,7 +25,8 @@ The public sibling datasheet **KF3002-GL50A** (ROHM, "Thick Film Thermal
 Printhead 300DPI", via alldatasheet) documents the family architecture:
 
 - **Built-in shift registers + latch + heat drivers.** Host signals: `CLK`,
-  `DI1`/`DI2` (one serial data line per half), `LAT`, `STB1`/`STB2` (heat strobe
+  `DI1`/`DI2` (the family brings out two serial data inputs; this firmware
+  drives only `DI1`, 672 clocks — DECISIONS D36), `LAT`, `STB1`/`STB2` (heat strobe
   per half), `VH` (heat supply, 24 V standard for the family), `VDD` (logic,
   3.13–5.25 V), `GND`, `TM` (thermistor). `DO1`/`DO2` are data-out for
   daisy-chaining extra heads — **there is no MISO line**.
@@ -44,8 +45,11 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
 **NOT confirmed:** `STB` polarity. `model.h` assumes active-low (Low = heat on),
 but the KF3002-chart reading that once justified it was withdrawn — see
 DECISIONS D28 and FIELDWORK measurement 6b. Treat it as an assumption.
-**Assumed:** DI1/DI2 clocked **in parallel**, each carrying half the dots
-(`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h`). **Still verify on hardware:**
+**Settled from the vendor firmware (D36):** ONE data line, `HEAD_DOTS` clocks —
+`MODEL_HEAD_SHIFT_LINES 1`. The two-line alternative (DI1/DI2 in parallel,
+`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS`) is kept behind `MODEL_HEAD_SHIFT_LINES 2`
+for a flex that really brings out two independent inputs (FIELDWORK 5b).
+**Still verify on hardware:**
 the ROHM equivalence of the 550's 3C56-9638 marking (the marking itself is
 FCC-sourced), the 5XL head marking (TE3004-TP1W00A vs a custom variant), and the
 thermistor divider R_p / direction (one 25 °C reading pins it).
@@ -103,7 +107,7 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   reference p.7). So it is an emitter/detector pair, the detector may be analog,
   and the emitter may need its own drive pin — none of which `pins.h` models yet.
 - **Head interface:** STB polarity **assumed** active-low (withdrawn as a fact,
-  DECISIONS D28 — FIELDWORK 6b), DI1/DI2 assumed driven **in parallel**, NTC
+  DECISIONS D28 — FIELDWORK 6b), one data line with 672 clocks (D36), NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **VH enable needs an external pull to OFF.** The MCU's GPIOs are floating
   inputs during and after reset, so whatever holds the load-switch gate in that
@@ -259,7 +263,7 @@ Table 13** ("STM32F072xx pin definitions"):
 | 14  | PA4            | **head LATCH**                               |
 | 15  | PA5            | **head CLK**                                 |
 | 16  | PA6            | **head DI1**                                 |
-| 17  | PA7            | **head DI2**                                 |
+| 17  | PA7            | **head DI2** (unused with `MODEL_HEAD_SHIFT_LINES 1`, D36) |
 | 18  | PB0            | **head STB1**                                |
 | 19  | PB1            | **head STB2**                                |
 | 20  | PB2            | head STB3 (spare)                            |
@@ -317,7 +321,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 |--------------------|---------------|-------------------------|------------|----------------|
 | Head CLK           | PA5           | GPIO out (shift clock)  | medium     | Signal set sourced (KF3002 datasheet); routing assumed — follow the head-connector CLK trace |
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
-| Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
+| Head DI2           | PA7           | GPIO out, idle low (only driven with `MODEL_HEAD_SHIFT_LINES 2`, D36) | low | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
 | Head STROBE 1      | PB0           | GPIO out (STB1, half 1; polarity ASSUMED active-low, FIELDWORK 6b) | medium | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
@@ -348,9 +352,13 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
   KF3002-GL50A); the halves are fired sequentially to split peak current.
   Confirm the half count on the board (a wide head could have 4 heat lines —
   spare strobe pins PB2/PB3 are already mapped).
-- **Half-2 dot order is an assumption.** `head.c` feeds dot `i` to DI1 and dot
-  `half + i` to DI2 on the same clock, i.e. both halves shift in the same
-  direction from the centre outwards. Some two-half heads shift the second bank
+- **The head is shifted as ONE 672-stage chain on DI1** (`MODEL_HEAD_SHIFT_LINES
+  1`, D36): the vendor firmware clocks 672 times on a single data pin and its
+  image has no second one. The two-line path below is the kept alternative.
+- **Half-2 dot order (two-line path only) is an assumption.** With
+  `MODEL_HEAD_SHIFT_LINES 2`, `head.c` feeds dot `i` to DI1 and dot `half + i`
+  to DI2 on the same clock, i.e. both halves shift in the same direction from
+  the centre outwards. Some two-half heads shift the second bank
   in the opposite direction. If a test print comes out with the right half
   mirrored, reverse the DI2 index in `head_print_line()` — that is the whole
   fix. Listed in FIELDWORK as measurement 6.

@@ -25,9 +25,11 @@ the per-line time budget. Section 4 lists what is settled so you do not measure
 >
 > What is left below is the bench visit, and nothing more.
 
-it again. What is left is **nine measurements** — seven, plus the strobe
+it again. What is left is **ten measurements** — seven, plus the strobe
 polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
-datasheet reading. Plus a five-minute contribution
+datasheet reading, plus the flex pin count (5b) and the head's Po (8) that
+DECISIONS D35/D36 added. Section 8 opens with the **one capture** of the 450
+board that answers six of them at once. Plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
 
 **Two routes.** Sections 3–7 are the careful one: measure first, then power.
@@ -638,8 +640,54 @@ no command sequence in the protocol can heat the head at all.
 
 ## 8. Measurements, in the order they pay off
 
-Seven items. Everything else has been resolved in section 4 — this is the
+Ten items (1–8, with 5b and 6b), preceded by the one capture that replaces most
+of them. Everything else has been resolved in section 4 — this is the
 irreducible list that genuinely needs the board in front of you.
+
+### 0. THE ONE CAPTURE THAT REPLACES MOST OF THIS LIST
+*If you have a logic analyser and a current probe, do this before anything else.*
+
+The owner has a **LabelWriter 450 mainboard that prints correctly in the 550
+mechanism**. That is a *known-good system driving the exact hardware this
+firmware targets* — and everything below is an attempt to find out what a
+known-good system does.
+
+So instrument the head flex and let it print.
+
+**Rig:** a logic analyser on the head flex (CLK, both candidate DI pins, LAT,
+both candidate STB pins — six channels is enough), a current probe or a shunt
+plus a differential probe in the VH return, and a scope channel on VH at the
+connector. Then print one ordinary label from the 450 board.
+
+**What that single capture settles, and each of these is otherwise a separate
+measurement on this list:**
+
+| Settles | How it falls out of the capture |
+|---|---|
+| **5b, data pins** | Count the pins that carry data. One or two. The vendor drives one (D36) — this confirms it on *our* flex. |
+| **5b, strobe pins** | Count the strobe pins that ever move. If one, `HEAD_STROBE_SEGMENTS` must become 1 and the energy ceiling be re-derived. |
+| **6b, strobe polarity** | Read the idle level and the pulse direction directly. No current-limited creeping up on it. |
+| **5, VH gate** | Watch VH come up and go down, and when relative to the strobe. |
+| **8, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
+| **Head signal order** | Which flex pin is CLK, which is DI, which is LAT — by watching, not by buzzing. |
+| **The real dwell** | The strobe pulse width at a known head temperature, to compare against D30's 374–448 µs. |
+
+**Why this beats measuring our own firmware.** Everything on this list below is
+"find out what the board expects, then check that we do it". A capture of the
+450 board *is* what the board expects, measured rather than inferred, on a
+system that demonstrably works. Our firmware's behaviour can then be compared
+against it directly — `test/renode/head_shift.py` already records our bit stream
+and `head_shift` reports our strobe width.
+
+**What it does NOT settle:** the routing of the **550's own MCU pads** to that
+flex (measurement 1) — the 450 board has a different MCU and its own layout.
+That stays a continuity job. And the motor drive mode still wants the **U2
+marking** read off the 550 board (measurement 2).
+
+> ⚠ The head is the irreplaceable part. Probing a live flex means sharp probes
+> near 24 V and a head that is being driven. Use proper flex clips rather than
+> hand-held needles, and do not let a probe slip between two adjacent pins while
+> a strobe is firing.
 
 ### 1. GPIO routing — *the whole job*
 Section 3. Nothing below can be interpreted before this is done.
@@ -841,10 +889,12 @@ on a second strobe net **existing on the flex**. If there is only one:
 re-derived for a whole-line strobe**. Finding that out after flashing rather than
 before is the difference between a printer that works and one that does not.
 
-### 6. Half-2 dot order — *assumption, easiest to spot in print*
-`head.c` sends dot `i` to DI1 and dot `half + i` to DI2 on the same clock. Some
-two-half heads shift the second bank in the opposite direction. The split itself
-is assumed too: `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h` say 336 + 336
+### 6. Half-2 dot order — *only if 5b finds TWO data pins*
+With the default `MODEL_HEAD_SHIFT_LINES 1` (DECISIONS D36) all 672 dots go out
+on DI1 in one chain and this measurement does not exist. It becomes live only if
+5b finds a second, independent data input. Then `head.c` sends dot `i` to DI1
+and dot `half + i` to DI2 on the same clock, and some two-half heads shift the
+second bank in the opposite direction. The split itself is assumed too: `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h` say 336 + 336
 (550) and 624 + 624 (5XL). **Report the head's part marking** (the 550 head bar
 reads `3C56-9638`; the 5XL one is unknown) — if its datasheet gives a different
 register split, change those two numbers; `head.c` handles unequal halves.
@@ -870,50 +920,17 @@ the kind of thing that is cheap to measure and expensive to guess.
 **Pair this with measurement 5** — see the note there. The fault-safe handler's
 guarantee rests on these two polarities together, not on either one alone.
 
-### 0. THE ONE CAPTURE THAT REPLACES MOST OF THIS LIST
-*If you have a logic analyser and a current probe, do this before anything else.*
-
-The owner has a **LabelWriter 450 mainboard that prints correctly in the 550
-mechanism**. That is a *known-good system driving the exact hardware this
-firmware targets* — and everything below is an attempt to find out what a
-known-good system does.
-
-So instrument the head flex and let it print.
-
-**Rig:** a logic analyser on the head flex (CLK, both candidate DI pins, LAT,
-both candidate STB pins — six channels is enough), a current probe or a shunt
-plus a differential probe in the VH return, and a scope channel on VH at the
-connector. Then print one ordinary label from the 450 board.
-
-**What that single capture settles, and each of these is otherwise a separate
-measurement on this list:**
-
-| Settles | How it falls out of the capture |
-|---|---|
-| **5b, data pins** | Count the pins that carry data. One or two. The vendor drives one (D36) — this confirms it on *our* flex. |
-| **5b, strobe pins** | Count the strobe pins that ever move. If one, `HEAD_STROBE_SEGMENTS` must become 1 and the energy ceiling be re-derived. |
-| **6b, strobe polarity** | Read the idle level and the pulse direction directly. No current-limited creeping up on it. |
-| **5, VH gate** | Watch VH come up and go down, and when relative to the strobe. |
-| **8, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
-| **Head signal order** | Which flex pin is CLK, which is DI, which is LAT — by watching, not by buzzing. |
-| **The real dwell** | The strobe pulse width at a known head temperature, to compare against D30's 374–448 µs. |
-
-**Why this beats measuring our own firmware.** Everything on this list below is
-"find out what the board expects, then check that we do it". A capture of the
-450 board *is* what the board expects, measured rather than inferred, on a
-system that demonstrably works. Our firmware's behaviour can then be compared
-against it directly — `test/renode/head_shift.py` already records our bit stream
-and `head_shift` reports our strobe width.
-
-**What it does NOT settle:** the routing of the **550's own MCU pads** to that
-flex (measurement 1) — the 450 board has a different MCU and its own layout.
-That stays a continuity job. And the motor drive mode still wants the **U2
-marking** read off the 550 board (measurement 2).
-
-> ⚠ The head is the irreplaceable part. Probing a live flex means sharp probes
-> near 24 V and a head that is being driven. Use proper flex clips rather than
-> hand-held needles, and do not let a probe slip between two adjacent pins while
-> a strobe is firing.
+### 7. Host acceptance — *the actual goal*
+With a plausible SKU configured, does **D.MO Connect** show a valid roll and
+print end to end?
+**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
+(550), then drive it from D.MO Connect.
+**If the roll shows as empty/JOKER:** Connect decides that from the status
+struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
+`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
+Connect's catalog for your region (an EU install hides US-only SKUs as
+"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
+**Report:** what Connect displayed, before and after the patch.
 
 ### 8. Po at the fitted head — *the one number that unlocks the energy model*
 **This was missing from this list**, although `DECISIONS.md` D30 closes by naming
@@ -989,18 +1006,6 @@ redo that arithmetic rather than inherit it.
 **Patch:** `HEAD_MAX_DWELL_US` in `src/printer/head.c`, and then `D30`'s deferred
 port becomes a decision rather than a guess.
 
-### 7. Host acceptance — *the actual goal*
-With a plausible SKU configured, does **D.MO Connect** show a valid roll and
-print end to end?
-**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
-(550), then drive it from D.MO Connect.
-**If the roll shows as empty/JOKER:** Connect decides that from the status
-struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
-`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
-Connect's catalog for your region (an EU install hides US-only SKUs as
-"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
-**Report:** what Connect displayed, before and after the patch.
-
 ---
 
 ## 9. Troubleshooting map
@@ -1055,18 +1060,25 @@ GPIO ROUTING (pad number, or "none", or ohms if via a series resistor)
   I2C SCL:             I2C SDA:
 
 MEASUREMENTS (section 8)
-  2 Motor: drive mode, steps issued, mm moved, -> MOTOR_STEPS_PER_LINE:
+  0 450-board capture done? yes/no  (attach the logic-analyser export;
+      data pins seen: __  strobe pins seen: __  strobe idle level: __
+      strobe width __ us at head temp __ C  VH __ V loaded)
+  2 Motor: drive mode (U2 marking: ____), steps issued, mm moved, -> MOTOR_STEPS_PER_LINE:
   3 Thermistor: room temp __ °C -> raw __ ; warmed -> raw __
       (that is enough - the R_p column and both thresholds follow from the table)
   4 Top-of-form photocell: digital or analog? levels with / without stock;
       does the IR emitter need a drive pin?
   5 VH: voltage measured, enable pad, polarity:
-  6 Half-2 dot order (mirrored in test print? yes/no):
+  5b Flex: data pins brought out __ (1/2)   strobe pins brought out __ (1/2)
+  6 Half-2 dot order (only if 5b = 2 data pins; mirrored in test print? yes/no):
+  6b STB polarity: idle level __ ; fires on low / high
   7 D.MO Connect: roll shown as ____ ; printed? ____ ; pc-patch needed? ____
+  8 Po: VH return current __ mA during a strobe of __ dots at VH __ V
+      -> __ mA per dot (850 ohm grade = 28.2 mA, 1250 ohm = 19.2 mA; D35)
 
 CONFIRMATIONS (free, while you are already scoping - section 4)
   STB pulses low to fire?            yes / no / not scoped
-  DI1 and DI2 both driven?           yes / no / not scoped
+  Only DI1 driven (DI2 idle)?        yes / no / not scoped
   Number of STB lines on the flex:
   diag 3 result (eeprom_match):
 

@@ -74,7 +74,7 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   conductors are presumed 3V3 and GND.
 - **Feed motor: identified.** A **LEILI 35BY412-339**, two-phase bipolar PM
   stepper, 4 leads, ~35 mm can, ~6.5 Ω per phase, can marked "Caution Hot
-  Surface". A 4-lead bipolar motor is driven by two H-bridges on IN1–IN4, which
+  Surface". A 4-lead bipolar motor is driven by two H-bridges — but that does NOT imply the MCU sequences them. *Every* bipolar stepper is two H-bridges; the question is whether the MCU drives IN1–IN4 or a driver IC does, and the 450 mainboard answers it the other way: **STEP / DIR / ENABLE to a driver**, with the indexer in silicon (DECISIONS D24). The 550 has its own U2, so this is not settled for our board — read the U2 marking, which costs nothing. The old wording below is kept because it describes the geometry, which
   independently validates `MOTOR_DRIVE_4PHASE` as the default in `motor.c`;
   `MOTOR_DRIVE_STEPDIR` stays only as a fallback. The driver IC itself is still
   unidentified — but **not** a TB6612, which is rated 15 V and cannot sit on the

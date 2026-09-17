@@ -702,25 +702,24 @@ words from a four-entry table built once per line: 11 898 instructions
   (~1360 rpm); two does not. `MOTOR_STEPS_PER_LINE` stays 1, now as an
   estimate with a reason rather than a placeholder.
 
-  **Unreconciled with D30, and it is the constant that sets label length.** D30
-  reads the LabelWriter 450's own firmware - four blind disassemblies, byte
-  identical - as driving **12 motor steps per dot line at 300 dpi, i.e. 3600
-  steps/inch**, on a mechanism a 450 mainboard drives correctly when fitted to a
-  550. This entry says 300 steps/inch. They cannot both be full steps: at
-  `MODEL_LINE_PERIOD_US` 800, twelve full steps per line is 15000 steps/s, which
-  on a 48-step/rev motor is 18750 rpm - impossible for a 7.5 deg PM stepper. So
-  the 450's twelve are microsteps, and `MOTOR_STEPS_PER_LINE = 1` is right ONLY
-  IF it microsteps exactly 12:1. If its phase table instead spans one electrical
-  revolution (4 full steps per line), this constant is wrong by a factor of four
-  and every label is a quarter or four times the length it should be.
+  **RECONCILED WITH D30 — the experiment named here has been run.** The 450
+  image has **no motor phase table at all**. Its CT32B0 match callback emits
+  exactly ONE pulse on one pin per match — no loop, no table index, no coil
+  pattern — and a down-counter reloaded with **12 or 6** decides how many go per
+  dot line, selected by the same byte and bit that D30's pulse-width routine
+  tests to take its 600 dpi branch. So the twelve are driver pulses into a
+  STEP/DIR driver whose microstep indexer is in silicon, not twelve full steps.
+  `MOTOR_STEPS_PER_LINE = 1` stands, now on working firmware rather than on a
+  rated-speed estimate, and the "four entries cycled three times" alternative is
+  dead: there are no entries to cycle.
 
-  The argument above is a rated-speed estimate; the 450 image in `scratchpad`
-  can answer it directly. One directed disassembly pass: find the table the
-  CT32B0 step ISR indexes with its step counter, and count the entries. Twelve
-  distinct phase vectors confirms `1` from working firmware - the strongest
-  evidence this project could have for it. Four entries cycled three times means
-  it is wrong. `FIELDWORK.md` measurement 2 (feed 300 lines, must advance
-  exactly 25.4 mm) remains the bench route, but it is no longer the only one.
+  **The honest limit.** The image cannot *prove* the microstep ratio, because
+  the indexer is inside the driver IC. 1/8 and 1/16 are not excluded by motor
+  physics and would need 1.5 and 0.75 full steps per line — which no value of
+  `MOTOR_STEPS_PER_LINE` can express. **What is at risk is therefore the DRIVE
+  MODE, not this constant.** Against 1/8 specifically: the 450's own fastest
+  feed period would ask 2796 rpm of the motor where 1/12 asks 1864.
+
 
   **Corroborated from two directions since, both independent of the
   disassembly.** The conclusion that the 450's twelve are MICROSTEPS - and so
@@ -1250,7 +1249,13 @@ split can be dropped and 400 us of line time taken back.
   exposing STB1/STB2 on separate pins with the halves chained. A current probe
   settles it.
 * `PIO0_8` is pulsed per line between latch and strobe, before every ADC read,
-  and in the step routine, and **no agent identified it**. If it were a second
+  and in the step routine, and **no agent identified it**. A later exhaustive GPIO
+  inventory of the whole image adds a **third** call site and, more usefully,
+  retires the specific worry this bullet raised: "if it were a second head
+  latch, the segment count above would be wrong." It is not - the inventory
+  contains exactly one latch and one strobe - so `MODEL_STROBE_SEGMENTS` is not
+  in doubt on this account. The pin stays unidentified; the consequence does
+  not. If it were a second
   head latch, the segment count above would be wrong.
 * `0x70FC`/`0x70FD` — the bytes that select which `P` a unit uses, i.e. plain
   450 versus Turbo — lie past the end of the 20480-byte dump. They cannot be
@@ -1690,3 +1695,34 @@ two-line path reported 13896. The ASSERTIONS are unaffected — they compare the
 recorded bit stream, not the count — but the cost figure is a reporting line
 that has clearly stopped measuring what it claims. It is on the ledger to fix,
 and until it is, the per-line time budget should not be argued from it.
+
+## D37 — What a second, independent reading of the 450 image confirmed
+
+The energy model in D30 was recovered from the pulse-width routine. A later pass
+went in through a different door — the **step engine** — and came out with the
+same constants, which is the strongest kind of corroboration available from a
+single artifact: two code paths that would have to be wrong in the same way.
+
+Confirmed a second time, from `CT32B0`/`CT16B0` rather than from `0x2926`:
+
+* **the 375 ns tick.** Both timers use prescaler 17, giving the same unit the
+  pulse-width arithmetic is expressed in.
+* **twelve steps per dot line at 300 dpi, six at 600.** A down-counter reloaded
+  with 12 or 6, decremented once per step.
+* **the 600 dpi flag.** The step engine selects its 6-or-12 on *the same byte and
+  the same bit* that D30's pulse-width routine tests to take its
+  `W1 = (W0 >> 1) + 175` branch. One flag, two consumers, consistent.
+
+It also settles what D30 could only bracket: **there is no motor phase table in
+the image at all.** The match callback emits exactly one pulse on one pin — no
+loop, no table index, no coil pattern — so the twelve are driver pulses into a
+STEP/DIR driver whose microstep indexer is in silicon. See D24, which this
+answers.
+
+One thing it did **not** confirm, and the distinction matters: the *microstep
+ratio*. The indexer is inside the driver IC, so the image cannot show it. 1/12
+is what makes `MOTOR_STEPS_PER_LINE = 1` correct; 1/8 and 1/16 are not excluded
+by motor physics and would need 1.5 and 0.75 full steps per line, which no value
+of that constant can express. **What is at risk is the drive mode, not the
+constant** — which is why FIELDWORK measurement 2 now opens by reading the
+marking on U2.

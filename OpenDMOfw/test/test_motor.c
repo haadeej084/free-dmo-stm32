@@ -74,6 +74,41 @@ static void reset_log(void) { g_logn = 0; g_writes = 0; }
 /* Replay the log and report how often a coil had BOTH ends high at once.
  * A coil is (A1,A2) or (B1,B2); the state is evaluated after every single
  * write, because the hazard is the window BETWEEN two writes. */
+/* How many STEPS the log contains. A step is a change of the four-bit phase
+ * vector - not a pin write, because break-before-make spends two writes on some
+ * pins and none on others. Counting the vector makes the measure independent of
+ * how the driver chooses to get there. */
+static int step_events(void)
+{
+    /* The four-phase sequence, as motor.c drives it. A STEP is the vector
+     * arriving at the next entry - not any change of it, because
+     * break-before-make writes the pins one at a time and the vector passes
+     * through intermediate values inside a single step. Matching the sequence
+     * ignores those, and it also checks the ORDER: a driver that advanced the
+     * phase backwards would feed the paper the wrong way and count zero here. */
+    /* k_phase[] as {A1,A2,B1,B2}, packed here the same way: {1,0,1,0} -> 0xA,
+     * {0,1,1,0} -> 0x6, {0,1,0,1} -> 0x5, {1,0,0,1} -> 0x9. The phase index at
+     * entry depends on what ran before, so the sequence is joined wherever it
+     * starts rather than assumed - what is asserted is that it then ADVANCES,
+     * in order, once per step. */
+    static const int seq[4] = { 0xA, 0x6, 0x5, 0x9 };
+    int lvl[16], steps = 0, want = -1;
+    for (int i = 0; i < 16; i++) lvl[i] = 0;
+    for (int i = 0; i < g_logn; i++) {
+        if (g_log[i].port != 1) continue;
+        lvl[g_log[i].pin] = g_log[i].high;
+        int v = (lvl[PIN_MOTOR_A1.pin] << 3) | (lvl[PIN_MOTOR_A2.pin] << 2)
+              | (lvl[PIN_MOTOR_B1.pin] << 1) |  lvl[PIN_MOTOR_B2.pin];
+        if (want < 0) {
+            for (int k = 0; k < 4; k++)
+                if (v == seq[k]) { steps = 1; want = (k + 1) & 3; break; }
+            continue;
+        }
+        if (v == seq[want]) { steps++; want = (want + 1) & 3; }
+    }
+    return steps;
+}
+
 static int both_ends_driven(int pin_lo, int pin_hi)
 {
     int a = 0, b = 0, hits = 0;
@@ -122,9 +157,17 @@ int main(void)
         CHECK(b == 0);
     }
 
-    /* 3) The feed actually stepped: 100 lines at MOTOR_STEPS_PER_LINE steps
-     *    each, so the log is non-trivial and case 2 is not vacuous. */
-    CHECK(g_writes >= 100);
+    /* 3) THE FEED DISTANCE, exactly. This used to be `g_writes >= 100` for a
+     *    100-line feed - a bound so loose that MOTOR_STEPS_PER_LINE was untested
+     *    by construction, and it is the constant that sets how long every label
+     *    is. DECISIONS D24 now pins it to 1 from DYMO's own 450 firmware.
+     *
+     *    The expectation is the literal 100, deliberately NOT lines *
+     *    MOTOR_STEPS_PER_LINE: a test that recomputes the macro would agree with
+     *    whatever the macro said (D34). Change the constant and this fails,
+     *    which is the entire point. */
+    CHECK(step_events() == 100);
+    CHECK(g_writes >= 100);          /* and the log is non-trivial */
 
     /* 4) A single line advances once, and crediting elapsed time does not skip
      *    the step itself - only its settle delay. */

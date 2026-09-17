@@ -154,81 +154,133 @@ These retire the remaining protocol entries in DECISIONS D12. Mail the hex to
 
 ---
 
-## 3. The one thing that matters most: GPIO routing
+# PROPOSED replacement for FIELDWORK.md section 3 ("The one thing that matters most: GPIO routing")
 
-The head/motor/sensor signals are plain GPIOs; the firmware bit-bangs them. The
-assumed routing (`src/pins.h`) is below. Pad numbers come from the LQFP48 map in
-`PINMAP.md` — orient the chip by its corner dot, and sanity-check that pad 7 is
-NRST before trusting your numbering.
-
-| Signal | Assumed pin | Pad | What to measure |
-|--------|-------------|-----|-----------------|
-| Head CLK   | PA5 | 15 | Continuity from pad 15 → which head-flex pin? |
-| Head DI1   | PA6 | 16 | same |
-| Head DI2   | PA7 | 17 | same |
-| Head LAT   | PA4 | 14 | same (Low = THROUGH) |
-| Head STB1  | PB0 | 18 | same (active-low heat strobe, half 1) |
-| Head STB2  | PB1 | 19 | same (half 2) |
-| Head STB3/4 | PB2 / PB3 | 20 / 39 | only if the head has more than 2 heat lines |
-| Motor A1/STEP | PB4 | 40 | which motor-driver input does pad 40 reach? (motor = LEILI 35BY412-339, 2-phase bipolar, so expect two H-bridges) |
-| Motor A2/DIR  | PB5 | 41 | same |
-| Motor B1   | PB6 | 42 | same |
-| Motor B2   | PB7 | 43 | same |
-| Thermistor | PA1 | 11 | is the NTC divider on pad 11? (ADC_IN1) |
-| Paper sensor | PA0 | 10 | is the paper sensor on pad 10? digital or analog? |
-| Head VH enable | PA8 | 29 | which pad gates the 24 V P-MOS / load switch? polarity? |
-| Status LED | PA2 | 12 | follow the LED (PC6/PC7 are not bonded on LQFP48) |
-| Button | PA3 | 13 | follow the feed/power button |
-| I2C SCL    | PB8 | 45 | confirm PB8 vs PB6 (SCL); trace EEPROM SCL |
-| I2C SDA    | PB9 | 46 | confirm PB9 vs PB7 (SDA); trace EEPROM SDA |
-
-> ## Do this FIRST: eight of the nineteen need no meter
->
-> Flash the firmware, plug the printer in, and run
-> **`python3 tools/discover_pins.py all`**. The printer is its own instrument:
->
-> * `GS D 0x06` returns all ten ADC channels **and** the input register of ports
->   A, B and C in one reply. Take a scan, change one thing in the world, take
->   another, diff them — the bit that moved *is* the pin. That finds the **paper
->   sensor**, the **button** and the **thermistor channel** with nothing but your
->   hand.
-> * `GS D 0x07` toggles a candidate pin and restores it, and **refuses** the VH
->   gate, every fitted strobe, and the USB/SWD pins — so an automated sweep
->   cannot damage anything or end the session. Watch the mechanism: the **four
->   motor phases** announce themselves by twitching, the **LED** by blinking.
-> * The **I2C pair** needs nothing at all: `store.c`'s boot-time ladder already
->   probes it and reports through `GS D 0x03` / `0x04`.
->
-> That is 8 nets discovered and 2 self-reported. **Seven are left for the meter**
-> — the head's six logic lines and the VH gate — because the head is a
-> write-only shift register with no serial output (D30: "No MISO"), so there is
-> nothing to read back and nothing to watch that does not involve heat.
->
-> Seven nets is under an hour. Nineteen is an afternoon.
-
-**Method for the seven that remain.** Board unpowered. Continuity mode between
-each F072 pad and the pins of the **head flex connector**, the **motor-driver
-IC**, and the **EEPROM**. The
-head side is already constrained by the ROHM pin order (CLK, DI1, DI2, LAT,
-STB1/2, VH, VDD, GND, TM), so matching "which F072 pad reaches which flex pin"
-gives you the full map.
-
-**Work the other way round where it is easier.** Buzzing 48 pads against 10 flex
-pins is 480 checks. Start from the *destination*: put one probe on head-flex pin
-1 and sweep the F072 pads — most signals land on PA4–PA7 / PB0–PB3 or nowhere.
-
-**Series resistors — expect about 22 Ω.** A Rev K board photo shows banks of SMD
-"220" (= 22 Ω) parts around the MCU on exactly these lines, with some "102"
-(1 kΩ) pulls mixed in. If a pad reads tens of ohms to a flex pin rather than a
-dead short, that **is** the connection — note the resistance instead of calling
-it "no connection".
-
-> ⚠ **If the EEPROM lands on PB6/PB7, stop and read the conflict note in
-> `PINMAP.md`.** PB6/PB7 are the default motor B1/B2 phases. Both cannot be true;
-> the motor phases have to move (PB10–PB15, PA9/PA10/PA15 are free). Do not power
-> anything until that is resolved.
+Drop-in text for lines 157-232 of FIELDWORK.md. Everything below is read out of the
+LabelWriter 450 / 450 Turbo application image
+(`LW450_LW450T_app_0x2000_20480.bin`, load 0x2000, 20480 bytes). Addresses in brackets are
+addresses in that image. Two rows are corroborated from a Rev E 550 board photo, marked as such.
 
 ---
+
+## 3. The one thing that matters most: GPIO routing
+
+**Start from the 450, not from a blank pad map.** A LabelWriter 450-generation mainboard fitted
+into a 550 prints correctly (owner report), so the 450 firmware is a working driver for *this*
+mechanism. Its MCU is an NXP LPC11Uxx, not an STM32, so its **pin numbers tell you nothing** —
+but its **signal set, polarities, idle levels and sequence do**, and those are what a 550 board
+also has to route. You are not looking for "which pad is PA5"; you are looking for *this* list
+of nets, on *these* connectors, each with a known shape on a scope.
+
+### 3.1 The complete signal set the genuine firmware drives
+
+Every GPIO the 450 application configures, in the order its own init routine configures them
+[0x4bac-0x4c76]: sixteen outputs then four inputs. "Idle" is the level the firmware leaves the
+pin at [reset-state routine 0x4c78, stop routine 0x5dac].
+
+| # | Signal | Dir | Active | Idle | Evidence |
+|---|---|---|---|---|---|
+| 1 | **Head DATA** | out | data | — | 84 bytes/line = 672 dots, over hardware SPI at PCLK/4 = 12 MHz, CPOL=0 CPHA=0. **One data line for the whole line — no second half** [SSP1 init 0x5852/0x5876, pin mux 0x58d2] |
+| 2 | **Head CLK** | out | rising | low | Same port as DATA. Data is sampled on the **rising** edge, shown twice: SSP CPOL=0/CPHA=0, and the run-length path bit-bangs it as SET-then-CLR while holding the data line [0x5634-0x5640] |
+| 3 | **Head LATCH** | out | **low** | high | One minimum-width low pulse immediately after the line is shifted, before the strobe [0x2906-0x2912] |
+| 4 | **Head STROBE** | out | **low** | high | **One strobe for all 672 dots.** Asserted after the pulse width is computed; released by a timer match [assert 0x299c; width written to CT16B0 MR0 at 0x29a0-0x29b4; release 0x29cc] |
+| 5 | **Head thermistor** | ADC | — | — | Burst-converted continuously. Head temperature, higher count = colder [ADC CR = 0x000100E0 at 0x5d72; read at 0x2a2a] |
+| 6 | **VH rail sense** | ADC | — | — | 24 V at the head. Suspend below 676 counts, resume at 751, motor slow-down at 770 [0x29f2-0x2a28] |
+| 7 | **Label-gap sensor** | ADC | — | — | **Analog, not a digital pin.** Software Schmitt trigger at 294 / 320 counts [0x2ec0-0x2ed4] |
+| 8 | **Motor STEP** | out | pulse | low | One pulse per step-timer match, on every match [low->high 0x210c-0x2118, back low 0x216c]; the timer is re-armed with the step period on each match [0x62fa-0x6302] |
+| 9 | **Motion gate (DIR or ENABLE)** | out | level | high | A level set per motion state — high in the forward states, low in three others [high 0x24d6, low 0x25fc]. The firmware **reads it back** and refuses to run the line engine while it is low [0x2e92-0x2e9c]. Which of DIR / ENABLE it is, is not established; that it is a *level*, and that printing is gated on it, is |
+| 10 | **Start-torque / boost line** | out | **low** | high | Driven low on entry to every motion state, and **automatically released to high 128 step interrupts later** by the step ISR [0x62d4-0x62f8] — about 0.9 mm of travel at 3600 steps/inch. Too short to be a plain enable; consistent with a current-boost or decay-mode input to the driver. Not established |
+| 11 | **An active-low /RESET** | out | **low** | high | Pulsed low then high exactly once, at boot [0x6354-0x636a]. Most consistent with the external driver IC's reset. Not established |
+| 12 | **Mode strap A** | out | — | **high** | Written once, never again [0x4d18] |
+| 13 | **Mode strap B** | out | — | **high** | Written once, never again [0x4d20] |
+| 14 | **Mode strap C** | out | — | **low** | Written once [0x4d28, 0x5e3a] |
+| 15 | **Engine power gate** | out | high = on | — | High at engine reset [0x4d08] and at print start [0x5e22]; low at print stop [0x5dc2], **after** the strobe is released and the motor lines are safed. This is the 450's only candidate for a head-VH or driver-supply gate, and the stop ordering is the ordering you would use for one. Not established |
+| 16 | **Unidentified pulse line** | out | **low** | high | A short low pulse in exactly three places: between the head latch and the strobe [0x2916]; immediately before the **VH-rail** ADC read [0x29e6]; and in the last few steps of a feed [0x215c]. Best guess is a fault-latch reset or an external watchdog kick. It is **not** a head data/clock/latch/strobe line — all four of those are accounted for above |
+| 17 | **Static enable** | out | — | **low** | Driven low once at boot, never again [0x637c] |
+| 18 | **Digital sensor A** | in | — | — | Software-debounced (100-tick counter). Checked at the top of every line; a 1 aborts the job [0x2c76, 0x2ea6, 0x5996] |
+| 19 | **Digital sensor B** | in | — | — | Same debounce path, second channel [0x2ca8] |
+| 20 | **Button** | in | rising | — | Edge interrupt on pin-interrupt channel 0, plus a 40-tick software debounce [0x4f76-0x4f86, 0x593c, 0x59fc] |
+| 21 | **Second edge input** | in | rising | — | Edge interrupt on pin-interrupt channel 1, polled at [0x5a36] |
+| 22-24 | **LED group (3 lines)** | out | see note | — | Blinked by a toggle routine [0x5ad0]: "on" drives two lines low and makes the third an output-low; "off" drives one high and returns the third to an **input** (tri-state). **This is the one block that does not transfer** — the 450 has one button and one indicator, the 550 has its own button/LED board (SW1-SW3, D1-D8) |
+
+That is **seventeen nets outside the front panel** (rows 1-21 minus the three-line LED group).
+It is the shopping list.
+
+### 3.2 The motor interface is STEP/DIR to a driver IC, not four phases
+
+Nothing in the image ever writes four pins as a phase table. The only direct GPIO port-register
+writes in the whole image are the two that re-mux the SPI pins [0x5902] and the run-length head
+clock [0x5628-0x563e]; every other pin movement goes through a one-pin-at-a-time HAL, so the
+inventory above is exhaustive over the image rather than a sample. What the MCU emits is **one
+STEP pulse per timer match** plus levels and straps.
+
+Step timing, for scale: the step timer's prescaler is 17 on a 48 MHz core, i.e. a **375 ns
+tick** [0x34d0-0x34d2], and the raster step period is 255 ticks = **95.6 us per STEP pulse**.
+(The other two timers: a second 375 ns timer carries the strobe width, and a 1 us timer does
+housekeeping on a 250 ms match [0x34d4-0x34d6, 0x37ca-0x37d2].)
+
+**The 550 board agrees.** On the Rev E photo, **J9 is a 4-pin connector** — two coil pairs,
+matching the 2-phase bipolar LEILI 35BY412-339 already on record — it sits next to **U2**, and
+**two 0.68 ohm "R680" sense resistors** flank it. A sense-resistor pair beside a driver package
+is a current-regulated bipolar driver, which is exactly the architecture the 450 firmware
+implies.
+
+**Consequence for `src/pins.h`:** `MOTOR_DRIVE` should be the STEP/DIR variant, not the 4-phase
+fallback, and the map is short of a **/RESET** line and the **mode straps**. Trace only STEP,
+DIR and ENABLE and the driver may sit in reset with the wrong microstep setting, and the motor
+will not turn at all.
+
+### 3.3 What to look for, per connector
+
+**J6, the head flex.** Six logic nets and only six: DATA, CLK, LATCH, STROBE, plus VH and the
+thermistor return. If the flex carries the head's DI1/DI2 and STB1/STB2 separately, expect them
+**paralleled on the board** — the genuine firmware drives exactly one data line and exactly one
+strobe. LATCH and STROBE both idle **high** and pulse **low**; that is the polarity to expect,
+and confirming it is measurement 6b, which must happen before any 24 V test.
+
+**J9, the motor.** Four pins = the two coil pairs. Nothing on J9 reaches the MCU directly; it
+reaches U2. Trace the **MCU side of U2** instead, through the series-resistor bank between them:
+one pulse line (STEP), one or two levels (DIR / ENABLE), one /RESET, and two or three straps
+tied high or low.
+
+**The sensors.** Three analog and two or three digital, not one digital "paper sensor":
+
+* the head thermistor (analog),
+* the VH rail divider (analog) — the genuine firmware suspends printing on it,
+* the label-gap photocell (**analog**, with a software Schmitt trigger),
+* two debounced digital inputs the genuine firmware aborts a job on,
+* the button (edge-interrupt capable).
+
+If you find one digital paper sensor and no analog gap channel, look again: the genuine firmware
+cannot find a die-cut gap without the analog one.
+
+**No I2C.** The 450 application never enables the I2C peripheral and never touches its
+registers — it has no config EEPROM. So the 450 says nothing about `PIN_I2C_SCL`/`PIN_I2C_SDA`.
+That pair stays a pure 550-board question, and `store.c`'s boot ladder self-reports it anyway.
+
+**The VH gate.** The 450 has no pin that is unambiguously a head-power switch. Signal 15 is the
+only candidate: it goes high when the engine is armed and low at stop, after the strobe is
+released. That is weak support, not confirmation. Treat `PIN_HEAD_VH` and its polarity as a
+550-board measurement (measurement 5), bundled with measurement 6b — D31's fault handler is only
+safe if at least one of the two polarities is right.
+
+### 3.4 The honest part: what the 450 cannot tell you
+
+The 450's MCU is an NXP LPC11Uxx. Its pin *numbers* do not transfer, and no amount of
+disassembly changes that. Everything in `src/pins.h` that names a PA/PB pin is still an
+assumption read off the STM32F072 datasheet and is still worth nothing until somebody buzzes it
+out. What the 450 gives you is the list above: which nets exist, which way they point, what they
+idle at, and what fires when. That turns "sweep 48 pads against everything" into "find these
+seventeen, and you already know what each one should look like on a scope".
+
+### 3.5 Do this FIRST: eight of the nineteen need no meter
+
+*(keep the existing text — `tools/discover_pins.py`, `GS D 0x06` diffing for the inputs,
+`GS D 0x07` for the outputs, `store.c`'s boot ladder for the I2C pair — with one correction.
+With the STEP/DIR reading above, "the four motor phases announce themselves by twitching" is
+wrong: a single `GS D 0x07` toggle of STEP is one microstep, which you will not see or hear.
+Toggle the motion gate or the boost line instead and listen for holding torque appearing, or
+pulse the candidate STEP pin a few hundred times.)*
 
 ## 4. What is ALREADY established (don't redo these)
 

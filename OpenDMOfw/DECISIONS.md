@@ -722,6 +722,34 @@ words from a four-entry table built once per line: 11 898 instructions
   it is wrong. `FIELDWORK.md` measurement 2 (feed 300 lines, must advance
   exactly 25.4 mm) remains the bench route, but it is no longer the only one.
 
+  **Corroborated from two directions since, both independent of the
+  disassembly.** The conclusion that the 450's twelve are MICROSTEPS - and so
+  that `MOTOR_STEPS_PER_LINE = 1` - now has physical evidence behind it rather
+  than only a rated-speed estimate:
+
+  * **ROHM's platen specification.** Their datasheets for this head geometry
+    give "Platen Diameter Max. 20 mm" (KD parts) and "Maximum roller diameter
+    18.0 mm" (GD31A). With a 48-step/rev motor, 300 full steps per inch needs a
+    gear train of roughly 9:1 to 15.5:1 - ordinary. 3600 full steps per inch
+    would need **111:1 to 185:1**, which is absurd for a label printer. The
+    geometry alone rules out twelve full steps per line.
+  * **DYMO's own LabelWriter 400 technical reference**, already in scratchpad as
+    `lw400.txt`, for a printer the aftermarket says carries this same head:
+    `ESC y` "sets the step resolution of the printer to match its print element
+    resolution" and `ESC z` "changes the step resolution of the printer to
+    203 dpi". A printer that can retarget its step resolution to 203 dpi cannot
+    be emitting one whole full step per dot line at 300 dpi - the ratio is
+    1.478 - so the drive has sub-line resolution by DYMO's own documentation.
+
+  **And one claim in this entry has no source at all.** "No gearbox in the -339
+  part" is load-bearing: the whole rated-speed argument that pins the constant
+  to 1 depends on it. A hunt for it found that **35BY412 is a generic 35 mm
+  4-phase PM frame sold by several manufacturers**, with the suffix carrying the
+  winding and the gearing, and that **several 35BY412 variants are sold as
+  geared**. Nothing was found that says the -339 is not. Treat "no gearbox" as
+  an assumption of the same standing as the others in this entry until the bench
+  feed test (FIELDWORK 2) or a datasheet says otherwise.
+
 ## D25 — The 5XL is a different board; the 550 is the target
 
 ### MCU identification (markings read from full-resolution community photos)
@@ -1495,3 +1523,86 @@ produced the same shape — cycle 3's `test_protocol.c` head mock discarded the
 bytes it was handed, making the whole raster-geometry engine unobservable, and
 this. **Mock the boundary, never the behaviour.** If a mock has an `if` in it
 that mirrors an `if` in the firmware, that branch is untested by construction.
+
+## D35 — The head's resistance grade is unresolved, and the unknown runs the unsafe way
+
+A same-hardware firmware hunt went looking for another product using this print
+head, on the reasoning that its firmware would carry a drive model. **The lead is
+closed**, for three independent reasons and one structural one — but it returned
+something more important than it was sent for.
+
+### What it settled
+
+**The head marking decodes.** `3C56-9638` is a DYMO LabelWriter part, and the
+aftermarket names it consistently: "ROHM SHEC 3C56-9638 … KF3002-GK11C … Dymo
+450 Turbo", with the same marking also listed against the LabelWriter 400. With
+D24's reading of `3C56-9638` off the 550 and 550 Turbo FCC photos, this says the
+**550 carries the same head part as the 400/450/450 Turbo** — which corroborates
+the owner's mainboard-swap report at the part-number level and upgrades D30 from
+"same mechanism (owner report)" to "same head part". Stated honestly: these are
+aftermarket listings from one supply chain copied many times, so it is **one
+source multiplied, not many independent ones**, and `KF` versus `KD` is the
+sellers' attribution — neither letter is in the physical marking.
+
+**Po ≈ 0.43 W/dot is better supported than D30 implies.** Across every ROHM head
+of identical geometry (300 dpi, 640 dots, 54.208 mm, 24 V):
+
+| Part | Rave | Po | Rated speed |
+|---|---|---|---|
+| KF3002-GL50A | 1250 Ω | 0.43 W/dot | 150 mm/s |
+| KF3002-GD31A | 1250 Ω | 0.42 W/dot | 200 mm/s |
+| KF3002-GM50A | 1250 Ω | 0.434 W/dot | 250 mm/s |
+| KD3002-DC92A | 1250 Ω | not stated | 100 mm/s |
+| KD3002-TQFW00A | **850 Ω** | not stated | 250 mm/s |
+
+Four of five at 1250 Ω, across a 100–250 mm/s range, with the three that state
+Po clustering inside 3 %. The ANALOGUE tag stays, but it is a much better
+analogue than "one sibling part".
+
+### The finding that matters, and it is not the reassuring half
+
+**ROHM's newest part of the same geometry and the same 24 V rail is 850 Ω.**
+
+If DYMO specified that grade, then Po ≈ 24² / 850 = **0.68 W/dot**, and
+`HEAD_MAX_DWELL_US` should be 0.177 mJ / 0.68 W ≈ **260 µs**. The firmware's
+337.5 µs at 25 °C would then sit **about 1.3× ABOVE the energy ceiling**, not
+17 % under it.
+
+Every previous entry on this subject has been able to say the conservative
+choice was comfortable. This one cannot. D30 closes with "we are 17 % cold, not
+3× cold"; that sentence is true *if* the head is a 1250 Ω grade and false if it
+is the 850 Ω one, and **nothing public distinguishes them**. A tempting rule
+that would have closed it — resistance tracks rated speed — is false on ROHM's
+own numbers: GM50A is 250 mm/s at 1250 Ω.
+
+This is a bounded, named residual risk. It is not a reason to lower the dwell on
+a guess, because that is equally unmeasured and costs print quality; it is a
+reason the bench measurement matters more than this project has been saying.
+
+### What it does to FIELDWORK measurement 8
+
+It raises its value sharply, and the corrected method already discriminates the
+two grades outright. A dot at 24 V draws 19.2 mA through 1250 Ω and 28.2 mA
+through 850 Ω — a 47 % difference, trivially separated by the shunt-and-scope
+reading measurement 8 now asks for. **One reading settles Po and the grade at the
+same time.**
+
+### Why the lead itself is closed
+
+* **No non-DYMO product uses this head.** Every listing found, without
+  exception, is a DYMO LabelWriter — so "other printers with the same head"
+  means other DYMO LabelWriters, and the best of those (the 450) is already
+  mined in D29/D30.
+* **No open code references it.** GitHub code search returns zero hits for
+  `KF3002-GK11C`, `3C56-9638` and `ROHM thermal printhead KF`.
+* **ROHM's own CDN says the variant is unpublished** — `kf3002-gk11c-e.pdf` and
+  `kd3002-gk11c-e.pdf` both 404 while sibling parts on the same path return 200.
+  That is stronger than a datasheet aggregator's "No Data".
+* **Structurally, firmware cannot contain Po.** Po is a head *datasheet*
+  parameter; firmware contains *dwell*, and the 450's dwell is already recovered
+  (D30). No same-hardware firmware, however complete, can move
+  `HEAD_MAX_DWELL_US` — that needs an energy rating divided by Po.
+
+The Seiko SLP, the strongest non-DYMO sibling candidate, is also out: its head is
+576 dots, not 672, and its command language is single-byte opcodes unrelated to
+DYMO's ESC dialect.

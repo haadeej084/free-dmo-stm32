@@ -817,6 +817,15 @@ So measure the current instead, with a known number of dots energised:
 Then `I_dot = I_measured / dots_energised`, `Po = V_loaded × I_dot`, and
 `HEAD_MAX_DWELL_US = 0.177 mJ / Po`.
 
+> **This reading now settles two things at once.** D35 found that ROHM's newest
+> head of identical geometry and the same 24 V rail is **850 Ω**, against 1250 Ω
+> on the four others — and nothing public says which grade DYMO specified. A dot
+> draws **19.2 mA through 1250 Ω** and **28.2 mA through 850 Ω**, a 47 %
+> difference this measurement separates easily. If it comes back near 28 mA, the
+> firmware's present dwell is **above** the head's energy ceiling rather than
+> comfortably under it, and `HEAD_MAX_DWELL_US` has to come down to about
+> 260 µs. That is the single most consequential outcome of the whole bench visit.
+
 **Without a scope** there is still a usable approximation: print continuously at
 a known coverage, measure the *average* VH current with a DMM, and divide by the
 duty cycle (strobe time ÷ line period, both of which `GS D 0x04` and the line

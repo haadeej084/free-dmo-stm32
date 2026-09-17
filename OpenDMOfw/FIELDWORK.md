@@ -10,6 +10,21 @@ own published manuals, the head datasheet or a board photo could answer has been
 read and folded into the firmware already (DECISIONS D21) — thermal limits, the
 VH rail voltage, the version-reply format, what the paper sensor actually senses,
 the per-line time budget. Section 4 lists what is settled so you do not measure
+> **What belongs on this list.** Only what genuinely has to be measured on an
+> opened board with instruments. Two things that used to sit here do not:
+>
+> * **Anything a genuine printer can answer over a USB cable** — the IEEE-1284
+>   device ID, the `ESC V` reply, the 32-byte status struct in its various
+>   states, the roll record, the real die-cut gap, the density ladder. Those
+>   moved to [`LIVETEST.md`](LIVETEST.md): a printer, a cable and a capture tool,
+>   no screwdriver. One of them (the four optional 1284 keys) was *proved* in
+>   cycle 5 to be obtainable from nothing else.
+> * **Anything the firmware can compute from a reading it already takes** — the
+>   thermistor divider is now solved by `tools/calib_thermistor.py` from raw ADC
+>   codes and a thermometer, with no meter on the board.
+>
+> What is left below is the bench visit, and nothing more.
+
 it again. What is left is **nine measurements** — seven, plus the strobe
 polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
 datasheet reading. Plus a five-minute contribution

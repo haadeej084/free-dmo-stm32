@@ -107,7 +107,10 @@ void thermal_init(void)
     static int s_inited;
 
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
-    gpio_mode(((pin_t){GPIOA, 1}), GPIO_ANALOG);   /* PA1 = ADC_IN1 */
+    /* ADC_INn is PAn for n <= 7 (RM0091 13.3.4), so the channel number in
+     * pins.h is also the pad - one constant, not two that can drift apart. */
+    _Static_assert(ADC_HEAD_TEMP_CH <= 7, "ADC_INn == PAn only holds for n <= 7");
+    gpio_mode(((pin_t){GPIOA, ADC_HEAD_TEMP_CH}), GPIO_ANALOG);
 
     if (!s_inited) {
         /* F0 ADC: calibrate while ADEN=0, then enable (RM0091). Every wait is

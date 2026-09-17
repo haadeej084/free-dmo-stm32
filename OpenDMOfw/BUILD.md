@@ -173,14 +173,15 @@ make test
   **not** execute the C; keep it in sync when `protocol.c` changes.
 - `test/test_thermal.c` — `thermal.c` + `head.c`: the NTC curve, the dwell law
   and the energy ceiling, built twice (the second build arms `HEAD_SAG_FULL_US`;
-  39 and 41 checks per model).
+  44 and 46 checks per model).
 - `test/test_motor.c` — `motor.c`: phase ORDER, break-before-make, exactly one
   step per line, idle release (12 checks per model).
 - `test/test_system.c` — the real `sys_pin_toggle()` and its hot-pin guard
   (18 checks per model).
 - `test/test_store.c` — `store.c` against a register-level I2C EEPROM model
   (`test/i2c_eeprom_model.h`): ACK/NAK per byte, the stale-NACKF case, bus
-  recovery, and the checksummed record (27 scenarios per model).
+  recovery, the checksummed record and the I2C1 AF number (28 scenarios per
+  model).
 
 Two further checks, both also run in CI:
 

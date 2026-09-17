@@ -43,15 +43,16 @@ tag / DRM / authentication.
   `DYMO` manufacturer + per-model product strings.
 - Flash ~11.7 KB of the 64 KB the linker allows (fits the F072C8 and CB), RAM ~35 % of 16 KB.
 - Parser test: 179 checks pass for both models; sender byte-matched to the decompiled driver.
-- Thermal/energy test: 39 checks per model, built TWICE — the second build arms
-  `HEAD_SAG_FULL_US` (41 checks) so the energy ceiling is exercised rather than
+- Thermal/energy test: 44 checks per model, built TWICE — the second build arms
+  `HEAD_SAG_FULL_US` (46 checks) so the energy ceiling is exercised rather than
   asserted against zero.
 - Motor test: 12 checks per model. It asserts the ORDER of the phase writes, not
   the final pin state, because a coil shorted only between two writes is exactly
   what a final-state test cannot see.
 - System test: 18 checks per model on the real `sys_pin_toggle()` hot-pin guard.
-- Config store: 27 scenarios per model against a register-level I2C EEPROM model
-  (`test/i2c_eeprom_model.h`), including the last-byte NAK and the checksum.
+- Config store: 28 scenarios per model against a register-level I2C EEPROM model
+  (`test/i2c_eeprom_model.h`), including the last-byte NAK, the checksum and
+  the I2C1 alternate-function number (AF1 on the F072, D38).
 - PC-side patcher: 27 offline checks on a synthetic assembly (no vendor DLL needed).
 
 ## Docs
@@ -82,6 +83,7 @@ acceptance (7) and Po at the head (8) — ten, matching the count above.
 GPIO pin routing (including VH enable), LATCH/STROBE polarity/timing, heat-segment
 count, dwell/density calibration, motor steps/line, I2C TIMINGR + EEPROM WP,
 thermistor direction/curve, and USB PMA/EP verification on silicon — per point in
-`PINMAP.md` / `DECISIONS.md`. Stock F072 parts are RDP2 and cannot be flashed over
-SWD until RDP is lowered. The `GS D` diagnostic backdoor reports the raw values to
+`PINMAP.md` / `DECISIONS.md`. The image goes onto a blank F072CB fitted in place
+of the stock part: the stock MCU is RDP2, which is permanent, so the genuine
+boards serve as probes only. The `GS D` diagnostic backdoor reports the raw values to
 tune against on the board. See `FIELDWORK.md` for exactly what to measure.

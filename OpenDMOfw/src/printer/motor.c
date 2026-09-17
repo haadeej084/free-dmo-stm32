@@ -14,12 +14,17 @@
  * is implausible. 1 is therefore the best estimate, not a measurement
  * (DECISIONS D24).
  *
- * Two wiring variants (select MOTOR_DRIVE):
- *   MOTOR_DRIVE_4PHASE  : direct 4-phase drive (A1/A2/B1/B2) — the EXPECTED
- *                         mode: a 24 V-capable driver (MP6500-class chopper) or
- *                         discrete H-bridge on 24 V drives IN1-IN4 directly, no
- *                         separate STEP/DIR chip.
- *   MOTOR_DRIVE_STEPDIR : STEP/DIR/ENABLE to an external driver IC (fallback).
+ * Two wiring variants (MOTOR_DRIVE, selected in pins.h):
+ *   MOTOR_DRIVE_4PHASE  : direct 4-phase drive (A1/A2/B1/B2) into a dual
+ *                         H-bridge - the DEFAULT, not because it is the more
+ *                         likely wiring (the vendor's 450 board is STEP/DIR,
+ *                         D37) but because it is the harmless wrong guess:
+ *                         see the note at MOTOR_DRIVE in pins.h and D40.
+ *   MOTOR_DRIVE_STEPDIR : STEP/DIR/ENABLE to a driver IC - what U2 on the 550
+ *                         board most likely is; switch once its marking is
+ *                         read (FIELDWORK measurement 2), and set
+ *                         MOTOR_STEPS_PER_LINE to the driver's microsteps per
+ *                         full step (the 450 issues 12 pulses per line).
  *
  * TIME BUDGET (sourced). DYMO rates the 550 at 62 labels/min and the 5XL at 53,
  * on a 4-line address label = 89 mm = 1050 dot lines. That is 0.92 ms and
@@ -36,10 +41,6 @@
 #include "../mcu.h"
 #include "../system.h"
 #include "../pins.h"
-
-#define MOTOR_DRIVE_STEPDIR 0
-#define MOTOR_DRIVE_4PHASE  1
-#define MOTOR_DRIVE         MOTOR_DRIVE_4PHASE   /* expected: IN1-IN4 dual H-bridge */
 
 #define MOTOR_STEPS_PER_LINE 1
 /* Derived, not chosen: the line period is a model constant (model.h) because

@@ -291,8 +291,8 @@ Table 13** ("STM32F072xx pin definitions"):
 | 42  | PB6            | **motor B1** (alt: I2C1_SCL pair)            |
 | 43  | PB7            | **motor B2** (alt: I2C1_SDA pair)            |
 | 44  | BOOT0          | boot config (Low = flash)                    |
-| 45  | PB8            | **I2C1 SCL** (AF2)                           |
-| 46  | PB9            | **I2C1 SDA** (AF2)                           |
+| 45  | PB8            | **I2C1 SCL** (AF1)                           |
+| 46  | PB9            | **I2C1 SDA** (AF1)                           |
 | 47  | VSS            | GND                                          |
 | 48  | VDD            | power                                        |
 
@@ -302,9 +302,11 @@ are edge pads, not leads — find a via or a test point on each net rather than
 clipping to the package. The chip boots
 from flash by default (BOOT0 = pad 44 held Low), so no boot jumper is needed.
 
-**I2C note:** on the STM32F0 line I2C is **AF2**, and I2C1 exists *only* on
-PB6/PB7 or PB8/PB9 (Table 14). The board's EEPROM SCL/SDA must be traced to one
-of those two pairs; `pins.h` currently assumes PB8/PB9.
+**I2C note:** on the F072, I2C1 is **AF1** on PB6/PB7 and PB8/PB9 (ST's
+`stm32f0xx_hal_gpio_ex.h`, STM32F072xB block: `GPIO_AF1_I2C1`; AF2 is USB and
+TIM16/TIM17). This document and `store.c` said AF2 until DECISIONS D38 - on
+silicon that would have left the EEPROM unreachable. The board's EEPROM SCL/SDA
+must still be traced to one of the two pairs; `pins.h` assumes PB8/PB9.
 
 > ⚠ **If the EEPROM turns out to be on PB6/PB7, there is a pin conflict.** The
 > default motor mode (`MOTOR_DRIVE_4PHASE`) uses PB4/PB5/**PB6/PB7** as A1/A2/
@@ -321,7 +323,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 |--------------------|---------------|-------------------------|------------|----------------|
 | Head CLK           | PA5           | GPIO out (shift clock)  | medium     | Signal set sourced (KF3002 datasheet); routing assumed — follow the head-connector CLK trace |
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
-| Head DI2           | PA7           | GPIO out, idle low (only driven with `MODEL_HEAD_SHIFT_LINES 2`, D36) | low | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
+| Head DI2           | PA7           | INPUT, weak pull-down on the one-line build (D36/D39): the pad may be the head's own DO1 output, so it is never driven; GPIO out only with `MODEL_HEAD_SHIFT_LINES 2` | low | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
 | Head STROBE 1      | PB0           | GPIO out (STB1, half 1; polarity ASSUMED active-low, FIELDWORK 6b) | medium | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
@@ -332,8 +334,8 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Motor DIR          | PB5           | GPIO                    | low        | same |
 | Motor ENABLE       | PB10          | GPIO, active-low        | low        | STEPDIR mode only (PB8 is I2C SCL) |
 | Motor 4-phase A1..B2 | PB4/5/6/7   | GPIO                    | low        | Only for direct phase drive (`MOTOR_DRIVE_4PHASE`) |
-| I2C SCL            | PB8           | I2C1_SCL (AF2)          | medium     | I2C1 is AF2 and exists only on PB6 or PB8 (datasheet Table 14). Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
-| I2C SDA            | PB9           | I2C1_SDA (AF2)          | medium     | valid only on PB7 or PB9 (Table 14); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |
+| I2C SCL            | PB8           | I2C1_SCL (AF1)          | medium     | I2C1 is AF1 (ST hal_gpio_ex.h, D38) and exists only on PB6 or PB8. Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
+| I2C SDA            | PB9           | I2C1_SDA (AF1)          | medium     | valid only on PB7 or PB9 (AF1, D38); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |
 | Head VH enable     | PA8           | GPIO, assumed active-low P-MOS | low | Trace the 24 V load-switch gate |
 | Status LED         | PA2           | GPIO                    | low        | Follow the LED (not PC6 — unbonded on LQFP48) |
 | Button (feed/power)| PA3           | GPIO in, pull-up        | low        | Follow the button (not PC7 — unbonded on LQFP48) |

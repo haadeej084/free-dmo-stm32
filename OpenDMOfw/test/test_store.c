@@ -36,7 +36,8 @@ static ee_part_t part;
 /* ---- the boundary, stubbed; store.c itself is the code under test -------- */
 void gpio_od(pin_t p, int open_drain) { (void)p; (void)open_drain; }
 void gpio_pull(pin_t p, int pull)     { (void)p; (void)pull; }
-void gpio_af(pin_t p, uint8_t af)     { (void)p; (void)af; }
+static int g_af_b[16];                 /* AF selected per port-B pin, -1 = never */
+void gpio_af(pin_t p, uint8_t af)     { if (p.port == GPIOB && p.pin < 16) g_af_b[p.pin] = af; }
 void gpio_mode(pin_t p, gpio_mode_t m){ (void)p; (void)m; }
 void gpio_set(pin_t p, int high)      { (void)p; (void)high; }
 int  gpio_get(pin_t p)                { (void)p; return 0; }
@@ -556,6 +557,21 @@ static void s27_selftest_one_bad_cell(void)
     }
 }
 
+static void s28_i2c_alternate_function(void)
+{
+    puts("S28 I2C1 on PB8/PB9 is ALTERNATE FUNCTION 1 on the F072: ST's own");
+    puts("    stm32f0xx_hal_gpio_ex.h, STM32F072xB block, defines GPIO_AF1_I2C1");
+    puts("    (and GPIO_AF3_I2C1); its AF2 is GPIO_AF2_USB and TIM16/TIM17. The");
+    puts("    driver selected AF2, which muxes the pins to TIM16_CH1/TIM17_CH1 on");
+    puts("    silicon: no EEPROM, ever, and Renode's GPIO model does not enforce");
+    puts("    the mux so no emulator test could see it (D38). The literal 1 is");
+    puts("    deliberate (D34): reading PIN_I2C_AF back would agree with anything.");
+    big();
+    store_init();
+    CHECK(g_af_b[PIN_I2C_SCL.pin] == 1);
+    CHECK(g_af_b[PIN_I2C_SDA.pin] == 1);
+}
+
 typedef void (*scen_fn)(void);
 static const struct { const char *name; scen_fn fn; } SCEN[] = {
     {"s01", s01_big_blank},        {"s02", s02_big_stored},
@@ -575,12 +591,14 @@ static const struct { const char *name; scen_fn fn; } SCEN[] = {
     {"s25", s25_persist_verify_torn_first_page},
     {"s26", s26_sanitise_boundaries},
     {"s27", s27_selftest_one_bad_cell},
+    {"s28", s28_i2c_alternate_function},
 };
 #define NSCEN ((int)(sizeof(SCEN)/sizeof(SCEN[0])))
 
 int main(int argc, char **argv)
 {
     host_rcc.AHBENR = 0xFFFFFFFFu;
+    for (int i = 0; i < 16; i++) g_af_b[i] = -1;
 
     if (argc > 1) {                       /* child: run one scenario */
         int i = atoi(argv[1]);

@@ -38,9 +38,14 @@ responds, with the 24 V heat rail locked out in firmware while you do it. They
 end in the same place. Read **section 7c (risk factors)** either way — it is
 short, and it is the part that names what cannot be undone.
 
-**Flashing a factory board:** the stock F072 is reported to be at **RDP Level 2**
-(DECISIONS D13). SWD is then off until RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
-printer. The default `make` is the 550 build (PID `0x0028`).
+**Which chip gets flashed:** a **blank STM32F072CB** (RDP Level 0, SWD open) fitted
+in place of the stock part, or a bare dev board - never the printer's own MCU. The
+stock F072 on a genuine board is reported at **RDP Level 2** (DECISIONS D13), and
+Level 2 is permanent: it cannot be lowered, its flash cannot be read, SWD is
+dead. Those genuine boards are the *probes* in this document - the 450 board for
+the head capture (section 8, item 0), the 550 board for continuity - and they
+stay as they are. Do not expect `make flash` to do anything on one. The default
+`make` is the 550 build (PID `0x0028`).
 
 ---
 
@@ -227,10 +232,18 @@ matching the 2-phase bipolar LEILI 35BY412-339 already on record — it sits nex
 is a current-regulated bipolar driver, which is exactly the architecture the 450 firmware
 implies.
 
-**Consequence for `src/pins.h`:** `MOTOR_DRIVE` should be the STEP/DIR variant, not the 4-phase
-fallback, and the map is short of a **/RESET** line and the **mode straps**. Trace only STEP,
-DIR and ENABLE and the driver may sit in reset with the wrong microstep setting, and the motor
-will not turn at all.
+**Consequence for `src/pins.h`:** once U2 is identified, `MOTOR_DRIVE` becomes the STEP/DIR
+variant and `MOTOR_STEPS_PER_LINE` the driver's microsteps per full step (the 450 issues 12
+pulses per line). The map is then short of a **/RESET** line and the **mode straps**: trace only
+STEP, DIR and ENABLE and the driver may sit in reset with the wrong microstep setting, and the
+motor will not turn at all.
+
+**Why the firmware still ships 4-phase (DECISIONS D40).** The 550 board's U2 is not the 450's
+driver and its marking is unread, and the two wrong guesses are not equal. Four phase lines into
+a STEP/DIR driver toggle STEP and DIR - a shuddering motor, no damage. STEP/DIR into an
+IN1-IN4 bridge holds DIR high permanently: one 6.5 ohm winding across 24 V DC, which cooks the
+motor or the driver in seconds. So the default is the harmless mistake until measurement 2 has
+read U2. Do not switch it on the strength of this section alone.
 
 ### 3.3 What to look for, per connector
 
@@ -874,7 +887,9 @@ print at all.*
 clocks on ONE data line**, and its image contains no second head data pin. The
 firmware now defaults to that (`MODEL_HEAD_SHIFT_LINES 1`). Confirm it: does the
 flex bring out one data pin or two?
-* **One** → leave the default; `HEAD_DI2_DOTS` is meaningless.
+* **One** → leave the default; `HEAD_DI2_DOTS` is meaningless. On this build PA7
+  is an **input** with a weak pull-down, never driven - so if that pad turns out
+  to be the head's DO1 output there is no bus conflict (D39).
 * **Two** → set `MODEL_HEAD_SHIFT_LINES 2`, and measurement 6 (which half enters
   first) becomes live. Be careful here: if the two are a daisy chain (DO1 → DI2)
   rather than two independent inputs, driving DI2 from the MCU is a bus conflict
@@ -883,11 +898,15 @@ flex bring out one data pin or two?
 **Strobe pins.** `MODEL_STROBE_SEGMENTS` is 2, and the genuine firmware fires
 **one strobe for all 672 dots** — it never drives a second. D30 keeps the split
 for a supply reason that still stands (the 550 ships a 42 W brick against the
-450's 60 W, and we have a load switch the 450 does not), but the split depends
-on a second strobe net **existing on the flex**. If there is only one:
-`HEAD_STROBE_SEGMENTS` must become 1 **and the energy ceiling has to be
-re-derived for a whole-line strobe**. Finding that out after flashing rather than
-before is the difference between a printer that works and one that does not.
+450's 60 W, and we have a load switch the 450 does not). Since D39 the firmware
+no longer *depends* on the answer for correctness: on the one-line build every
+fitted strobe fires for every line that has ink, so a flex with one strobe net,
+or two nets that cover the halves the other way round, still prints every dot.
+What the answer still decides is **time and energy**: with a single net the
+second strobe pulse is wasted budget, so `HEAD_STROBE_SEGMENTS` should become 1
+**and the energy ceiling be re-derived for a whole-line strobe** - or, if the
+450 capture shows one strobe of the width D30 predicts, that is the answer
+already.
 
 ### 6. Half-2 dot order — *only if 5b finds TWO data pins*
 With the default `MODEL_HEAD_SHIFT_LINES 1` (DECISIONS D36) all 672 dots go out

@@ -1726,3 +1726,95 @@ by motor physics and would need 1.5 and 0.75 full steps per line, which no value
 of that constant can express. **What is at risk is the drive mode, not the
 constant** — which is why FIELDWORK measurement 2 now opens by reading the
 marking on U2.
+
+## D38 — I2C1 is alternate function 1 on the F072, not 2
+
+`pins.h` stated "on the STM32F0 line I2C is AF2 (NOT AF1)" and `store.c`
+selected AF2 for PB8/PB9. ST's own `stm32f0xx_hal_gpio_ex.h`, in the
+`STM32F072xB || STM32F078xx` block, defines `GPIO_AF1_I2C1` and `GPIO_AF3_I2C1`
+(the PA9/PA10 pair); its AF2 entries are `GPIO_AF2_USB`, TIM1, TIM2, TIM16 and
+TIM17. There is no `GPIO_AF2_I2C1` for any F0 part. Fetched and read on
+2026-09-17; the file is ST's, not a secondary source.
+
+**What it would have done on silicon:** PB8/PB9 muxed to TIM16_CH1/TIM17_CH1,
+timers never clocked, no SCL ever, every I2C transfer timing out. The store
+would fall back to RAM defaults on every boot after the timeouts, the label
+counter and `OP_FLAG_VH_INHIBIT` would never persist, and `GS D 0x08` would
+report `persisted = 0` forever. No damage, but a printer that forgets
+everything, and the persistence promise on the one interlock protecting the
+head would be void.
+
+**Why 28 Renode and host scenarios did not see it:** Renode's STM32F0 GPIO
+model does not enforce the alternate-function mux - the I2C peripheral model is
+wired to the bus regardless of AFR - and the host store test stubbed `gpio_af`
+away. The stub now records the AF and scenario S28 asserts the literal 1 (D34:
+a test that read `PIN_I2C_AF` back would agree with anything).
+
+The AF now lives in `pins.h` as `PIN_I2C_AF`. The datasheet-table citation in
+the old comment was a misread; the errata sentence next to it (ES0223 2.2.1)
+was not verifiable either and is dropped rather than kept as decoration.
+
+Corollary, same file: `I2C_TIMINGR 0x10420F13` is ST's 100 kHz value for an
+**8 MHz** kernel clock, and that is what I2C1 gets - `RCC_CFGR3.I2C1SW` is 0
+(HSI) and SystemInit() never disables the HSI. The comment said "at PCLK
+48 MHz"; the value was right, the explanation was wrong, and anyone
+"correcting" it for 48 MHz would have made the bus six times too fast.
+
+## D39 — One chain: every fitted strobe fires, and DI2 is an input
+
+D36 moved the shift to one data line and 672 clocks. Two things downstream of
+that were still written for the two-line topology.
+
+**The strobes.** `head_print_line()` split the line into wire bytes 0..41 for
+STB1 and 42..83 for STB2, skipped a half with no ink, and sized the sag term per
+half. On one chain that mapping is unknown, and probably mirrored: in a daisy
+chain (DI1 -> 336 stages -> DO1 -> DI2 -> 336 stages) the first bits clocked in
+travel to the FAR register. And the vendor fires one strobe for the whole line
+(FIELDWORK 5b), so a second strobe net may not exist on the flex at all. Either
+way, a line with ink in one wire half only could fire the wrong - or a
+non-existent - strobe and print that half blank.
+
+Decision: on the one-line build, any ink fires **every** fitted strobe, each
+sized for the whole line's dot count. Cost: one extra dwell on half-empty
+lines; a full line already fired both, so the worst case (2 x 410 us) is
+unchanged and inside the line budget. Correct for either chain direction and
+for one net or two. The two-line path keeps its per-half logic behind
+`MODEL_HEAD_SHIFT_LINES 2`. `test_thermal.c` now prints a line with only the
+first wire dot, then only the last, and requires both strobes each time; both
+checks fail against the previous `head.c`.
+
+**The DI2 pad.** `head_init()` and `Fault_Handler` drove PA7 push-pull low.
+`model.h` itself warns that on the vendor topology that pad may be the head's
+DO1 *output*. Driving a CMOS output low is a bus conflict on the irreplaceable
+part. PA7 is now an input with a weak pull-down on the one-line build (a
+genuine second input then idles at white; an output is unloaded), and the fault
+handler leaves it alone. `head_shift.py`'s "DI2 never moves" still holds.
+
+## D40 — The motor stays 4-phase until U2 is read: the asymmetric wrong guess
+
+FIELDWORK 3.2 concluded from the 450 image that the interface is STEP/DIR to a
+driver IC, and said `MOTOR_DRIVE` "should be" the STEP/DIR variant. `motor.c`
+called 4-phase "the expected mode". Both cannot be right, and the owner's rule
+is to start from the 450.
+
+The 550 board has its own U2 (a Rev K report notes a different part), unread.
+So this is a guess either way, and the two wrong guesses are not equal:
+
+* four phase lines into a STEP/DIR driver toggle its STEP and DIR inputs - a
+  shuddering motor and nothing else;
+* STEP/DIR into an IN1-IN4 bridge holds DIR (one bridge input) high
+  permanently: a 6.5 ohm winding across 24 V DC, ~3.7 A, ~90 W, which cooks
+  the motor or the driver in seconds.
+
+Decision: keep `MOTOR_DRIVE_4PHASE` as the default and make the reason
+explicit where the choice is made. The selector moves from `motor.c` to
+`pins.h`, because the fault handler needs it: in STEP/DIR mode
+`Fault_Handler` now also de-asserts ENABLE, which it did not. The switch to
+STEP/DIR is one line once measurement 2 has read U2's marking, and then
+`MOTOR_STEPS_PER_LINE` becomes the driver's microsteps per full step (the 450
+issues twelve pulses per line, D37).
+
+Noted for after that switch, not before: the 450 spreads its twelve
+microsteps across the line, so the paper is in continuous motion; this
+firmware takes one full step and heats about 260 us later. Whether that
+smears is a print-quality question only paper can answer.

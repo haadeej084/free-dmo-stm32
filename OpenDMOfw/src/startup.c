@@ -106,7 +106,11 @@ void Fault_Handler(void)
     safe_out(PIN_HEAD_LATCH.port, PIN_HEAD_LATCH.pin, 1);
     safe_out(PIN_HEAD_CLK.port,   PIN_HEAD_CLK.pin,   0);
     safe_out(PIN_HEAD_DI1.port,   PIN_HEAD_DI1.pin,   0);
+#if MODEL_HEAD_SHIFT_LINES != 1
+    /* With one data line the DI2 pad may be the head's own DO1 output; it is
+     * an input then (head_init) and must not be driven here either (D39). */
     safe_out(PIN_HEAD_DI2.port,   PIN_HEAD_DI2.pin,   0);
+#endif
 
     /* 3. Only now the 24 V rail. */
     safe_out(PIN_HEAD_VH.port, PIN_HEAD_VH.pin, !HEAD_VH_ON_LEVEL);
@@ -116,6 +120,9 @@ void Fault_Handler(void)
     safe_out(PIN_MOTOR_A2.port, PIN_MOTOR_A2.pin, 0);
     safe_out(PIN_MOTOR_B1.port, PIN_MOTOR_B1.pin, 0);
     safe_out(PIN_MOTOR_B2.port, PIN_MOTOR_B2.pin, 0);
+#if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
+    safe_out(PIN_MOTOR_ENABLE.port, PIN_MOTOR_ENABLE.pin, 1);   /* active-low: driver off */
+#endif
 
     /* 5. Guarantee the reboot even if the fault predates wdt_init(). */
     IWDG->KR  = 0x5555;

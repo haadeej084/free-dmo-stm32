@@ -312,6 +312,33 @@ int main(void)
         CHECK(g_level[1][0] == 0x55 && g_level[1][1] == 0x55);
     }
 
+#if MODEL_HEAD_SHIFT_LINES == 1 && HEAD_STROBE_SEGMENTS == 2
+    /* ONE data line is one 672-stage chain, and which end of it a strobe
+     * covers is not known - nor whether the flex carries a second strobe net
+     * at all (the vendor fires one strobe for the whole line: D36, FIELDWORK
+     * 5b). So a line with ink in ONE wire half must fire EVERY fitted strobe.
+     * The two-line path's per-half skip would, on a mirrored or a
+     * single-strobe head, leave exactly that half blank (D39). */
+    {
+        static uint8_t line[HEAD_BYTES];
+        for (unsigned i = 0; i < HEAD_BYTES; i++) line[i] = 0;
+        line[0] = 0x80;                                     /* first wire dot only */
+        g_level[1][0] = g_level[1][1] = 0x55;
+        head_set_density(8);
+        head_print_line(line, HEAD_BYTES);
+        CHECK(g_level[1][0] == !MODEL_STB_ACTIVE_LEVEL);    /* STB1 fired ...    */
+        CHECK(g_level[1][1] == !MODEL_STB_ACTIVE_LEVEL);    /* ... and so did STB2 */
+        line[0] = 0; line[HEAD_BYTES - 1] = 0x01;           /* last wire dot only */
+        g_level[1][0] = g_level[1][1] = 0x55;
+        head_print_line(line, HEAD_BYTES);
+        CHECK(g_level[1][0] == !MODEL_STB_ACTIVE_LEVEL);
+        CHECK(g_level[1][1] == !MODEL_STB_ACTIVE_LEVEL);
+        /* and both are charged to the feed overlap, sized for the whole line */
+        CHECK(head_last_strobe_us() ==
+              2u * head_dwell_sag_us(8, thermal_dwell_scale(), 1, HEAD_DOTS));
+    }
+#endif
+
     /* An unbelievable reading is a THIRD state, not a cold head.
      *
      * With the NTC to VDD and R_p to GND, an open circuit - a disconnected head

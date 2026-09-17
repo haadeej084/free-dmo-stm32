@@ -66,8 +66,21 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * OP57 (-DMODEL_OP57): 672 dots = two 336-dot halves -> STB1+STB2. */
 
 /* ---- Feed stepper -------------------------------------------------------- *
- * Two wiring variants are supported (choose via MOTOR_DRIVE in
- * motor.c): STEP/DIR to a driver IC, or direct 4-phase drive. */
+ * Two wiring variants are supported: STEP/DIR to a driver IC, or direct
+ * 4-phase drive of a dual H-bridge. Selected HERE, not in motor.c, because the
+ * fault handler in startup.c has to know which pins to make safe.
+ *
+ * WHY 4-PHASE STAYS THE DEFAULT although the vendor's 450 board is STEP/DIR
+ * (DECISIONS D37, FIELDWORK 3.2): the 550 board has its own driver at U2 whose
+ * marking is not yet read, and the two wrong guesses are not symmetric. Four
+ * phase lines into a STEP/DIR driver toggle its STEP and DIR inputs - a
+ * shuddering motor and nothing else. STEP/DIR into an IN1-IN4 bridge holds
+ * DIR high permanently, i.e. one 6.5-ohm winding across 24 V DC, which cooks
+ * the motor or the driver in seconds. So until U2 is identified the firmware
+ * makes the harmless mistake, not the destructive one (DECISIONS D40). */
+#define MOTOR_DRIVE_STEPDIR 0
+#define MOTOR_DRIVE_4PHASE  1
+#define MOTOR_DRIVE         MOTOR_DRIVE_4PHASE
 #define PIN_MOTOR_STEP      ((pin_t){GPIOB, 4})
 #define PIN_MOTOR_DIR       ((pin_t){GPIOB, 5})
 #define PIN_MOTOR_ENABLE    ((pin_t){GPIOB, 10})  /* active-low enable (STEPDIR mode only; PB8 is I2C SCL) */
@@ -97,18 +110,20 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 #define BUTTON_PRESSED_LEVEL 0
 
 /* ---- I2C config-EEPROM (24Cxx) ------------------------------------------ *
- * On the STM32F0 line I2C is AF2 (NOT AF1), and I2C1 exists ONLY on:
- *   SCL = PB6 or PB8,  SDA = PB7 or PB9
- * (datasheet DocID025004 Rev 2, Table 14 "STM32F072xx alternate function pin
- * description", Port B, AF2 row). Note PB12/PB14 are EVENTOUT and TIM15_CH1 at
- * AF1 (TIM1_BKIN / TIM1_CH2N at AF2, SPI2 at AF0) -- none of them is I2C.
- * Errata ES0223 2.2.1 (I2C analog filter): AF5 on PB9/PB10 and AF1 on PB14
- * misbehave while the I2C analog filter is enabled; nothing here uses those,
- * but check before remapping. We use the PB8/PB9 pair so it sits cleanly next to the
- * head-strobe (PB0-3) and motor (PB4-7) blocks with no pin conflict; PB6/PB7 is
- * the other valid pair.
- * CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to whichever
- * pair D.mo used, then set these two macros + AF2 in store.c. */
+ * I2C1 on the F072 lives on PB6/PB7 or PB8/PB9 at ALTERNATE FUNCTION 1.
+ * Source: ST's own stm32f0xx_hal_gpio_ex.h, STM32F072xB block - GPIO_AF1_I2C1
+ * (and GPIO_AF3_I2C1 for the PA9/PA10 pair); AF2 there is GPIO_AF2_USB and the
+ * TIM16/TIM17 channels. This header used to say "AF2, NOT AF1", from a
+ * misread of the datasheet table, and store.c selected AF2 accordingly: on
+ * real silicon that muxes PB8/PB9 to TIM16_CH1/TIM17_CH1, the EEPROM never sees
+ * a clock, and every boot falls back to RAM defaults after the I2C timeouts.
+ * Renode's GPIO model does not enforce the mux, which is why the emulator
+ * tests were green. test_store.c now pins the literal 1 (DECISIONS D38).
+ * We use the PB8/PB9 pair so it sits cleanly next to the head-strobe (PB0-3)
+ * and motor (PB4-7) blocks with no pin conflict; PB6/PB7 is the other valid
+ * pair. CONFIRM by continuity on the board: trace the EEPROM SCL/SDA to
+ * whichever pair D.mo used, then set the two pin macros; the AF stays 1. */
+#define PIN_I2C_AF          1                       /* I2C1 = AF1 on the F072 */
 /* The pins that can put heat into the head: the 24 V rail gate and the heat
  * strobes actually fitted on this model. The diagnostic pin-toggle (GS D 0x07)
  * refuses them - it drives a pin low for a millisecond at a time and cannot
@@ -136,8 +151,8 @@ static inline int pin_is_head_hot(GPIO_Type *port, uint8_t pin)
     return 0;
 }
 
-#define PIN_I2C_SCL         ((pin_t){GPIOB, 8})   /* I2C1_SCL AF2            */
-#define PIN_I2C_SDA         ((pin_t){GPIOB, 9})   /* I2C1_SDA AF2            */
+#define PIN_I2C_SCL         ((pin_t){GPIOB, 8})   /* I2C1_SCL, PIN_I2C_AF    */
+#define PIN_I2C_SDA         ((pin_t){GPIOB, 9})   /* I2C1_SDA, PIN_I2C_AF    */
 #define EEPROM_I2C_ADDR     0x50                    /* 7-bit                  */
 
 #endif /* OP57_PINS_H */

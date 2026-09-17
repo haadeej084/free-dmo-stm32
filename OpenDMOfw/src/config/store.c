@@ -15,9 +15,16 @@
  * The I2C bus also carries the NFC front-end (SLRC610 @ 0x28); it is a
  * different device address and is simply ignored by this driver.
  *
- * ASSUMPTION (PINMAP.md): I2C1 on PB8/PB9 at AF2 (the F072's I2C1 pins are
- * only PB6/PB7 or PB8/PB9 — datasheet Table 14). TIMINGR is a starting value
- * for ~100 kHz @48 MHz; verify with the scope.
+ * ASSUMPTION (PINMAP.md): I2C1 on PB8/PB9 (the F072's I2C1 pins are only
+ * PB6/PB7 or PB8/PB9). The alternate function is AF1 - see pins.h, this was
+ * wrong once (DECISIONS D38).
+ *
+ * CLOCK: I2C1 is fed from the 8 MHz HSI, not from PCLK. RCC_CFGR3.I2C1SW is
+ * left at its reset value 0 (= HSI), and SystemInit() never switches the HSI
+ * off - it only moves SYSCLK to HSI48 (or the PLL). So TIMINGR below is ST's
+ * 100 kHz standard-mode value for an 8 MHz kernel clock (PRESC 1, SCLL 0x13,
+ * SCLH 0xF, analog filter on), and it is exact. Do NOT "correct" it for 48 MHz:
+ * that would make the bus six times too fast.
  */
 #include "store.h"
 #include "../mcu.h"
@@ -31,7 +38,7 @@
  * on; the alternative, silently accepting the old layout, is how a "corrupt"
  * record gets accepted for the second time. */
 #define CFG_MAGIC   0x4F444D32u      /* "ODM2" — shared by OP57 and OP104 */
-#define I2C_TIMINGR 0x10420F13u      /* ~100 kHz at PCLK 48 MHz (calibrate) */
+#define I2C_TIMINGR 0x10420F13u      /* 100 kHz with I2C1 on the 8 MHz HSI (I2C1SW = 0) */
 /* 2-byte (16 KB) config sits past the first 256 B so a stock image's low
  * EEPROM is left alone; 1-byte parts only have 256 B so they use offset 0. */
 #define EEPROM_OFF_2B  0x0100
@@ -115,9 +122,9 @@ static void defaults(void)
 static void i2c_init(void)
 {
     RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
-    /* I2C on the STM32F0 is AF2 (not AF1) — see pins.h for the pin/AF source. */
-    gpio_od(PIN_I2C_SCL, 1); gpio_pull(PIN_I2C_SCL, 1); gpio_af(PIN_I2C_SCL, 2);
-    gpio_od(PIN_I2C_SDA, 1); gpio_pull(PIN_I2C_SDA, 1); gpio_af(PIN_I2C_SDA, 2);
+    /* I2C1 is AF1 on the F072 (PIN_I2C_AF, pins.h; ST's hal_gpio_ex.h). */
+    gpio_od(PIN_I2C_SCL, 1); gpio_pull(PIN_I2C_SCL, 1); gpio_af(PIN_I2C_SCL, PIN_I2C_AF);
+    gpio_od(PIN_I2C_SDA, 1); gpio_pull(PIN_I2C_SDA, 1); gpio_af(PIN_I2C_SDA, PIN_I2C_AF);
     I2C1->CR1 = 0;
     I2C1->TIMINGR = I2C_TIMINGR;
     I2C1->CR1 = I2C_CR1_PE;

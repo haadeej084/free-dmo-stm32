@@ -3,12 +3,15 @@
  * The head module contains its own shift registers, latch and heat drivers
  * (ROHM KF3002-GL50A datasheet, equivalent circuit + timing chart). Per dot
  * line the host:
- *   1) shifts HEAD_DOTS bits in on CLK, one bit per half on DI1/DI2 in
- *      parallel (dot i of half 1 and dot i of half 2 share one clock);
+ *   1) shifts HEAD_DOTS bits in on CLK. With MODEL_HEAD_SHIFT_LINES 1 (the
+ *      default, what the vendor does - D36) all of them go out on DI1 as one
+ *      chain; the two-line alternative feeds DI1 and DI2 in parallel;
  *   2) pulses LAT low (Low = THROUGH) to load the registers into the drivers;
- *   3) fires STB1 then STB2, each for a dwell that scales with density and
- *      head temperature. Firing the two halves sequentially splits the peak
- *      current in half (required for the wide 1248-dot head).
+ *   3) fires every fitted strobe, each for a dwell that scales with density
+ *      and head temperature. Firing them sequentially splits the peak current
+ *      (required for the wide 1248-dot head). On the one-chain topology which
+ *      end of the chain a strobe covers is unknown, so a line with any ink
+ *      fires ALL strobes (D39).
  *
  * The mechanism is described in DYMO's own LabelWriter 450 Series Technical
  * Reference (p.7): "To print a line, the control electronics load the desired
@@ -155,7 +158,17 @@ void head_init(void)
 #endif
     gpio_mode(PIN_HEAD_CLK,   GPIO_OUT);  gpio_set(PIN_HEAD_CLK, 0);
     gpio_mode(PIN_HEAD_DI1,   GPIO_OUT);  gpio_set(PIN_HEAD_DI1, 0);
+#if MODEL_HEAD_SHIFT_LINES == 1
+    /* One data line: the pad mapped as DI2 is NOT ours to drive. On the
+     * vendor topology the head's second data pin, if the flex brings it out at
+     * all, may be its own DO1 shift-register OUTPUT (model.h, D36) - and a
+     * push-pull low against a CMOS output is a bus conflict on the one part of
+     * this printer that cannot be replaced. Input with a weak pull-down: a
+     * genuine second INPUT then idles at 0 (white), an output is unloaded. */
+    gpio_mode(PIN_HEAD_DI2,   GPIO_IN);   gpio_pull(PIN_HEAD_DI2, 2);
+#else
     gpio_mode(PIN_HEAD_DI2,   GPIO_OUT);  gpio_set(PIN_HEAD_DI2, 0);
+#endif
     gpio_mode(PIN_HEAD_LATCH, GPIO_OUT);  gpio_set(PIN_HEAD_LATCH, 1);
     for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
         gpio_set(k_strobe[s], !MODEL_STB_ACTIVE_LEVEL);  /* idle = not firing */
@@ -215,7 +228,9 @@ void head_reset(void)
     gpio_set(PIN_HEAD_LATCH, 1);   /* HOLD */
     gpio_set(PIN_HEAD_CLK, 0);
     gpio_set(PIN_HEAD_DI1, 0);
-    gpio_set(PIN_HEAD_DI2, 0);
+#if MODEL_HEAD_SHIFT_LINES != 1
+    gpio_set(PIN_HEAD_DI2, 0);              /* an input on the one-line build */
+#endif
     gpio_set(PIN_HEAD_VH, !HEAD_VH_ON_LEVEL);
     s_vh_on = 0;
 }
@@ -452,8 +467,32 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
      *    line of KF3002-class dots would draw hundreds of watts from the bulk
      *    capacitor. A half with no dots in it is skipped entirely. */
     uint32_t fired = 0;
-    const uint16_t half = (uint16_t)((HEAD_DI1_DOTS + 7) / 8);
     vh_enable();
+#if MODEL_HEAD_SHIFT_LINES == 1
+    /* ONE CHAIN, so the wire order says nothing about which strobe covers
+     * which dots. In a daisy chain (DI1 -> 336 stages -> DO1 -> DI2 -> 336)
+     * the FIRST bits clocked in end up in the FAR register, i.e. the mapping
+     * the two-line path assumes (wire half 0 = STB1) is mirrored - and the
+     * vendor fires ONE strobe for all 672 dots (D36, FIELDWORK 5b), so a
+     * second strobe net may not exist on the flex at all. Keying a per-half
+     * skip to the wire halves would then print a blank half on every line
+     * whose ink sits in one half only. So: any ink -> every fitted strobe,
+     * each sized for the whole line's coverage. It costs one extra dwell on
+     * half-empty lines and stays inside the line budget (2 x 410 us max, the
+     * same as a full line today); it is correct for either chain direction
+     * and for a flex with one strobe net or two (D39). */
+    {
+        uint16_t n = dots_in(bits, 0, (uint16_t)HEAD_BYTES, nbytes);
+        if (n) {
+            uint32_t us = head_dwell_sag_us(s_density, t_scale, n, (uint16_t)HEAD_DOTS);
+            for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
+                strobe(k_strobe[s], us);
+                fired += us;
+            }
+        }
+    }
+#else
+    const uint16_t half = (uint16_t)((HEAD_DI1_DOTS + 7) / 8);
     for (int s = 0; s < HEAD_STROBE_SEGMENTS; s++) {
         uint16_t from = (uint16_t)(s * half), to = (uint16_t)(from + half);
         uint16_t n = dots_in(bits, from, to, nbytes);
@@ -464,6 +503,7 @@ void head_print_line(const uint8_t *bits, uint16_t nbytes)
         strobe(k_strobe[s], us);
         fired += us;
     }
+#endif
 
     s_last_strobe_us = fired;
 }

@@ -1359,3 +1359,66 @@ magic and a deliberately wrong sum, on the real image. It asserts three things:
 the record is not accepted, the heat rail is locked out, and fresh defaults are
 re-persisted *with* a valid checksum. Removing the one `cfg_sum()` comparison in
 `try_magic()` fails all three.
+
+## D33 — An unbelievable thermistor reading is a third state, not a cold head
+
+`thermal.c` had no plausibility band on the raw code, and the consequence was
+the worst possible shape: **the dangerous failure direction granted the maximum
+energy while the only pure-software safety interlock stayed permanently
+satisfied.**
+
+With the NTC to VDD and `R_p` to GND, an open circuit — a disconnected head
+flex, or a divider that was never populated — parks the ADC node at 0 V. That
+reads as code 0, which sits at the far cold end of the curve, so:
+
+    open thermistor (raw 0):    thermal_ok() = 1   dwell_scale = 320
+    at the 70 C limit:          thermal_ok() = 0   dwell_scale = 160
+
+D7's gate is a *temperature* gate, and a sensor that reports 0 is not reporting
+a temperature. `FIELDWORK.md` already names "`diag 4` raw is 0 or 4095" as a
+fault symptom — the diagnosis existed in prose, for a human, and nowhere in the
+code. And "thermistor not yet wired" is the **default state of the bring-up
+board FIELDWORK powers up**.
+
+The other divider topology fails the same way mirrored (an open pulls the node
+to VDD, which normalises to 0), so the check lives after normalisation, where
+one band covers both. The **short** is the benign direction: it normalises to
+4095, which the existing latch already reads as over-temperature and refuses.
+That asymmetry is the whole finding.
+
+### What it does now, and why not more
+
+`thermal_sensor_fault()` is deliberately **not** folded into `thermal_ok()`.
+`emit_line()` waits up to a second per dot line for `thermal_ok()` and then
+prints anyway (D7); if a sensor fault closed that gate, a printer with an
+unpopulated divider would take **seventeen minutes per address label**. That is
+not safe, it is broken. So the gate stays a temperature gate, and the fault is
+reported separately with its consequences drawn where each belongs:
+
+* **`thermal_dwell_scale()` returns the minimum.** The failure that used to
+  grant the most energy now grants the least. This is the actual fix.
+* **`protocol_self_test()` refuses outright.** D7's reasoning applies there and
+  nowhere else: nobody is waiting on the pattern, it is the operator's own
+  bring-up tool, and on a bring-up board the thermistor is precisely what is
+  missing.
+* **The host is told**, through status byte 8 = 2. "Unknown" is what the tech
+  reference gives as that byte's default, and it is exactly what we know.
+
+### The band
+
+Code ≤ 64 or ≥ 4032 on the normalised reading — about −40 °C and +155 °C on the
+same NTC curve the dwell table is generated from (30 kΩ at 25 °C, B = 3950,
+`R_p` = 20 kΩ). The real operating band is 1638…3240, so a working divider
+cannot trip it and a disconnected one always does. The tests assert both
+directions: an open and a short are faults, and −20 °C, 0 °C, 25 °C and 70 °C
+are not.
+
+### How this was found, which matters more than the bug
+
+Not by a lens looking at `thermal.c`. By the cycle-3 completeness critic, whose
+job is to ask what nobody looked at — it built a mutation tester, measured that
+`thermal.c` had a **9.9 % mutation score against 44 % line coverage**, and went
+looking for what that gap was hiding. See the strategy note in `TASKS.md`:
+mutation testing is now the top of the queue, because 98 % line coverage on
+`protocol.c` buys a 46 % mutation score, and that number is the project's blind
+spot expressed as a gate rather than as a lesson.

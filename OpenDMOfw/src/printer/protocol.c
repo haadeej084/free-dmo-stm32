@@ -394,7 +394,7 @@ static void send_status(void)
      * D7 deliberately keeps printing after the bounded wait, at a thermally
      * reduced dwell. Reporting the state does not change that - it lets the host
      * apply its own documented policy on top of our bounded-energy fallback. */
-    r[8] = thermal_ok() ? 0u : 1u;
+    r[8] = thermal_sensor_fault() ? 2u : (thermal_ok() ? 0u : 1u);
     r[9] = s_density_pct;                        /* PrintDensity % (0-200) */
     r[10] = usbp_paper_present() ? 8 : 2;        /* MainBayStatus: ok / no media */
     for (int i = 0; i < 12; i++) {               /* SKU info, NUL-padded */
@@ -760,6 +760,12 @@ void protocol_self_test(void)
             int diag = ((x + y) % 32u) < 2u;
             if (edge || diag) line[x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
         }
+        /* A sensor we cannot believe stops the self test outright, where a
+         * host raster would print anyway at a reduced dwell. Nobody is waiting
+         * on this pattern, and on a bring-up board an unpopulated thermistor
+         * divider is the normal state - so this is exactly the case D7 means by
+         * "a bring-up self-test must never be the thing that cooks the head". */
+        if (thermal_sensor_fault()) break;
         for (int g = 0; g < 100 && !thermal_ok(); g++) { delay_ms(10); wdt_kick(); }
         if (!thermal_ok()) break;                    /* D7: never strobe over the limit */
         head_print_line(line, HEAD_BYTES);

@@ -64,6 +64,10 @@ int thermal_ok(void){
     if (g_hot_polls > 0) { g_hot_polls--; return 0; }
     return 1;
 }
+/* A sensor we cannot believe - open circuit, short, or no divider fitted. It is
+ * a separate axis from "too hot": see thermal.c. */
+static int g_sensor_fault;
+int thermal_sensor_fault(void){ return g_sensor_fault; }
 unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }
@@ -92,7 +96,8 @@ static int fails;
                      else printf("ok   %s\n", #c); }while(0)
 
 static void reset_state(void){ g_lines=0; g_feed=0; g_density=-1; g_reply_len=-1;
-                               g_hot_polls=0; g_delays=0; g_paper_present=1; g_vh_on=0;
+                               g_hot_polls=0; g_delays=0; g_sensor_fault=0;
+                               g_paper_present=1; g_vh_on=0;
                                g_toggle_port=-1; g_toggle_pin=-1; g_toggle_n=-1;
                                memset(&g_cfg,0,sizeof g_cfg); protocol_init(); }
 
@@ -1108,6 +1113,27 @@ int main(void){
         reset_state();                          /* g_hot_polls back to 0 = cool */
         protocol_feed(q, sizeof q); protocol_task();
         CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 0);   /* ok */
+    }
+
+    /* 65) A sensor fault is reported to the host as "unknown" (byte 8 = 2, the
+     *     tech reference's own default for that byte), and it stops the button
+     *     self test outright - where a host raster prints anyway at a reduced
+     *     dwell. Nobody is waiting on the self test, and on a bring-up board an
+     *     unpopulated thermistor divider is the normal state, so this is exactly
+     *     the case D7 means by "a bring-up self-test must never be the thing
+     *     that cooks the head". */
+    {
+        reset_state();
+        g_sensor_fault = 1;
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 2);   /* unknown */
+        protocol_self_test();
+        CHECK(g_lines == 0);                                 /* not one dot */
+        /* ...and a believable sensor still runs it, so the guard is not simply
+         * disabling the self test. */
+        reset_state();
+        protocol_self_test();
+        CHECK(g_lines == 400);
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

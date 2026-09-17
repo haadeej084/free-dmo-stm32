@@ -267,6 +267,43 @@ int main(void)
         CHECK(g_level[1][0] == 0x55 && g_level[1][1] == 0x55);
     }
 
+    /* An unbelievable reading is a THIRD state, not a cold head.
+     *
+     * With the NTC to VDD and R_p to GND, an open circuit - a disconnected head
+     * flex, or a divider that was never populated, which is the default state of
+     * a bring-up board - parks the ADC node at 0 V. Code 0 sits at the far cold
+     * end of the curve, so the firmware used to answer "very cold": the D7 gate
+     * permanently satisfied AND the longest strobe it will ever ask for, at
+     * exactly the moment it knows least about the head. That is the dangerous
+     * failure direction getting the maximum energy.
+     *
+     * The benign direction already worked: a short normalises to 4095, which the
+     * existing latch reads as over-temperature and refuses. Both are asserted
+     * here so the asymmetry is on the record. */
+    {
+        adc_constant(0); g_ms += 1000;
+        CHECK(thermal_sensor_fault());
+        CHECK(thermal_dwell_scale() == 160);      /* least energy, not 320 */
+        CHECK(head_dwell_us(8, thermal_dwell_scale()) <
+              head_dwell_us(8, 320));
+
+        adc_constant(4095); g_ms += 1000;
+        CHECK(thermal_sensor_fault());
+        CHECK(!thermal_ok());                     /* short: already refused */
+        CHECK(thermal_dwell_scale() == 160);
+
+        /* A working divider must never trip it, at either end of the real
+         * operating range or beyond it in both directions. */
+        adc_constant(code_of(25.0)); g_ms += 1000;
+        CHECK(!thermal_sensor_fault());
+        adc_constant(code_of(0.0)); g_ms += 1000;
+        CHECK(!thermal_sensor_fault());
+        adc_constant(code_of(70.0)); g_ms += 1000;
+        CHECK(!thermal_sensor_fault());
+        adc_constant(code_of(-20.0)); g_ms += 1000;
+        CHECK(!thermal_sensor_fault());           /* cold store, still believable */
+    }
+
     printf(fails ? "\n%d of %d THERMAL check(s) FAILED\n" : "\nALL %d THERMAL CHECKS PASSED\n",
            fails ? fails : checks, checks);
     return fails ? 1 : 0;

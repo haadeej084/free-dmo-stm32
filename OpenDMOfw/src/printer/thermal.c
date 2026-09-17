@@ -62,6 +62,31 @@
 #define THERMAL_RESUME_RAW  2862   /* 56 degC: printing may resume (TRM)      */
 #define THERMAL_COLD_RAW    1638   /* 25 degC: at/below this, full dwell      */
 
+/* Plausibility band on the NORMALISED reading (higher = hotter, whichever way
+ * the divider is wired). Outside it, the sensor is not telling us about a
+ * temperature at all.
+ *
+ * THE FAILURE THAT MATTERS IS THE OPEN CIRCUIT, and it used to be invisible.
+ * With the NTC to VDD and R_p to GND, a disconnected head flex - or a divider
+ * that was never populated, which is the DEFAULT STATE OF A BRING-UP BOARD -
+ * parks the ADC node at 0 V. That reads as code 0, which the curve calls "very
+ * cold", so thermal_ok() stayed true and thermal_dwell_scale() returned 320:
+ * the gate permanently satisfied AND the longest strobe this firmware will ever
+ * ask for, at exactly the moment it knows least about the head. The other
+ * topology fails the same way mirrored (open pulls the node to VDD, which
+ * normalises to 0), so the check belongs here, after normalisation, where one
+ * band covers both.
+ *
+ * The SHORT is the benign direction: it normalises to 4095, which the existing
+ * latch already reads as over-temperature and refuses.
+ *
+ * Bounds, from the same NTC curve as the table above (30 k at 25 C, B = 3950,
+ * R_p = 20 k): code 64 is about -40 C and code 4032 about +155 C. Both are far
+ * outside anything a printer can be in - the operating band is 1638..3240 - so
+ * a working divider cannot trip this, and a disconnected one always does. */
+#define THERMAL_OPEN_RAW      64   /* at/below: open circuit or no divider     */
+#define THERMAL_SHORT_RAW   4032   /* at/above: shorted sensor                 */
+
 /* Re-sampling interval. The head's thermal mass moves in seconds, so sampling
  * per line (thermal_ok() and thermal_dwell_scale() are both called for every
  * dot line) burns ADC time for no information. It also makes the two agree
@@ -195,6 +220,31 @@ int thermal_ok(void)
     return !s_over_temp;
 }
 
+/* Deliberately NOT folded into thermal_ok().
+ *
+ * A broken sensor and a hot head call for different responses. emit_line()
+ * waits up to a second per dot line for thermal_ok(), then prints anyway (D7);
+ * if a sensor fault closed that gate, a printer with an unpopulated divider
+ * would take seventeen minutes per address label. That is not "safe", it is
+ * broken. So the gate stays a TEMPERATURE gate and the fault is reported
+ * separately, with two consequences drawn where they belong:
+ *
+ *   - thermal_dwell_scale() returns the MINIMUM scale, so the failure that used
+ *     to grant maximum energy now grants the least. This is the actual fix.
+ *   - protocol_self_test() refuses outright, because D7's reasoning applies
+ *     there and nowhere else: nobody is waiting on its output, it is the
+ *     operator's own bring-up tool, and on a bring-up board the thermistor is
+ *     precisely what is missing.
+ *
+ * The host is told through status byte 8, whose value 2 means "unknown" - which
+ * is what the tech reference gives as that byte's default, and exactly what we
+ * know here. */
+int thermal_sensor_fault(void)
+{
+    uint16_t v = thermal_hot_scale();
+    return (v <= THERMAL_OPEN_RAW) || (v >= THERMAL_SHORT_RAW);
+}
+
 void thermal_scan_adc(uint16_t out[10])
 {
     for (uint8_t ch = 0; ch < 10; ch++) {
@@ -248,6 +298,10 @@ static const uint16_t k_dwell_scale[32] = {
 uint16_t thermal_dwell_scale(void)
 {
     uint16_t v = thermal_hot_scale();
+    /* An unbelievable reading gets the LEAST energy, not the most. Before this
+     * an open thermistor read as 0, fell into the "25 C and below" branch on
+     * the next line, and returned the cold maximum. */
+    if (v <= THERMAL_OPEN_RAW || v >= THERMAL_SHORT_RAW) return 160;
     if (v <= THERMAL_COLD_RAW)  return 320;        /* 25 C and below: 1.25x dwell */
     if (v >= THERMAL_LIMIT_RAW) return 160;        /* 70 C: 0.625x dwell          */
     return k_dwell_scale[(v >> 7) & 31u];

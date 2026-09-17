@@ -103,6 +103,13 @@ MOTOR_TEST_SRC = test/test_motor.c src/printer/motor.c
 # from driving the 24 V heat gate - could be DELETED with every suite green,
 # because test_protocol.c re-implements sys_pin_toggle() instead of calling it.
 SYSTEM_TEST_SRC = test/test_system.c src/system.c
+# store.c holds OP_FLAG_VH_INHIBIT, the one flag protecting an irreplaceable
+# head, and had no host harness: Renode's eeprom.py killed 47 of 109 mutants
+# and its write-protect scenario preloads a BLANK part - the one case where a
+# read-back verify is vacuous. This harness models the part at the I2C
+# register level so /WP, a wrong device, a torn page write and a mid-data NAK
+# are all reachable.
+STORE_TEST_SRC = test/test_store.c src/config/store.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -131,6 +138,9 @@ test:
 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
 	    -o /tmp/opendmo-systest-$$m $(SYSTEM_TEST_SRC); \
 	  /tmp/opendmo-systest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-storetest-$$m $(STORE_TEST_SRC); \
+	  /tmp/opendmo-storetest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

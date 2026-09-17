@@ -149,7 +149,31 @@ static uint16_t s_raster_lines;      /* dot LINES printed by the current raster
                                       * head. See begin_raster(). */
 
 /* Feed math: die-cut rolls have a small physical gap between labels. */
-#define LABEL_GAP_DOTS   20          /* ~1.7 mm at 300 dpi */
+/* Die-cut gap between labels, in tenths of a millimetre, and the dot count
+ * derived from it. These used to be two independent constants that disagreed
+ * with each other: the feed advanced LABEL_GAP_DOTS = 20 dots (1.69 mm) while
+ * the ESC U consumable record told the host LABEL_GAP_TENTH_MM = 42 (4.2 mm),
+ * three hundred lines further down the same file.
+ *
+ * 42 is the number with evidence behind it. Joining all 37 genuine roll-tag
+ * records in this repository (Src/main.c, CRC-32 verified) onto the GPD paper
+ * table gives the real gap as marker pitch minus label length: 42 tenths is the
+ * mode and the value on the 550's own default stock (Address 30252, ESC L
+ * 0x0546), and NOT ONE die-cut roll measures below 42. The four zeros in that
+ * histogram are the continuous roll and the two edge-to-edge stocks, where
+ * pitch == length.
+ *
+ * So the feed was short by about 2.5 mm per label, cumulatively, on a printer
+ * whose own comment notes there is "no top-of-form sensing in the feed path" to
+ * take it back. One constant now, so the wire report and the physical feed
+ * cannot disagree again.
+ *
+ * STILL AN APPROXIMATION: the genuine gap varies 42..118 tenths across stocks
+ * (79 on 30323 Shipping, 95 on 30258 Diskette, 118 on 30277 File Folder).
+ * Carrying it per paper code is the right answer and is the next piece of work;
+ * 42 is the measured mode and the correct value for the default stock. */
+#define LABEL_GAP_TENTH_MM 42
+#define LABEL_GAP_DOTS   (((LABEL_GAP_TENTH_MM) * (MODEL_DPI) + 127) / 254)
 #define TEAR_EXTRA_DOTS  15          /* tear bar sits past the next print position */
 /* Hard ceiling on a single feed. The paper table carries continuous/banner
  * stock with a nominal height of 32000 dots; without this, a short label on
@@ -461,11 +485,6 @@ static uint16_t dots_to_tenth_mm(uint16_t dots)
     return (uint16_t)(((uint32_t)dots * 254u + MODEL_DPI / 2u) / MODEL_DPI);
 }
 
-/* Inter-label gap, in tenths. Genuine rolls carry 42-118 depending on the
- * stock (mode 42); 57 is the value on our default S0904980. Per-roll in
- * reality, so this is a default rather than a constant. */
-#define LABEL_GAP_TENTH_MM 42
-
 static void send_sku_record(void)
 {
     const op_config_t *c = store_get();
@@ -493,6 +512,12 @@ static void send_sku_record(void)
     r[24] = 0x01;                                /* label color: white */
     r[25] = 0x00;                                /* content color: black */
     r[26] = 0x00;                                /* marker type 0 */
+    /* One caveat, measured: LABEL_GAP_TENTH_MM is the FLEET MODE (42), and the
+     * 5XL's own default stock S0904980 carries 57. So this model's default SKU
+     * reports marker pitch 1594+42 = 1636 where the genuine tag says 1651, and
+     * total media length 17996 against 18161. Carrying the gap per paper code
+     * in paper_t fixes both and is the next piece of work; every other field of
+     * this record matches the genuine tag byte for byte. */
     uint16_t pitch_tmm = (uint16_t)(h_tmm + LABEL_GAP_TENTH_MM);
     r[28] = (uint8_t)(pitch_tmm & 0xFF); r[29] = (uint8_t)(pitch_tmm >> 8);
     r[30] = 30; r[31] = 0;                       /* marker1 width 3.0 mm (35/37) */

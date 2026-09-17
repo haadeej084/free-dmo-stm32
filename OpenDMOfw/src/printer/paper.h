@@ -32,48 +32,64 @@ typedef struct {
     uint16_t height_dots;   /* page height in dots */
 } paper_t;
 
-#if defined(MODEL_OP57)
-/* 550-class papers (from LW5XX.GPD). */
-static const paper_t PAPERS[] = {
-    { 0x0546,  329, 1050 },   /* Address 30252/30320/99010 (default) */
-    { 0x05DC,  694, 1200 },   /* Shipping 30256 / NameBadge 30364    */
-    { 0x05D3,  638, 1191 },   /* Shipping 99014 / NameBadge 99014    */
-    { 0x041A,  225,  750 },   /* Durable 1933085                     */
-    { 0x0960,  675, 2100 },   /* PC Postage 3-part 30383             */
-    { 0x09F6,  694, 2250 },   /* PC Postage 2-part 30384             */
-    { 0x0465,  638,  825 },   /* Diskette                            */
-    { 0x0384,  330,  600 },   /* Handing file insert / return address*/
-    { 0x0396,  338, 1031 },   /* File folder 2-up                    */
-    { 0x0534,  235, 1031 },   /* File folder                         */
-    { 0x03EB,  600,  703 },   /* Zipdisk                             */
-    { 0x0D7A,  694, 3150 },   /* PC Postage EPS 30387 (biggest roll) */
-    { 0x09F0,  694, 2244 },   /* Large lever arch                    */
-    { 0x0233,  640,  263 },   /* Jewelry label 2-up                  */
-    /* remaining LW5XX.GPD papers */
-    { 0x0542,  422, 1046 },
-    { 0x080F,  225, 1763 },
-    { 0x07FC,  260, 1744 },
-    { 0x04C3,  544,  919 },
-    { 0x0478,  225,  844 },
-    { 0x0258,  300,  300 },
-    { 0x02A3,  675,  375 },
-    { 0x03AA,  300,  638 },
-    { 0x0290,  304,  356 },
-    { 0x035F,  150,  563 },
-    { 0x02EE,  300,  450 },
-    { 0x0438,  693,  780 },
-    { 0x05EB,  731, 1215 },
+/* The 550 rows, shared: the 5XL driver inherits them (see below). */
+#define PAPERS_550_ROWS \
+    { 0x0546,  329, 1050 },   /* Address 30252/30320/99010 (default) */ \
+    { 0x05DC,  694, 1200 },   /* Shipping 30256 / NameBadge 30364    */ \
+    { 0x05D3,  638, 1191 },   /* Shipping 99014 / NameBadge 99014    */ \
+    { 0x041A,  225,  750 },   /* Durable 1933085                     */ \
+    { 0x0960,  675, 2100 },   /* PC Postage 3-part 30383             */ \
+    { 0x09F6,  694, 2250 },   /* PC Postage 2-part 30384             */ \
+    { 0x0465,  638,  825 },   /* Diskette                            */ \
+    { 0x0384,  330,  600 },   /* Handing file insert / return address*/ \
+    { 0x0396,  338, 1031 },   /* File folder 2-up                    */ \
+    { 0x0534,  235, 1031 },   /* File folder                         */ \
+    { 0x03EB,  600,  703 },   /* Zipdisk                             */ \
+    { 0x0D7A,  694, 3150 },   /* PC Postage EPS 30387 (biggest roll) */ \
+    { 0x09F0,  694, 2244 },   /* Large lever arch                    */ \
+    { 0x0233,  640,  263 },   /* Jewelry label 2-up                  */ \
+    /* remaining LW5XX.GPD papers */ \
+    { 0x0542,  422, 1046 }, \
+    { 0x080F,  225, 1763 }, \
+    { 0x07FC,  260, 1744 }, \
+    { 0x04C3,  544,  919 }, \
+    { 0x0478,  225,  844 }, \
+    { 0x0258,  300,  300 }, \
+    { 0x02A3,  675,  375 }, \
+    { 0x03AA,  300,  638 }, \
+    { 0x0290,  304,  356 }, \
+    { 0x035F,  150,  563 }, \
+    { 0x02EE,  300,  450 }, \
+    { 0x0438,  693,  780 }, \
+    { 0x05EB,  731, 1215 }, \
     { 0x0339,  464,  525 },
+#if defined(MODEL_OP57)
+static const paper_t PAPERS[] = {
+    PAPERS_550_ROWS
 };
 #define PAPER_DEFAULT_CODE  0x0546
 #else
-/* 5XL-class papers (from lw4xl.gpd). */
+/* 5XL-class papers. Source is lw5xl.gpd, which begins `*Include: "lw5xx.gpd"`
+ * and then declares its own PaperSize feature with six NEW options plus a
+ * restatement of CUSTOMSIZE (only to widen MaxSize and MaxPrintableWidth).
+ * Restating one inherited option to change two values, and restating no other,
+ * only means anything under GPD merge-with-override semantics - so the real 5XL
+ * driver can emit every 550 paper code as well as its own.
+ *
+ * The transcription used to read lw5xl.gpd alone and carried five rows. Any of
+ * the 24 missing codes then missed paper_lookup() and fell back to the default
+ * 0x0867 = 1883 dot lines, so selecting a 550 Address label on a 5XL fed
+ * 1883 instead of 1050 - about 70 mm of blank stock per label.
+ *
+ * The 4"-wide rows come FIRST so a code defined by both resolves to the 5XL
+ * geometry; the inherited 550 rows follow verbatim. */
 static const paper_t PAPERS[] = {
     { 0x0867, 1233, 1883 },   /* Shipping 4x6  (S0904980, default)   */
     { 0xB80B, 1320, 3000 },   /* Shipping 4x10                       */
     { 0xB009, 1204, 2480 },   /* A6                                  */
     { 0x03E2, 1200,  694 },   /* High Capacity Large Shipping        */
     { 0x0275, 1050,  329 },   /* High Capacity Address               */
+    PAPERS_550_ROWS
 };
 #define PAPER_DEFAULT_CODE  0x0867
 #endif

@@ -312,6 +312,15 @@ extern SysTick_Type host_systick;
 #define TIM3    (&host_tim3)
 #define IWDG    (&host_iwdg)
 #define SysTick (&host_systick)
+/* I2C1 goes through a function for the same reason the ADC does: a transfer is
+ * a sequence of register accesses whose result depends on what a PART on the
+ * bus does, so a test needs a hook on every access rather than plain storage.
+ * test/i2c_eeprom_model.h defines host_i2c() over a 24Cxx model that can be
+ * told to misbehave - write-protected, absent, NAKing mid-data, or losing
+ * power between page writes. */
+#undef I2C1
+I2C_Type *host_i2c(void);
+#define I2C1 host_i2c()
 #endif
 
 #endif /* OP57_MCU_H */

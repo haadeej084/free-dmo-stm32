@@ -702,6 +702,26 @@ words from a four-entry table built once per line: 11 898 instructions
   (~1360 rpm); two does not. `MOTOR_STEPS_PER_LINE` stays 1, now as an
   estimate with a reason rather than a placeholder.
 
+  **Unreconciled with D30, and it is the constant that sets label length.** D30
+  reads the LabelWriter 450's own firmware - four blind disassemblies, byte
+  identical - as driving **12 motor steps per dot line at 300 dpi, i.e. 3600
+  steps/inch**, on a mechanism a 450 mainboard drives correctly when fitted to a
+  550. This entry says 300 steps/inch. They cannot both be full steps: at
+  `MODEL_LINE_PERIOD_US` 800, twelve full steps per line is 15000 steps/s, which
+  on a 48-step/rev motor is 18750 rpm - impossible for a 7.5 deg PM stepper. So
+  the 450's twelve are microsteps, and `MOTOR_STEPS_PER_LINE = 1` is right ONLY
+  IF it microsteps exactly 12:1. If its phase table instead spans one electrical
+  revolution (4 full steps per line), this constant is wrong by a factor of four
+  and every label is a quarter or four times the length it should be.
+
+  The argument above is a rated-speed estimate; the 450 image in `scratchpad`
+  can answer it directly. One directed disassembly pass: find the table the
+  CT32B0 step ISR indexes with its step counter, and count the entries. Twelve
+  distinct phase vectors confirms `1` from working firmware - the strongest
+  evidence this project could have for it. Four entries cycled three times means
+  it is wrong. `FIELDWORK.md` measurement 2 (feed 300 lines, must advance
+  exactly 25.4 mm) remains the bench route, but it is no longer the only one.
+
 ## D25 — The 5XL is a different board; the 550 is the target
 
 ### MCU identification (markings read from full-resolution community photos)

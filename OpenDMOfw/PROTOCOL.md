@@ -16,7 +16,7 @@ carries replies (status, SKU record, version).
 | Field | 5XL geometry (`MODEL=OP104`) | 550 (default, OP57) |
 |-------|----------------------|--------------------|
 | idVendor | `0x0922` (D.mo) | `0x0922` |
-| idProduct | `0x002A` | `0x0028`. The driver's own PID→model table: `0x28` 550, `0x29` 550 Turbo, `0x2A` 5XL, `0x2B` 550 Twin Turbo, `0x2C` 550 Pro, `0x2D` 550 Twin Pro, `0x2E` 5XL Pro, `0x1010` LabelManager Executive 640 |
+| idProduct | `0x002A` | `0x0028`. The driver's own PID→model table: `0x28` 550, `0x29` 550 Turbo, `0x2A` 5XL, `0x2B` 550 Twin Turbo, `0x2C` 550 **Twin** Pro, `0x2D` 5XL Pro, `0x1010` LabelManager Executive 640. Source: `dcx/src_DYMO.PrinterCommands/DYMO.PrinterCommands/PID.cs` and `CommandUtils.PidToModel`, which map exactly these seven and nothing else. Earlier revisions of this row invented a "550 Pro" at `0x2C` and shifted everything after it by one, giving a `0x2E` the driver does not define — DYMO's own PID space has no plain 550 Pro at all |
 | Manufacturer | `DYMO` | `DYMO` |
 | Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
 | Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
@@ -129,7 +129,7 @@ unknowable) and the parser resyncs on the next `ESC`.
 
 The request is always three bytes (`1B 41 lock`). The **reply length is
 model-dependent**: 32 bytes for the single-roll models (PID `0x28`, `0x29`,
-`0x2A`, `0x2C`, `0x2E`), and 70 bytes for the twin-roll ones (`0x2B`, `0x2D`) —
+`0x2A`, `0x2D`), and 70 bytes for the twin-roll ones (`0x2B`, `0x2C`) —
 a 6-byte outer header followed by two 32-byte per-roll blocks. The host treats
 any other length as a hard failure, so a single-roll build must never advertise
 a twin PID. A genuine newer unit may also answer with a framed `ESC S`

@@ -506,13 +506,18 @@ int main(void){
     unsigned char l1000[] = { 0x1B, 'L', 0x03, 0xE8 };   /* 1000 dots, raw, BE */
     protocol_feed(l1000, sizeof l1000); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
-    CHECK(g_feed == 1000 + 20);                    /* override + gap */
+    /* 50 dots = 42 tenths of a mm at 300 dpi, the measured die-cut gap. The
+     * literal is pinned here rather than derived from LABEL_GAP_DOTS: a test
+     * that recomputes the firmware's own formula would agree with any value
+     * the firmware chose (DECISIONS D34). It used to be 20, which disagreed
+     * with the 42 tenths the ESC U record reports to the host. */
+    CHECK(g_feed == 1000 + 50);                    /* override + gap */
     {
         int after_override = g_feed;
         unsigned char l0[] = { 0x1B, 'L', 0, 0 };
         protocol_feed(l0, sizeof l0); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK((g_feed - after_override) != 1000 + 20);  /* back to the paper table */
+        CHECK((g_feed - after_override) != 1000 + 50);  /* back to the paper table */
     }
 
     /* 35) The printed height of one job must not leak into the next: a feed
@@ -740,7 +745,7 @@ int main(void){
     unsigned char lbe[] = { 0x1B, 'L', 0x00, 0x64 };
     protocol_feed(lbe, sizeof lbe); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
-    CHECK(g_feed == 100 + 20);                     /* override 100 + gap */
+    CHECK(g_feed == 100 + 50);                     /* override 100 + gap */
 
     /* 48) ESC L sentinels: 7F 00 (custom size) and FF FF (continuous) are not
      *     lengths. With no raster printed yet the pitch is 0, so ESC G feeds
@@ -751,16 +756,16 @@ int main(void){
         reset_state();
         protocol_feed(s1, sizeof s1); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 20);
+        CHECK(g_feed == 50);
         reset_state();
         protocol_feed(s2, sizeof s2); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 20);
+        CHECK(g_feed == 50);
         /* a later real length clears the sentinel again */
         protocol_feed(lbe, sizeof lbe); protocol_task();
         g_feed = 0;
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 100 + 20);
+        CHECK(g_feed == 100 + 50);
     }
 
     /* 49) A run of ESC bytes (the driver pads with them) must not swallow the
@@ -1042,7 +1047,7 @@ int main(void){
             CHECK(g_lines == lines);
         }
         /* printed lines + the rest of the pitch + the die-cut gap */
-        CHECK(feed[0] == lines + (pitch - lines) + 20);
+        CHECK(feed[0] == lines + (pitch - lines) + 50);
         CHECK(feed[1] == feed[0]);              /* width must not move the paper */
     }
 
@@ -1258,6 +1263,25 @@ int main(void){
             protocol_feed(q, sizeof q); protocol_task();
             CHECK(g_reply[5] == 33);                   /* still in step */
         }
+    }
+
+    /* 67) The 5XL inherits the 550's paper codes. lw5xl.gpd opens with
+     *     `*Include: "lw5xx.gpd"` and then restates exactly one inherited
+     *     option (CUSTOMSIZE, only to widen MaxSize and MaxPrintableWidth) -
+     *     which under GPD merge-with-override semantics means the real driver
+     *     can emit every 550 code too.
+     *
+     *     The transcription used to read lw5xl.gpd alone, so 24 codes missed
+     *     paper_lookup() on an OP104 build and fell back to the 1883-dot
+     *     default: a 550 Address label fed 1883 lines instead of 1050, about
+     *     70 mm of blank stock per label. Asserted on BOTH models, because the
+     *     rows are now shared. */
+    {
+        reset_state();
+        unsigned char l[] = { 0x1B, 'L', 0x05, 0x46 };   /* Address 30252, BE */
+        protocol_feed(l, sizeof l); protocol_task();
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed == 1050 + 50);                      /* pitch + die-cut gap */
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

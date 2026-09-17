@@ -62,6 +62,28 @@ static uint8_t cfg_sum(const op_config_t *c)
     return s;
 }
 
+/* Byte-for-byte comparison of a read-back against what we meant to write.
+ *
+ * "magic is right and the checksum agrees" asks whether the part holds SOME
+ * valid record - not whether it holds THE record just written, and those come
+ * apart in exactly the case that matters. A configured board whose /WP is tied
+ * high, a footprint with the wrong device, or a worn cell already HOLDS a valid
+ * record; the new write goes nowhere and the read-back verifies the old one.
+ * Measured on a register-level part model: GS D 0x08 reported persisted = 1
+ * with the interlock byte still 0x01 on the part and 0x03 in RAM. A torn write
+ * does the same thing - a power loss between page writes on the 8-byte-page
+ * part, with the changed byte in a later page, leaves the old record intact.
+ *
+ * This was cycle 4's own fix, correct only for a BLANK part - which is the only
+ * case the Renode write-protect scenario preloads. Comparing the whole record
+ * subsumes both the magic and the checksum, and costs 4 bytes LESS of flash. */
+static int cfg_same(const op_config_t *a, const op_config_t *b)
+{
+    const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
+    for (unsigned i = 0; i < sizeof(op_config_t); i++) if (x[i] != y[i]) return 0;
+    return 1;
+}
+
 /* Set when a record was found whose magic matched but whose sum did not - i.e.
  * an EEPROM that answers and holds something corrupt, as opposed to no EEPROM
  * at all. The two call for different defaults; see store_load(). */
@@ -122,7 +144,13 @@ static int wait(volatile uint32_t flag)
 static void i2c_bus_recover(void)
 {
     uint32_t g = 10000;
+    /* RM0091: PE must be held low for at least 3 APB cycles before it is set
+     * again. The old spin read CR1 back and exited immediately - PE is a plain
+     * software bit, so it reads 0 on the first load and one APB read is not a
+     * guarantee of three. 2 us is ~96 APB cycles at 48 MHz, and this path runs
+     * only after a bus hang, so the cost is irrelevant. */
     I2C1->CR1 &= ~I2C_CR1_PE;
+    delay_us(2);
     while ((I2C1->CR1 & I2C_CR1_PE) && --g) {}
     I2C1->CR1 = I2C_CR1_PE;
 }
@@ -132,13 +160,35 @@ static int i2c_xfer(uint8_t addr7, const uint8_t *w, uint16_t wn, uint8_t *r, ui
     if (I2C1->ISR & I2C_ISR_BUSY)
         i2c_bus_recover();
     if (wn) {
+    /* A NACKF or STOPF left over from a previous transfer would make wait()
+     * abort this one before it starts. */
+    I2C1->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF;
         I2C1->CR2 = ((uint32_t)addr7 << 1) | ((uint32_t)wn << 16) |
                     (rn ? 0 : I2C_CR2_AUTOEND) | I2C_CR2_START;
         for (uint16_t i = 0; i < wn; i++) {
             if (wait(I2C_ISR_TXIS)) return -1;
             I2C1->TXDR = w[i];
         }
-        if (!rn) { wait(I2C_ISR_STOPF); I2C1->ICR = I2C_ISR_STOPF; return 0; }
+        if (!rn) {
+        /* Two bugs lived in the one line this replaces.
+         *
+         * (a) THE LAST BYTE'S ACKNOWLEDGE WAS NEVER CHECKED. wait() runs for
+         *     TXIS BEFORE each byte, so nothing covered the acknowledge of the
+         *     final one - and with AUTOEND the peripheral raises STOPF on a NAK
+         *     too, so STOPF alone does not mean the part took the data. The
+         *     return value of wait() was discarded as well.
+         *
+         * (b) ICR WAS WRITTEN WITH STOPF ONLY, so NACKF stayed set - and wait()
+         *     tests NACKF before the flag it is waiting for. So one NAKed byte
+         *     poisoned the NEXT transfer: measured, a healthy part right after
+         *     a last-byte NAK returned -1 from store_save() with the page
+         *     already committed, i.e. a good save reported as failed, and
+         *     GS D 0x08 would have answered persisted = 0 for it. */
+        if (wait(I2C_ISR_STOPF)) return -1;
+        int nak = (I2C1->ISR & I2C_ISR_NACKF) != 0;
+        I2C1->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF;
+        return nak ? -1 : 0;
+    }
         if (wait(I2C_ISR_TC)) return -1;
     }
     if (rn) {
@@ -233,7 +283,7 @@ static int persist_and_verify(void)
     /* Verify the whole record, not just its first four bytes: the read-back is
      * the only chance to notice a part that acknowledged a write it did not
      * complete. */
-    return tmp.magic == CFG_MAGIC && cfg_sum(&tmp) == tmp.sum;
+    return cfg_same(&tmp, &s_cfg);
 }
 
 void store_load(void)
@@ -283,7 +333,7 @@ int store_save(void)
     op_config_t tmp;
     if (eeprom_read(cfg_off(), (uint8_t*)&tmp, sizeof tmp) != 0)
         return -1;
-    if (tmp.magic != CFG_MAGIC || cfg_sum(&tmp) != tmp.sum)
+    if (!cfg_same(&tmp, &s_cfg))
         return -1;
     return 0;
 }

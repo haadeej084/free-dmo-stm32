@@ -24,17 +24,40 @@ static void io_init(void)
     gpio_set(PIN_LED, 0);
     gpio_mode(PIN_BUTTON, GPIO_IN);
     gpio_pull(PIN_BUTTON, 1);            /* pull-up: button pulls to ground */
+#if !PAPER_SENSE_ANALOG
     gpio_mode(PIN_PAPER_SENSE, GPIO_IN);
     gpio_pull(PIN_PAPER_SENSE, 1);
+#endif                                   /* analog: thermal_init() owns the pad */
 }
 
 /* LED status: on = configured/ready; slow blink = unconfigured;
- * fast blink = head overheated; double blink = paper out. */
+ * fast blink = head overheated OR heat locked out; double blink = paper out.
+ *
+ * The 5 Hz branch covers every state in which this printer CANNOT PUT A DOT ON
+ * A LABEL. Until cycle 4 it covered only over-temperature, and the other such
+ * state - OP_FLAG_VH_INHIBIT set, where vh_enable() is a no-op and no strobe
+ * can heat anything - showed a SOLID READY LIGHT. The printer would accept the
+ * job, feed the label, advance to the tear bar and eject it blank, with the
+ * panel saying "ready" throughout.
+ *
+ * That state is not exotic. D32 makes it the AUTOMATIC outcome of a config
+ * record that fails its checksum, and it is the compiled default of the
+ * OPENDMO_SAFE_BRINGUP image FIELDWORK tells a fieldworker to build first - so
+ * the person most likely to meet it is the one with the least to go on.
+ *
+ * 5 Hz is also what the LW550 User Guide documents as "an error has occurred",
+ * so this makes the panel more conformant, not less.
+ *
+ * Deliberately NOT included: thermal_sensor_fault(). A printer with an
+ * unbelievable thermistor still prints, at 0.625x dwell (D33) - it is degraded,
+ * not stopped, and the host is told through status byte 8. Blinking an error at
+ * an operator whose printer is working would train them to ignore the light. */
 static void led_update(void)
 {
     uint32_t now = millis();
-    int paper = (gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
-    if (!thermal_ok()) {                 /* overheated: 5 Hz */
+    int paper = paper_present();
+    int locked = (store_get()->flags & OP_FLAG_VH_INHIBIT) != 0;
+    if (!thermal_ok() || locked) {       /* cannot print: 5 Hz */
         gpio_set(PIN_LED, (int)((now / 100) & 1));
     } else if (!paper) {                 /* paper out: double blink every ~1.2 s */
         uint32_t p = now % 1200;
@@ -82,10 +105,14 @@ static void button_task(void)
 
 int main(void)
 {
-    /* SystemInit() (48 MHz system clock) was already done by Reset_Handler.
-     * The watchdog goes first: from here on any hang, including one inside a
-     * peripheral init or a fault handler, ends in a reset rather than a brick. */
-    wdt_init();
+    /* SystemInit() (48 MHz system clock) and wdt_init() were both already done
+     * by Reset_Handler - the watchdog deliberately before SystemInit(), so that
+     * a clock that never comes up ends in a reset instead of a silent hang.
+     * Kick it here rather than re-initialising: writes to IWDG_PR/RLR are
+     * ignored while the previous ones are still being synchronised to the LSI
+     * domain, so a second wdt_init() would be a no-op that merely looks like
+     * configuration. */
+    wdt_kick();
     systick_init();
     io_init();
 

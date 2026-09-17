@@ -34,6 +34,7 @@ MODELS = {                          # name -> (PID, dots across head, bytes/line
 }
 EP_OUT = 0x02    # genuine 550: bulk pair on endpoint 2 (lsusb -v 0922:0028)
 EP_IN  = 0x82
+EP_MAXPKT = 64        # full-speed bulk max packet; every GS D reply fits in one
 
 # ---- protocol encoders (tech ref p.11-20; decompiled driver) --------------
 def cmd_start_job(job_id=1):        return b"\x1b\x73" + job_id.to_bytes(4, "little")
@@ -55,7 +56,7 @@ def cmd_form_feed():                return b"\x1b\x45"              # ESC E (to 
 def cmd_end_job():                  return b"\x1b\x51"              # ESC Q
 def cmd_status_query(lock=0):       return b"\x1b\x41" + bytes([lock])  # ESC A
 def cmd_restart():                  return b"\x1b\x40"              # ESC @ (pipeline reset)
-def cmd_factory_reset():            return b"\x1b\x24"              # ESC $ (0x24)
+def cmd_factory_reset():            return b"\x1b\x2a"              # ESC * (0x2A), the genuine opcode
 def cmd_version():                  return b"\x1b\x56"              # ESC V
 def cmd_sku_info():                 return b"\x1b\x55"              # ESC U
 # Backdoor (never sent by the stock host; config + driver-less bring-up):
@@ -122,11 +123,20 @@ def read_status(dev, lock=0):
 
 # ---- GS D self-test / diagnostic backdoor ----------------------------------
 def read_diag(dev):
-    """Read a 'D'-prefixed diagnostic reply (short packet, 3-24 bytes)."""
+    """Read a 'D'-prefixed diagnostic reply (one short bulk packet).
+
+    Read a FULL 64-byte packet, not 24. A bulk IN whose buffer is shorter than
+    the packet the device sends is LIBUSB_ERROR_OVERFLOW, which the except below
+    swallows into b"" after five silent retries. GS D 0x06 replies 29 bytes and
+    GS D 0x05 replies 2 + the build id - 21 bytes on a clean tree but 27 once
+    `git describe` appends "-dirty", which is the normal state during fieldwork.
+    So the two diagnostics most needed on a bench were the two that could not be
+    read back. Every GS D reply fits in one 64-byte full-speed bulk packet.
+    """
     r = b""
     for _ in range(5):
         try:
-            r = bytes(dev.read(EP_IN, 24, timeout=500))
+            r = bytes(dev.read(EP_IN, EP_MAXPKT, timeout=500))
         except Exception:
             r = b""
         if len(r) >= 3 and r[0] == ord("D"):
@@ -159,8 +169,27 @@ def parse_diag(r):
         out["lines"] = r[2]
     elif sub == 0x03:                     # EEPROM self-test
         out["eeprom_match"] = bool(r[2])
+    elif sub == 0x08 and len(r) >= 4:     # VH interlock
+        out["flags"] = r[2]
+        out["vh_inhibit"] = bool(r[2] & 2)
+        # Two different facts: the interlock is in force either way, but a part
+        # that ACKs without storing means it will be gone at the next power-up.
+        out["persisted"] = bool(r[3])
     elif sub == 0x05:                     # firmware build id
         out["build"] = r[2:].split(b"\x00", 1)[0].decode("ascii", "replace")
+    elif sub == 0x06 and len(r) >= 29:    # full pin/ADC scan
+        # 29 bytes, and MIXED endianness - match the firmware, not intuition:
+        # protocol.c writes the ten ADC samples BIG-endian at r[2..21] and the
+        # three port input registers LITTLE-endian at r[22..27].
+        # This is the reply that carries every ADC channel and the input level
+        # of every pin on ports A/B/C, i.e. the one that turns two fieldwork
+        # measurements from "trace it" into "read the table" - and it had no
+        # decoder at all, so it printed as a bare hex blob.
+        out["adc"] = [(r[2 + i * 2] << 8) | r[3 + i * 2] for i in range(10)]
+        out["idr"] = {n: int.from_bytes(r[22 + i * 2:24 + i * 2], "little")
+                      for i, n in enumerate("ABC")}
+        out["vh_on"] = bool(r[28] & 1)
+        out["vh_inhibit"] = bool(r[28] & 2)
     return out
 
 # ---- raster-conversion -----------------------------------------------------

@@ -25,7 +25,8 @@ The public sibling datasheet **KF3002-GL50A** (ROHM, "Thick Film Thermal
 Printhead 300DPI", via alldatasheet) documents the family architecture:
 
 - **Built-in shift registers + latch + heat drivers.** Host signals: `CLK`,
-  `DI1`/`DI2` (one serial data line per half), `LAT`, `STB1`/`STB2` (heat strobe
+  `DI1`/`DI2` (the family brings out two serial data inputs; this firmware
+  drives only `DI1`, 672 clocks — DECISIONS D36), `LAT`, `STB1`/`STB2` (heat strobe
   per half), `VH` (heat supply, 24 V standard for the family), `VDD` (logic,
   3.13–5.25 V), `GND`, `TM` (thermistor). `DO1`/`DO2` are data-out for
   daisy-chaining extra heads — **there is no MISO line**.
@@ -40,9 +41,15 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
 - **Calibration curves:** Fig.3 maximum energy (SLT ms/line vs TON), Fig.4
   density vs energy (mJ/dot) — reference material for dwell/density tuning.
 
-**Confirmed:** `STB` is **active-low** (Low = heat on); VH = **24 V**.
-**Assumed:** DI1/DI2 clocked **in parallel**, each carrying half the dots
-(`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h`). **Still verify on hardware:**
+**Confirmed:** VH = **24 V**.
+**NOT confirmed:** `STB` polarity. `model.h` assumes active-low (Low = heat on),
+but the KF3002-chart reading that once justified it was withdrawn — see
+DECISIONS D28 and FIELDWORK measurement 6b. Treat it as an assumption.
+**Settled from the vendor firmware (D36):** ONE data line, `HEAD_DOTS` clocks —
+`MODEL_HEAD_SHIFT_LINES 1`. The two-line alternative (DI1/DI2 in parallel,
+`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS`) is kept behind `MODEL_HEAD_SHIFT_LINES 2`
+for a flex that really brings out two independent inputs (FIELDWORK 5b).
+**Still verify on hardware:**
 the ROHM equivalence of the 550's 3C56-9638 marking (the marking itself is
 FCC-sourced), the 5XL head marking (TE3004-TP1W00A vs a custom variant), and the
 thermistor divider R_p / direction (one 25 °C reading pins it).
@@ -71,7 +78,7 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   conductors are presumed 3V3 and GND.
 - **Feed motor: identified.** A **LEILI 35BY412-339**, two-phase bipolar PM
   stepper, 4 leads, ~35 mm can, ~6.5 Ω per phase, can marked "Caution Hot
-  Surface". A 4-lead bipolar motor is driven by two H-bridges on IN1–IN4, which
+  Surface". A 4-lead bipolar motor is driven by two H-bridges — but that does NOT imply the MCU sequences them. *Every* bipolar stepper is two H-bridges; the question is whether the MCU drives IN1–IN4 or a driver IC does, and the 450 mainboard answers it the other way: **STEP / DIR / ENABLE to a driver**, with the indexer in silicon (DECISIONS D24). The 550 has its own U2, so this is not settled for our board — read the U2 marking, which costs nothing. The old wording below is kept because it describes the geometry, which
   independently validates `MOTOR_DRIVE_4PHASE` as the default in `motor.c`;
   `MOTOR_DRIVE_STEPDIR` stays only as a fallback. The driver IC itself is still
   unidentified — but **not** a TB6612, which is rated 15 V and cannot sit on the
@@ -83,6 +90,12 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   i.e. **0.92 ms and 1.08 ms per line**. Anything slower than that is not
   genuine-speed, which is why `head.c` shifts via BSRR and the motor step
   overlaps the strobe.
+- **Strobe polarity is an assumption, not a fact.** `MODEL_STB_ACTIVE_LEVEL`
+  in `model.h` says Low fires. The published KF3002 timing charts actually draw
+  STROBE idling low and pulsing high, while other variants of the same family
+  name the pin `/STB1`; polarity is per-variant and our variant has no public
+  datasheet (DECISIONS D16/D28). Check it with a current-limited supply before
+  the first 24 V test — FIELDWORK measurement 5b.
 - **Head voltage sense — an input we do NOT have.** The genuine engine "measure[s]
   the print voltage and the head temperature before each print cycle" and
   suspends printing below 19.3 V, resuming at 21 V (LW450 reference p.7). That
@@ -93,7 +106,8 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   between labels, with the engine counting motor steps between holes (550
   reference p.7). So it is an emitter/detector pair, the detector may be analog,
   and the emitter may need its own drive pin — none of which `pins.h` models yet.
-- **Head interface:** STB **active-low**, DI1/DI2 assumed driven **in parallel**, NTC
+- **Head interface:** STB polarity **assumed** active-low (withdrawn as a fact,
+  DECISIONS D28 — FIELDWORK 6b), one data line with 672 clocks (D36), NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **VH enable needs an external pull to OFF.** The MCU's GPIOs are floating
   inputs during and after reset, so whatever holds the load-switch gate in that
@@ -249,7 +263,7 @@ Table 13** ("STM32F072xx pin definitions"):
 | 14  | PA4            | **head LATCH**                               |
 | 15  | PA5            | **head CLK**                                 |
 | 16  | PA6            | **head DI1**                                 |
-| 17  | PA7            | **head DI2**                                 |
+| 17  | PA7            | **head DI2** (unused with `MODEL_HEAD_SHIFT_LINES 1`, D36) |
 | 18  | PB0            | **head STB1**                                |
 | 19  | PB1            | **head STB2**                                |
 | 20  | PB2            | head STB3 (spare)                            |
@@ -277,8 +291,8 @@ Table 13** ("STM32F072xx pin definitions"):
 | 42  | PB6            | **motor B1** (alt: I2C1_SCL pair)            |
 | 43  | PB7            | **motor B2** (alt: I2C1_SDA pair)            |
 | 44  | BOOT0          | boot config (Low = flash)                    |
-| 45  | PB8            | **I2C1 SCL** (AF2)                           |
-| 46  | PB9            | **I2C1 SDA** (AF2)                           |
+| 45  | PB8            | **I2C1 SCL** (AF1)                           |
+| 46  | PB9            | **I2C1 SDA** (AF1)                           |
 | 47  | VSS            | GND                                          |
 | 48  | VDD            | power                                        |
 
@@ -288,9 +302,11 @@ are edge pads, not leads — find a via or a test point on each net rather than
 clipping to the package. The chip boots
 from flash by default (BOOT0 = pad 44 held Low), so no boot jumper is needed.
 
-**I2C note:** on the STM32F0 line I2C is **AF2**, and I2C1 exists *only* on
-PB6/PB7 or PB8/PB9 (Table 14). The board's EEPROM SCL/SDA must be traced to one
-of those two pairs; `pins.h` currently assumes PB8/PB9.
+**I2C note:** on the F072, I2C1 is **AF1** on PB6/PB7 and PB8/PB9 (ST's
+`stm32f0xx_hal_gpio_ex.h`, STM32F072xB block: `GPIO_AF1_I2C1`; AF2 is USB and
+TIM16/TIM17). This document and `store.c` said AF2 until DECISIONS D38 - on
+silicon that would have left the EEPROM unreachable. The board's EEPROM SCL/SDA
+must still be traced to one of the two pairs; `pins.h` assumes PB8/PB9.
 
 > ⚠ **If the EEPROM turns out to be on PB6/PB7, there is a pin conflict.** The
 > default motor mode (`MOTOR_DRIVE_4PHASE`) uses PB4/PB5/**PB6/PB7** as A1/A2/
@@ -307,19 +323,19 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 |--------------------|---------------|-------------------------|------------|----------------|
 | Head CLK           | PA5           | GPIO out (shift clock)  | medium     | Signal set sourced (KF3002 datasheet); routing assumed — follow the head-connector CLK trace |
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
-| Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
+| Head DI2           | PA7           | INPUT, weak pull-down on the one-line build (D36/D39): the pad may be the head's own DO1 output, so it is never driven; GPIO out only with `MODEL_HEAD_SHIFT_LINES 2` | low | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
-| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; active-low) | medium     | Scope: wide pulse that sets the dwell |
+| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; polarity ASSUMED active-low, FIELDWORK 6b) | medium | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
 | Head STROBE 3/4    | PB2 / PB3     | GPIO out (spare, wider heads) | low        | Only if the wide head has >2 heat lines |
-| Paper sensor       | PA0           | GPIO in / or ADC        | low        | Reflection/transmission sensor; may be analog rather than digital |
+| Paper sensor       | PA0           | ADC_IN0, software Schmitt trigger (D42) | low | Analog, as the 450 firmware reads it; pad and direction assumed - `GS D 0x06` with/without stock shows both |
 | Head thermistor    | PA1           | ADC_IN1                 | medium     | Built into the head (TM pin, 30 kOhm B3950 NTC — sourced); measure the board's divider topology |
 | Motor STEP         | PB4           | GPIO / TIM3_CH1 (AF1)   | low        | Driver IC unidentified but must be 24 V-capable (MP6500-class chopper or a discrete bridge; not TB6612/DRV8834/DRV8846/A3906); count µsteps/line by scoping the phase pins during one ESC D line |
 | Motor DIR          | PB5           | GPIO                    | low        | same |
 | Motor ENABLE       | PB10          | GPIO, active-low        | low        | STEPDIR mode only (PB8 is I2C SCL) |
 | Motor 4-phase A1..B2 | PB4/5/6/7   | GPIO                    | low        | Only for direct phase drive (`MOTOR_DRIVE_4PHASE`) |
-| I2C SCL            | PB8           | I2C1_SCL (AF2)          | medium     | I2C1 is AF2 and exists only on PB6 or PB8 (datasheet Table 14). Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
-| I2C SDA            | PB9           | I2C1_SDA (AF2)          | medium     | valid only on PB7 or PB9 (Table 14); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |
+| I2C SCL            | PB8           | I2C1_SCL (AF1)          | medium     | I2C1 is AF1 (ST hal_gpio_ex.h, D38) and exists only on PB6 or PB8. Trace the EEPROM SCL to confirm PB8 vs PB6; config EEPROM + NFC front-end share this bus |
+| I2C SDA            | PB9           | I2C1_SDA (AF1)          | medium     | valid only on PB7 or PB9 (AF1, D38); EEPROM @ 0x50, SLRC610 NFC front-end @ 0x28 (ignored by our firmware) |
 | Head VH enable     | PA8           | GPIO, assumed active-low P-MOS | low | Trace the 24 V load-switch gate |
 | Status LED         | PA2           | GPIO                    | low        | Follow the LED (not PC6 — unbonded on LQFP48) |
 | Button (feed/power)| PA3           | GPIO in, pull-up        | low        | Follow the button (not PC7 — unbonded on LQFP48) |
@@ -338,9 +354,13 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
   KF3002-GL50A); the halves are fired sequentially to split peak current.
   Confirm the half count on the board (a wide head could have 4 heat lines —
   spare strobe pins PB2/PB3 are already mapped).
-- **Half-2 dot order is an assumption.** `head.c` feeds dot `i` to DI1 and dot
-  `half + i` to DI2 on the same clock, i.e. both halves shift in the same
-  direction from the centre outwards. Some two-half heads shift the second bank
+- **The head is shifted as ONE 672-stage chain on DI1** (`MODEL_HEAD_SHIFT_LINES
+  1`, D36): the vendor firmware clocks 672 times on a single data pin and its
+  image has no second one. The two-line path below is the kept alternative.
+- **Half-2 dot order (two-line path only) is an assumption.** With
+  `MODEL_HEAD_SHIFT_LINES 2`, `head.c` feeds dot `i` to DI1 and dot `half + i`
+  to DI2 on the same clock, i.e. both halves shift in the same direction from
+  the centre outwards. Some two-half heads shift the second bank
   in the opposite direction. If a test print comes out with the right half
   mirrored, reverse the DI2 index in `head_print_line()` — that is the whole
   fix. Listed in FIELDWORK as measurement 6.

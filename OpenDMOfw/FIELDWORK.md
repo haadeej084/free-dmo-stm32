@@ -10,7 +10,27 @@ own published manuals, the head datasheet or a board photo could answer has been
 read and folded into the firmware already (DECISIONS D21) — thermal limits, the
 VH rail voltage, the version-reply format, what the paper sensor actually senses,
 the per-line time budget. Section 4 lists what is settled so you do not measure
-it again. What is left is **seven measurements**, plus a five-minute contribution
+> **What belongs on this list.** Only what genuinely has to be measured on an
+> opened board with instruments. Two things that used to sit here do not:
+>
+> * **Anything a genuine printer can answer over a USB cable** — the IEEE-1284
+>   device ID, the `ESC V` reply, the 32-byte status struct in its various
+>   states, the roll record, the real die-cut gap, the density ladder. Those
+>   moved to [`LIVETEST.md`](LIVETEST.md): a printer, a cable and a capture tool,
+>   no screwdriver. One of them (the four optional 1284 keys) was *proved* in
+>   cycle 5 to be obtainable from nothing else.
+> * **Anything the firmware can compute from a reading it already takes** — the
+>   thermistor divider is now solved by `tools/calib_thermistor.py` from raw ADC
+>   codes and a thermometer, with no meter on the board.
+>
+> What is left below is the bench visit, and nothing more.
+
+it again. What is left is **nine measurements** — six, plus the strobe
+polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
+datasheet reading, plus the flex pin count (5b) and the head's Po (7) that
+DECISIONS D35/D36 added. Host acceptance is not a measurement and has moved
+to bring-up step C. Section 8 opens with the **one capture** of the 450
+board that answers six of them at once. Plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
 
 **Two routes.** Sections 3–7 are the careful one: measure first, then power.
@@ -19,9 +39,14 @@ responds, with the 24 V heat rail locked out in firmware while you do it. They
 end in the same place. Read **section 7c (risk factors)** either way — it is
 short, and it is the part that names what cannot be undone.
 
-**Flashing a factory board:** the stock F072 is reported to be at **RDP Level 2**
-(DECISIONS D13). SWD is then off until RDP is lowered (mass-erase). Do not expect `make flash` to work on an unmodified
-printer. The default `make` is the 550 build (PID `0x0028`).
+**Which chip gets flashed:** a **blank STM32F072CB** (RDP Level 0, SWD open) fitted
+in place of the stock part, or a bare dev board - never the printer's own MCU. The
+stock F072 on a genuine board is reported at **RDP Level 2** (DECISIONS D13), and
+Level 2 is permanent: it cannot be lowered, its flash cannot be read, SWD is
+dead. Those genuine boards are the *probes* in this document - the 450 board for
+the head capture (section 8, item 0), the 550 board for continuity - and they
+stay as they are. Do not expect `make flash` to do anything on one. The default
+`make` is the 550 build (PID `0x0028`).
 
 ---
 
@@ -137,56 +162,158 @@ These retire the remaining protocol entries in DECISIONS D12. Mail the hex to
 
 ---
 
-## 3. The one thing that matters most: GPIO routing
+# PROPOSED replacement for FIELDWORK.md section 3 ("The one thing that matters most: GPIO routing")
 
-The head/motor/sensor signals are plain GPIOs; the firmware bit-bangs them. The
-assumed routing (`src/pins.h`) is below. Pad numbers come from the LQFP48 map in
-`PINMAP.md` — orient the chip by its corner dot, and sanity-check that pad 7 is
-NRST before trusting your numbering.
-
-| Signal | Assumed pin | Pad | What to measure |
-|--------|-------------|-----|-----------------|
-| Head CLK   | PA5 | 15 | Continuity from pad 15 → which head-flex pin? |
-| Head DI1   | PA6 | 16 | same |
-| Head DI2   | PA7 | 17 | same |
-| Head LAT   | PA4 | 14 | same (Low = THROUGH) |
-| Head STB1  | PB0 | 18 | same (active-low heat strobe, half 1) |
-| Head STB2  | PB1 | 19 | same (half 2) |
-| Head STB3/4 | PB2 / PB3 | 20 / 39 | only if the head has more than 2 heat lines |
-| Motor A1/STEP | PB4 | 40 | which motor-driver input does pad 40 reach? (motor = LEILI 35BY412-339, 2-phase bipolar, so expect two H-bridges) |
-| Motor A2/DIR  | PB5 | 41 | same |
-| Motor B1   | PB6 | 42 | same |
-| Motor B2   | PB7 | 43 | same |
-| Thermistor | PA1 | 11 | is the NTC divider on pad 11? (ADC_IN1) |
-| Paper sensor | PA0 | 10 | is the paper sensor on pad 10? digital or analog? |
-| Head VH enable | PA8 | 29 | which pad gates the 24 V P-MOS / load switch? polarity? |
-| Status LED | PA2 | 12 | follow the LED (PC6/PC7 are not bonded on LQFP48) |
-| Button | PA3 | 13 | follow the feed/power button |
-| I2C SCL    | PB8 | 45 | confirm PB8 vs PB6 (SCL); trace EEPROM SCL |
-| I2C SDA    | PB9 | 46 | confirm PB9 vs PB7 (SDA); trace EEPROM SDA |
-
-**Method.** Board unpowered. Continuity mode between each F072 pad and the pins
-of the **head flex connector**, the **motor-driver IC**, and the **EEPROM**. The
-head side is already constrained by the ROHM pin order (CLK, DI1, DI2, LAT,
-STB1/2, VH, VDD, GND, TM), so matching "which F072 pad reaches which flex pin"
-gives you the full map.
-
-**Work the other way round where it is easier.** Buzzing 48 pads against 10 flex
-pins is 480 checks. Start from the *destination*: put one probe on head-flex pin
-1 and sweep the F072 pads — most signals land on PA4–PA7 / PB0–PB3 or nowhere.
-
-**Series resistors — expect about 22 Ω.** A Rev K board photo shows banks of SMD
-"220" (= 22 Ω) parts around the MCU on exactly these lines, with some "102"
-(1 kΩ) pulls mixed in. If a pad reads tens of ohms to a flex pin rather than a
-dead short, that **is** the connection — note the resistance instead of calling
-it "no connection".
-
-> ⚠ **If the EEPROM lands on PB6/PB7, stop and read the conflict note in
-> `PINMAP.md`.** PB6/PB7 are the default motor B1/B2 phases. Both cannot be true;
-> the motor phases have to move (PB10–PB15, PA9/PA10/PA15 are free). Do not power
-> anything until that is resolved.
+Drop-in text for lines 157-232 of FIELDWORK.md. Everything below is read out of the
+LabelWriter 450 / 450 Turbo application image
+(`LW450_LW450T_app_0x2000_20480.bin`, load 0x2000, 20480 bytes). Addresses in brackets are
+addresses in that image. Two rows are corroborated from a Rev E 550 board photo, marked as such.
 
 ---
+
+## 3. The one thing that matters most: GPIO routing
+
+**Start from the 450, not from a blank pad map.** A LabelWriter 450-generation mainboard fitted
+into a 550 prints correctly (owner report), so the 450 firmware is a working driver for *this*
+mechanism. Its MCU is an NXP LPC11Uxx, not an STM32, so its **pin numbers tell you nothing** —
+but its **signal set, polarities, idle levels and sequence do**, and those are what a 550 board
+also has to route. You are not looking for "which pad is PA5"; you are looking for *this* list
+of nets, on *these* connectors, each with a known shape on a scope.
+
+### 3.1 The complete signal set the genuine firmware drives
+
+Every GPIO the 450 application configures, in the order its own init routine configures them
+[0x4bac-0x4c76]: sixteen outputs then four inputs. "Idle" is the level the firmware leaves the
+pin at [reset-state routine 0x4c78, stop routine 0x5dac].
+
+| # | Signal | Dir | Active | Idle | Evidence |
+|---|---|---|---|---|---|
+| 1 | **Head DATA** | out | data | — | 84 bytes/line = 672 dots, over hardware SPI at PCLK/4 = 12 MHz, CPOL=0 CPHA=0. **One data line for the whole line — no second half** [SSP1 init 0x5852/0x5876, pin mux 0x58d2] |
+| 2 | **Head CLK** | out | rising | low | Same port as DATA. Data is sampled on the **rising** edge, shown twice: SSP CPOL=0/CPHA=0, and the run-length path bit-bangs it as SET-then-CLR while holding the data line [0x5634-0x5640] |
+| 3 | **Head LATCH** | out | **low** | high | One minimum-width low pulse immediately after the line is shifted, before the strobe [0x2906-0x2912] |
+| 4 | **Head STROBE** | out | **low** | high | **One strobe for all 672 dots.** Asserted after the pulse width is computed; released by a timer match [assert 0x299c; width written to CT16B0 MR0 at 0x29a0-0x29b4; release 0x29cc] |
+| 5 | **Head thermistor** | ADC | — | — | Burst-converted continuously. Head temperature, higher count = colder [ADC CR = 0x000100E0 at 0x5d72; read at 0x2a2a] |
+| 6 | **VH rail sense** | ADC | — | — | 24 V at the head. Suspend below 676 counts, resume at 751, motor slow-down at 770 [0x29f2-0x2a28] |
+| 7 | **Label-gap sensor** | ADC | — | — | **Analog, not a digital pin.** Software Schmitt trigger at 294 / 320 counts [0x2ec0-0x2ed4] |
+| 8 | **Motor STEP** | out | pulse | low | One pulse per step-timer match, on every match [low->high 0x210c-0x2118, back low 0x216c]; the timer is re-armed with the step period on each match [0x62fa-0x6302] |
+| 9 | **Motion gate (DIR or ENABLE)** | out | level | high | A level set per motion state — high in the forward states, low in three others [high 0x24d6, low 0x25fc]. The firmware **reads it back** and refuses to run the line engine while it is low [0x2e92-0x2e9c]. Which of DIR / ENABLE it is, is not established; that it is a *level*, and that printing is gated on it, is |
+| 10 | **Start-torque / boost line** | out | **low** | high | Driven low on entry to every motion state, and **automatically released to high 128 step interrupts later** by the step ISR [0x62d4-0x62f8] — about 0.9 mm of travel at 3600 steps/inch. Too short to be a plain enable; consistent with a current-boost or decay-mode input to the driver. Not established |
+| 11 | **An active-low /RESET** | out | **low** | high | Pulsed low then high exactly once, at boot [0x6354-0x636a]. Most consistent with the external driver IC's reset. Not established |
+| 12 | **Mode strap A** | out | — | **high** | Written once, never again [0x4d18] |
+| 13 | **Mode strap B** | out | — | **high** | Written once, never again [0x4d20] |
+| 14 | **Mode strap C** | out | — | **low** | Written once [0x4d28, 0x5e3a] |
+| 15 | **Engine power gate** | out | high = on | — | High at engine reset [0x4d08] and at print start [0x5e22]; low at print stop [0x5dc2], **after** the strobe is released and the motor lines are safed. This is the 450's only candidate for a head-VH or driver-supply gate, and the stop ordering is the ordering you would use for one. Not established |
+| 16 | **Unidentified pulse line** | out | **low** | high | A short low pulse in exactly three places: between the head latch and the strobe [0x2916]; immediately before the **VH-rail** ADC read [0x29e6]; and in the last few steps of a feed [0x215c]. Best guess is a fault-latch reset or an external watchdog kick. It is **not** a head data/clock/latch/strobe line — all four of those are accounted for above |
+| 17 | **Static enable** | out | — | **low** | Driven low once at boot, never again [0x637c] |
+| 18 | **Digital sensor A** | in | — | — | Software-debounced (100-tick counter). Checked at the top of every line; a 1 aborts the job [0x2c76, 0x2ea6, 0x5996] |
+| 19 | **Digital sensor B** | in | — | — | Same debounce path, second channel [0x2ca8] |
+| 20 | **Button** | in | rising | — | Edge interrupt on pin-interrupt channel 0, plus a 40-tick software debounce [0x4f76-0x4f86, 0x593c, 0x59fc] |
+| 21 | **Second edge input** | in | rising | — | Edge interrupt on pin-interrupt channel 1, polled at [0x5a36] |
+| 22-24 | **LED group (3 lines)** | out | see note | — | Blinked by a toggle routine [0x5ad0]: "on" drives two lines low and makes the third an output-low; "off" drives one high and returns the third to an **input** (tri-state). **This is the one block that does not transfer** — the 450 has one button and one indicator, the 550 has its own button/LED board (SW1-SW3, D1-D8) |
+
+That is **seventeen nets outside the front panel** (rows 1-21 minus the three-line LED group).
+It is the shopping list.
+
+### 3.2 The motor interface is STEP/DIR to a driver IC, not four phases
+
+Nothing in the image ever writes four pins as a phase table. The only direct GPIO port-register
+writes in the whole image are the two that re-mux the SPI pins [0x5902] and the run-length head
+clock [0x5628-0x563e]; every other pin movement goes through a one-pin-at-a-time HAL, so the
+inventory above is exhaustive over the image rather than a sample. What the MCU emits is **one
+STEP pulse per timer match** plus levels and straps.
+
+Step timing, for scale: the step timer's prescaler is 17 on a 48 MHz core, i.e. a **375 ns
+tick** [0x34d0-0x34d2], and the raster step period is 255 ticks = **95.6 us per STEP pulse**.
+(The other two timers: a second 375 ns timer carries the strobe width, and a 1 us timer does
+housekeeping on a 250 ms match [0x34d4-0x34d6, 0x37ca-0x37d2].)
+
+**The 550 board agrees.** On the Rev E photo, **J9 is a 4-pin connector** — two coil pairs,
+matching the 2-phase bipolar LEILI 35BY412-339 already on record — it sits next to **U2**, and
+**two 0.68 ohm "R680" sense resistors** flank it. A sense-resistor pair beside a driver package
+is a current-regulated bipolar driver, which is exactly the architecture the 450 firmware
+implies.
+
+**Consequence for `src/pins.h`:** once U2 is identified, `MOTOR_DRIVE` becomes the STEP/DIR
+variant and `MOTOR_STEPS_PER_LINE` the driver's microsteps per full step (the 450 issues 12
+pulses per line). The map is then short of a **/RESET** line and the **mode straps**: trace only
+STEP, DIR and ENABLE and the driver may sit in reset with the wrong microstep setting, and the
+motor will not turn at all.
+
+**Why the firmware still ships 4-phase (DECISIONS D40).** The 550 board's U2 is not the 450's
+driver and its marking is unread, and the two wrong guesses are not equal. Four phase lines into
+a STEP/DIR driver toggle STEP and DIR - a shuddering motor, no damage. STEP/DIR into an
+IN1-IN4 bridge holds DIR high permanently: one 6.5 ohm winding across 24 V DC, which cooks the
+motor or the driver in seconds. So the default is the harmless mistake until measurement 2 has
+read U2. Do not switch it on the strength of this section alone.
+
+### 3.3 What to look for, per connector
+
+**J6, the head flex.** Six logic nets and only six: DATA, CLK, LATCH, STROBE, plus VH and the
+thermistor return. If the flex carries the head's DI1/DI2 and STB1/STB2 separately, expect them
+**paralleled on the board** — the genuine firmware drives exactly one data line and exactly one
+strobe. LATCH and STROBE both idle **high** and pulse **low**; that is the polarity to expect,
+and confirming it is measurement 6b, which must happen before any 24 V test.
+
+**J9, the motor.** Four pins = the two coil pairs. Nothing on J9 reaches the MCU directly; it
+reaches U2. Trace the **MCU side of U2** instead, through the series-resistor bank between them:
+one pulse line (STEP), one or two levels (DIR / ENABLE), one /RESET, and two or three straps
+tied high or low.
+
+**The sensors.** Three analog and two or three digital, not one digital "paper sensor":
+
+* the head thermistor (analog),
+* the VH rail divider (analog) — the genuine firmware suspends printing on it,
+* the label-gap photocell (**analog**, with a software Schmitt trigger),
+* two debounced digital inputs the genuine firmware aborts a job on,
+* the button (edge-interrupt capable).
+
+If you find one digital paper sensor and no analog gap channel, look again: the genuine firmware
+cannot find a die-cut gap without the analog one.
+
+**No I2C.** The 450 application never enables the I2C peripheral and never touches its
+registers — it has no config EEPROM. So the 450 says nothing about `PIN_I2C_SCL`/`PIN_I2C_SDA`.
+That pair stays a pure 550-board question, and `store.c`'s boot ladder self-reports it anyway.
+
+**The VH gate.** The 450 has no pin that is unambiguously a head-power switch. Signal 15 is the
+only candidate: it goes high when the engine is armed and low at stop, after the strobe is
+released. That is weak support, not confirmation. Treat `PIN_HEAD_VH` and its polarity as a
+550-board measurement (measurement 5), bundled with measurement 6b — D31's fault handler is only
+safe if at least one of the two polarities is right.
+
+### 3.4 The honest part: what the 450 cannot tell you
+
+The 450's MCU is an NXP LPC11Uxx. Its pin *numbers* do not transfer, and no amount of
+disassembly changes that. Everything in `src/pins.h` that names a PA/PB pin is still an
+assumption read off the STM32F072 datasheet and is still worth nothing until somebody buzzes it
+out. What the 450 gives you is the list above: which nets exist, which way they point, what they
+idle at, and what fires when. That turns "sweep 48 pads against everything" into "find these
+seventeen, and you already know what each one should look like on a scope".
+
+### 3.5 Do this FIRST: the nets that need no meter
+
+Once a blank F072 with this image sits on the 550 board, the printer can find part of its own
+pin map, and `tools/discover_pins.py` drives it:
+
+* **Inputs, by diffing `GS D 0x06`.** One reply carries all ten ADC channels and the input
+  register of ports A, B and C. Take a scan, change one thing in the world, scan again; the
+  value that moved is the pin. Block and unblock the photocell (analog now, D42 - look at the
+  ADC columns, not the port bits), press the button, warm the head with a hand. That is the
+  **paper sensor, the button and the thermistor**, and with the thermistor pad known,
+  `tools/calib_thermistor.py` finishes measurement 3 from two readings.
+* **Outputs, by toggling `GS D 0x07`.** It drives a candidate pin for a millisecond at a time
+  and restores it, and it refuses the VH gate, every fitted strobe and the USB/SWD pins, so a
+  sweep cannot cost a head or the session. The **LED** announces itself. The **motor lines**
+  do too, with one correction now that the interface is known to be STEP/DIR (3.2): a single
+  toggle of STEP is one microstep, which you will neither see nor hear. Toggle the gate/enable
+  line and listen for holding torque appearing, or pulse the STEP candidate a few hundred
+  times and watch the platen creep.
+* **The EEPROM pair** is fixed at PB8/PB9 in `pins.h` (AF1, D38); `GS D 0x03` says whether the
+  part answers there. If it does not, PB6/PB7 is the only other pair the F072 offers.
+
+What this cannot find, and why: the head's logic lines (CLK, DATA, LATCH, STROBE) and the VH
+gate. The head has no serial output to read back, and the only observable effect of those
+pins involves heat. **Those stay on the meter - or fall out of the 450 capture in section 8,
+item 0.** Everything else above is a keyboard job.
 
 ## 4. What is ALREADY established (don't redo these)
 
@@ -201,11 +328,25 @@ short list of things that are already pinned down, so you can skip them.
   see `PINMAP.md`. Use it to find each pad.
 - **Head interface** = ROHM KF3002-family module: built-in shift registers + latch
   + heat drivers; signals CLK, DI1/DI2, LAT (High=HOLD/Low=THROUGH), STB1/STB2
-  (active-low), VH (24 V), VDD (3.3 V), TM (built-in NTC 30 kΩ B=3950). No MISO.
+  (polarity per-variant, ASSUMED active-low — measurement 6b, not established),
+  VH (24 V), VDD (3.3 V), TM (built-in NTC 30 kΩ B=3950). No MISO.
   Sourced from the head datasheet — only the *board routing* is unknown.
-- **STB polarity = active-low.** From the KF3002 timing chart. You do not need a
-  separate experiment for this; one glance at the scope trace you are taking
-  anyway in step B confirms it.
+- **STB polarity is NOT established — do not skip it.** This entry used to say
+  "active-low, from the KF3002 timing chart, no separate experiment needed".
+  Re-reading that chart withdrew the claim (DECISIONS D28): the published
+  KF3002 charts draw the strobe idling LOW and pulsing HIGH, and other variants
+  of the same family name the pin `/STB1`. It is **measurement 6b**, it is
+  paired with **measurement 5** (the VH gate polarity), and both must be done
+  before the head sees 24 V from anything but a current-limited supply.
+
+  The old advice was worse than merely wrong. It sent the reader to confirm
+  polarity from the scope trace taken during `diag 1` — and that capture is
+  taken in bring-up step B4, the one row of the table whose "Head power" column
+  reads **on**. So it proposed confirming the polarity only *after* the event
+  the check exists to precede. If both this polarity and the VH gate polarity
+  are inverted, the fault handler added in D31 switches the rail on into a
+  firing head; that pair is the single case where the safety handler becomes
+  the hazard.
 - **Strobe segments = 2** on both heads (two shift-register halves, 2×624 and
   2×336). From the family architecture. Only revisit if a print shows a seam at
   the halfway point or the flex carries more than two STB lines.
@@ -243,7 +384,7 @@ short list of things that are already pinned down, so you can skip them.
 > comes from the `ESC A` status only — bay status byte 10 (8 = OK, 10 =
 > counterfeit), the 12-byte SKU and the label count — and the SKU must be in
 > Connect's catalog for the install's region, or the roll shows as empty. The
-> `ESC V` version strings remain our own values (D12). See measurement 7.
+> `ESC V` version strings remain our own values (D12). See bring-up step C.
 
 ### What the silicon already rules out
 
@@ -376,6 +517,18 @@ The test pattern is designed to expose exactly the failures you are hunting: a
 border that is cut off on one side means the dot offset is wrong, a mirrored
 right half means measurement 6, and diagonals that come out as stairsteps of
 uneven height mean measurement 2.
+
+### Host acceptance — *the actual goal, once the head prints*
+With a plausible SKU configured, does **D.MO Connect** show a valid roll and
+print end to end?
+**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
+(550), then drive it from D.MO Connect.
+**If the roll shows as empty/JOKER:** Connect decides that from the status
+struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
+`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
+Connect's catalog for your region (an EU install hides US-only SKUs as
+"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
+**Report:** what Connect displayed, before and after the patch.
 
 ---
 
@@ -530,8 +683,54 @@ no command sequence in the protocol can heat the head at all.
 
 ## 8. Measurements, in the order they pay off
 
-Seven items. Everything else has been resolved in section 4 — this is the
+Nine items (1–7, with 5b and 6b), preceded by the one capture that replaces most
+of them. Everything else has been resolved in section 4 — this is the
 irreducible list that genuinely needs the board in front of you.
+
+### 0. THE ONE CAPTURE THAT REPLACES MOST OF THIS LIST
+*If you have a logic analyser and a current probe, do this before anything else.*
+
+The owner has a **LabelWriter 450 mainboard that prints correctly in the 550
+mechanism**. That is a *known-good system driving the exact hardware this
+firmware targets* — and everything below is an attempt to find out what a
+known-good system does.
+
+So instrument the head flex and let it print.
+
+**Rig:** a logic analyser on the head flex (CLK, both candidate DI pins, LAT,
+both candidate STB pins — six channels is enough), a current probe or a shunt
+plus a differential probe in the VH return, and a scope channel on VH at the
+connector. Then print one ordinary label from the 450 board.
+
+**What that single capture settles, and each of these is otherwise a separate
+measurement on this list:**
+
+| Settles | How it falls out of the capture |
+|---|---|
+| **5b, data pins** | Count the pins that carry data. One or two. The vendor drives one (D36) — this confirms it on *our* flex. |
+| **5b, strobe pins** | Count the strobe pins that ever move. If one, `HEAD_STROBE_SEGMENTS` must become 1 and the energy ceiling be re-derived. |
+| **6b, strobe polarity** | Read the idle level and the pulse direction directly. No current-limited creeping up on it. |
+| **5, VH gate** | Watch VH come up and go down, and when relative to the strobe. |
+| **7, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
+| **Head signal order** | Which flex pin is CLK, which is DI, which is LAT — by watching, not by buzzing. |
+| **The real dwell** | The strobe pulse width at a known head temperature, to compare against D30's 374–448 µs. |
+
+**Why this beats measuring our own firmware.** Everything on this list below is
+"find out what the board expects, then check that we do it". A capture of the
+450 board *is* what the board expects, measured rather than inferred, on a
+system that demonstrably works. Our firmware's behaviour can then be compared
+against it directly — `test/renode/head_shift.py` already records our bit stream
+and `head_shift` reports our strobe width.
+
+**What it does NOT settle:** the routing of the **550's own MCU pads** to that
+flex (measurement 1) — the 450 board has a different MCU and its own layout.
+That stays a continuity job. And the motor drive mode still wants the **U2
+marking** read off the 550 board (measurement 2).
+
+> ⚠ The head is the irreplaceable part. Probing a live flex means sharp probes
+> near 24 V and a head that is being driven. Use proper flex clips rather than
+> hand-held needles, and do not let a probe slip between two adjacent pins while
+> a strobe is firing.
 
 ### 1. GPIO routing — *the whole job*
 Section 3. Nothing below can be interpreted before this is done.
@@ -542,8 +741,35 @@ The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
 photos of both the 550 and the 5XL), 7.5° per step = 48 steps/rev. One full
 step per line is the estimate that fits the rated speed (DECISIONS D24), and it
 is what `MOTOR_STEPS_PER_LINE` holds; the measurement below confirms or
-corrects it in one feed. That confirms the 4-phase drive mode the firmware
-defaults to — a 4-lead bipolar motor is two H-bridges on IN1–IN4. What remains
+corrects it in one feed.
+
+> **This one may be settled without a bench.** D30 reads DYMO's own LabelWriter
+> 450 firmware as driving **12 motor steps per dot line — 3600 steps/inch** — on
+> a mechanism a 450 mainboard drives correctly when fitted to a 550, while D24
+> says 300. They cannot both be full steps (twelve would be 18750 rpm), so the
+> 450's twelve are microsteps and our `1` is right **only if it microsteps
+> exactly 12:1**. Counting the entries in the table the 450's CT32B0 step ISR
+> indexes answers it from the image already in `scratchpad`. Do that before
+> spending bench time here; if it comes back four-entries-cycled-three-times,
+> this constant is wrong by a factor of four and every label is the wrong
+> length. **That sentence used to claim the 450 count "confirms the 4-phase drive mode".
+It says the opposite.** The 450 mainboard drives this mechanism with
+**STEP / DIR / ENABLE to a driver IC** — three pins, one pulse per step, no
+phase table anywhere in its image — and the microstep indexer is inside that
+driver. The old justification ("a 4-lead bipolar motor is two H-bridges on
+IN1–IN4") is a non-sequitur: *every* bipolar stepper is two H-bridges; the
+question is whether the MCU sequences them or a driver IC does.
+
+> ### Do this FIRST, and it costs nothing
+> **Read the marking on U2 and its mode straps.** The 550 board has its own
+> driver (a Rev K report notes a different U2), so the 450 proves the interface
+> for the 450's board and not ours — but the part number on U2 decides the whole
+> 4-phase-versus-STEP/DIR question in one look, before any feed test. On the 450
+> the strap signature is visible in the image: two pins driven high and one low
+> once at boot and never touched again.
+>
+> If U2 is a STEP/DIR driver, `MOTOR_DRIVE` must become `MOTOR_DRIVE_STEPDIR`
+> and the microstep ratio comes off its datasheet rather than off a feed test. What remains
 is the drive train between motor and platen.
 Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
 driven **IN1–IN4 directly** (`MOTOR_DRIVE_4PHASE`), `MOTOR_STEPS_PER_LINE = 1`.
@@ -569,7 +795,27 @@ sensible integer. 300 lines must advance exactly **25.4 mm**.
 **Patch:** `MOTOR_STEPS_PER_LINE` and, if the motor stalls or sings,
 `MOTOR_STEP_US` in `motor.c`.
 
-### 3. Thermistor divider — *two readings, then read the numbers off a table*
+### 3. Thermistor divider — *no meter: two ADC readings and a thermometer*
+> **The meter is gone from this one.** `tools/calib_thermistor.py` solves the
+> divider from the raw ADC code alone. The NTC curve is known (30 kOhm at 25 °C,
+> B = 3950), so ONE reading at a known temperature is one equation in one
+> unknown and pins `R_p`; a SECOND reading with the head warmer settles the
+> topology, because the wrong pull direction makes `R_p` move by a large factor
+> while the right one holds. Run:
+>
+> ```
+> opsend.py diag 4                      # thermistor_raw, printer cold
+> ...print a few lines to warm the head, then diag 4 again...
+> python3 tools/calib_thermistor.py --code 1638 --temp 21 --code2 2100 --temp2 34
+> ```
+>
+> It prints the three `THERMAL_*_RAW` defines and `THERMAL_HOTTER_IS_HIGHER`
+> ready to paste. What you still need is a **thermometer and a cold printer** -
+> the arithmetic is only as good as the temperature you type, and the curve moves
+> about 4 %/K near 25 °C. The prose below is kept as the fallback for a board
+> where the ADC reads nothing at all.
+
+
 The head's built-in NTC is **30 kOhm at 25 °C, B = 3950** (ROHM datasheet), and
 the temperatures that matter are DYMO's own, not invented: the LabelWriter 450
 manual states the engine "halt[s] printing if the print head temperature exceeds
@@ -586,8 +832,9 @@ board's divider.
 **Step 1 — two readings.** `diag 4` at room temperature, then again after warming
 the head gently (hairdryer on low, ~20 s). Note the room temperature.
 
-**Step 2 — direction.** Raw went **up** when warm ⇒ `THERMAL_HOTTER_IS_HIGHER 1`
-(NTC to VDD, `R_p` to GND). Raw went **down** ⇒ set it to `0`.
+**Step 2 — direction.** Raw went **down** when warm ⇒ `THERMAL_HOTTER_IS_HIGHER 0`
+(`R_p` to VDD, NTC to GND) - the 450 board's topology and the shipped default
+(D41). Raw went **up** ⇒ set it to `1`.
 
 **Step 3 — pick the column your 25 °C reading matches and copy the two
 thresholds.** 12-bit ADC, rounded. Enter the pull-down numbers either way —
@@ -595,26 +842,29 @@ thresholds.** 12-bit ADC, rounded. Enter the pull-down numbers either way —
 
 *Pull-down (`THERMAL_HOTTER_IS_HIGHER 1`)*
 
-| | R_p = 10 k | 20 k | 30 k | 47 k | 100 k |
-|---|---|---|---|---|---|
-| raw @ 25 °C (match this) | 1024 | **1638** | 2047 | 2500 | 3150 |
-| **`THERMAL_COLD_RAW`** (25 °C) | 1024 | **1638** | 2047 | 2500 | 3150 |
-| **`THERMAL_RESUME_RAW`** (56 °C) | 2200 | **2862** | 3181 | 3461 | 3770 |
-| **`THERMAL_LIMIT_RAW`** (70 °C) | 2680 | **3240** | 3482 | 3681 | 3890 |
+| | R_p = 10 k | 20 k | **25.75 k (450)** | 30 k | 47 k | 100 k |
+|---|---|---|---|---|---|---|
+| raw @ 25 °C (match this) | 1024 | 1638 | **1891** | 2047 | 2500 | 3150 |
+| **`THERMAL_COLD_RAW`** (25 °C) | 1024 | 1638 | **1891** | 2047 | 2500 | 3150 |
+| **`THERMAL_RESUME_RAW`** (56 °C) | 2200 | 2862 | **3068** | 3181 | 3461 | 3770 |
+| **`THERMAL_LIMIT_RAW`** (70 °C) | 2680 | 3240 | **3398** | 3482 | 3681 | 3890 |
 
 *Pull-up (`THERMAL_HOTTER_IS_HIGHER 0`) — for matching your 25 °C reading only*
 
-| | R_p = 10 k | 20 k | 30 k | 47 k | 100 k |
-|---|---|---|---|---|---|
-| raw @ 25 °C | 3071 | 2457 | 2048 | 1595 | 945 |
+| | R_p = 10 k | 20 k | **25.75 k (450)** | 30 k | 47 k | 100 k |
+|---|---|---|---|---|---|---|
+| raw @ 25 °C | 3071 | 2457 | **2204** | 2048 | 1595 | 945 |
 
-The shipped defaults are the **20 k pull-down** column (bold). If your reading
-matches a different column, change three numbers in `thermal.c` and you are done.
+The shipped defaults are the **25.75 k pull-up** column (bold): the single
+pull-up that reproduces the 450 firmware's own 176 / 255 thresholds at 70 / 56 °C
+(D30, D41). If your reading matches a different column, change three numbers in
+`thermal.c` and you are done; `tools/gen_thermal_table.py` regenerates the dwell
+table for any other `R_p`.
 
 **Report:** room temperature and both raw readings. That alone lets someone else
 finish this without the board.
 
-### 4. Top-of-form photocell — *what it is, is known; the wiring is not*
+### 4. Top-of-form photocell — *analog, as the 450 reads it; the pad and the direction are not known*
 Not a plain "paper present" switch. The 550 manual (p.7) says: "An infrared LED
 photocell detects the top-of-form sense hole that is located between labels. The
 absolute positions of the label and the tear bar are calculated based upon the
@@ -622,18 +872,22 @@ reading of an infrared LED photocell sensor." So it is an **emitter + detector
 pair** reading the gap hole, and the genuine firmware counts motor steps between
 holes to track position.
 
-Two consequences for us:
-- The detector may be **analog**, not a logic level. If so it belongs on an ADC
-  pin (PA0–PA7, PB0, PB1 are the only candidates) with a threshold, not on a
-  GPIO read.
-- The **emitter may need driving**. `pins.h` has no pin for it. If the LED is not
-  simply tied to 3V3 through a resistor, find the pin that gates it and add it.
+The genuine 450 firmware settles what kind of signal it is: **analog**, squared
+up in software with a Schmitt trigger at 294 / 320 counts of 1023 (section 3.1,
+row 7). The firmware now reads it the same way (D42): ADC on PA0 with those two
+thresholds scaled to 12 bits. What is left to find:
+- **The pad.** PA0 is assumed; the ADC candidates are PA0–PA7, PB0, PB1. `GS D
+  0x06` with and without stock over the sensor shows which channel moves.
+- **The direction.** `PAPER_ADC_HIGH_IS_ABSENT` assumes more light (the gap
+  hole, or no stock) reads HIGHER. If the channel goes the other way, flip it.
+- **The emitter.** It may need a drive pin; `pins.h` has none. If the IR LED is
+  not simply tied to 3V3 through a resistor, find the pin that gates it.
 
-**How:** `diag 4` with and without stock in the path, and again with a label gap
-over the sensor; watch `paper_present`. If it never changes, measure the pin
-voltage in each state.
-**Patch:** `PIN_PAPER_SENSE` / `PAPER_PRESENT_LEVEL` in `pins.h`, or move it to
-the ADC. By default this does **not** gate printing (`OP_FLAG_PAPER_FORCE`,
+**How:** `diag 6` (the scan) with stock, without, and with a label gap over the
+sensor; the channel that moves, and which way, answers pad and direction in one
+go. `diag 4` shows the squared-up result.
+**Patch:** `PAPER_ADC_CH` / `PAPER_ADC_HIGH_IS_ABSENT` in `pins.h`; the two
+thresholds only if the 550's photocell sits at a very different level. By default this does **not** gate printing (`OP_FLAG_PAPER_FORCE`,
 DECISIONS D14) — it only drives the LED — so a wrong result here cannot stop you
 printing.
 
@@ -651,27 +905,157 @@ firmware holds the pin low.
 **Symptom if wrong:** everything looks right on the logic lines and the head
 simply never marks the paper.
 
-### 6. Half-2 dot order — *assumption, easiest to spot in print*
-`head.c` sends dot `i` to DI1 and dot `half + i` to DI2 on the same clock. Some
-two-half heads shift the second bank in the opposite direction. The split itself
-is assumed too: `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h` say 336 + 336
+> **Do this together with measurement 6b, in one sitting, before the first 24 V
+> test.** They are no longer two independent unknowns. The fault handler
+> (DECISIONS D31) drives PA8 to `!HEAD_VH_ON_LEVEL` on every fault, including a
+> fault before `SystemInit()`, where reset had left the pin a floating input.
+> If the gate polarity is inverted, that handler switches the rail **on** in a
+> window that used to be safe by default. Its only mitigation is that the heat
+> strobes are already at `!MODEL_STB_ACTIVE_LEVEL` by then, so the head draws
+> nothing — which assumes the strobe polarity is right. Either assumption alone
+> being wrong is survivable; **both wrong at once is the one case where the
+> safety handler becomes the hazard.** So confirm both, and report both, before
+> the head sees 24 V from anything other than a current-limited bench supply.
+
+### 5b. How many DATA pins and how many STROBE pins does the flex bring out?
+*Two continuity checks, and between them they decide whether the firmware can
+print at all.*
+
+**Data pins.** DECISIONS D36: the vendor's own firmware feeds this head **672
+clocks on ONE data line**, and its image contains no second head data pin. The
+firmware now defaults to that (`MODEL_HEAD_SHIFT_LINES 1`). Confirm it: does the
+flex bring out one data pin or two?
+* **One** → leave the default; `HEAD_DI2_DOTS` is meaningless. On this build PA7
+  is an **input** with a weak pull-down, never driven - so if that pad turns out
+  to be the head's DO1 output there is no bus conflict (D39).
+* **Two** → set `MODEL_HEAD_SHIFT_LINES 2`, and measurement 6 (which half enters
+  first) becomes live. Be careful here: if the two are a daisy chain (DO1 → DI2)
+  rather than two independent inputs, driving DI2 from the MCU is a bus conflict
+  against the head's own output, and the answer is still 1.
+
+**Strobe pins.** `MODEL_STROBE_SEGMENTS` is 2, and the genuine firmware fires
+**one strobe for all 672 dots** — it never drives a second. D30 keeps the split
+for a supply reason that still stands (the 550 ships a 42 W brick against the
+450's 60 W, and we have a load switch the 450 does not). Since D39 the firmware
+no longer *depends* on the answer for correctness: on the one-line build every
+fitted strobe fires for every line that has ink, so a flex with one strobe net,
+or two nets that cover the halves the other way round, still prints every dot.
+What the answer still decides is **time and energy**: with a single net the
+second strobe pulse is wasted budget, so `HEAD_STROBE_SEGMENTS` should become 1
+**and the energy ceiling be re-derived for a whole-line strobe** - or, if the
+450 capture shows one strobe of the width D30 predicts, that is the answer
+already.
+
+### 6. Half-2 dot order — *only if 5b finds TWO data pins*
+With the default `MODEL_HEAD_SHIFT_LINES 1` (DECISIONS D36) all 672 dots go out
+on DI1 in one chain and this measurement does not exist. It becomes live only if
+5b finds a second, independent data input. Then `head.c` sends dot `i` to DI1
+and dot `half + i` to DI2 on the same clock, and some two-half heads shift the
+second bank in the opposite direction. The split itself is assumed too: `MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h` say 336 + 336
 (550) and 624 + 624 (5XL). **Report the head's part marking** (the 550 head bar
 reads `3C56-9638`; the 5XL one is unknown) — if its datasheet gives a different
 register split, change those two numbers; `head.c` handles unequal halves.
 **How:** print `opsend.py testpattern`. If the right half of the pattern is
 mirrored, reverse the DI2 index in `head_print_line()`.
 
-### 7. Host acceptance — *the actual goal*
-With a plausible SKU configured, does **D.MO Connect** show a valid roll and
-print end to end?
-**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
-(550), then drive it from D.MO Connect.
-**If the roll shows as empty/JOKER:** Connect decides that from the status
-struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
-`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
-Connect's catalog for your region (an EU install hides US-only SKUs as
-"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
-**Report:** what Connect displayed, before and after the patch.
+### 6b. Strobe polarity — *falls out of the 450 capture; bench it only without one*
+The 450 firmware drives its strobe active-LOW, idle high (3.1, row 4), on a
+mechanism a 450 board prints on correctly, so `MODEL_STB_ACTIVE_LEVEL 0` is
+corroborated rather than guessed. If you have the capture from item 0 the idle
+level and pulse direction are in it and this section is done. The procedure
+below is the fallback for a bench with no logic analyser.
+
+`model.h`'s `MODEL_STB_ACTIVE_LEVEL` says a LOW level fires the heat drivers.
+That is an assumption: the published KF3002 timing charts draw the strobe
+idling low and pulsing high, and other variants of the same family name the pin
+`/STB1` (DECISIONS D28). If it is wrong, the head fires continuously the moment
+the 24 V rail comes up.
+**How:** keep `OP_FLAG_VH_INHIBIT` set (`opsend.py vh off`). Power VH from a
+bench supply current-limited to ~100 mA instead of the brick. Assert each
+strobe pin in turn with `opsend.py diag 7 <port> <pin> 1` — no, that command
+refuses the strobes on purpose; use `diag 1 1` (one head line) once per
+candidate polarity instead, with the head connected and the current meter
+watched. The polarity that draws essentially no current with the strobe idle,
+and a brief current pulse only while printing, is the right one.
+**If in doubt, leave it as is and report the measurement** — this is exactly
+the kind of thing that is cheap to measure and expensive to guess.
+**Patch:** `MODEL_STB_ACTIVE_LEVEL` in `src/model.h`, one line.
+**Pair this with measurement 5** — see the note there. The fault-safe handler's
+guarantee rests on these two polarities together, not on either one alone.
+
+### 7. Po at the fitted head — *the one number that unlocks the energy model*
+**This was missing from this list**, although `DECISIONS.md` D30 closes by naming
+it as the single measurement that unblocks everything about the head's energy:
+`HEAD_BASE_DWELL_US` (270) and `HEAD_MAX_DWELL_US` (410) are both derived from an
+**assumed** Po of 0.43 W/dot and Rave of 1250 Ω, taken from published KF3002
+siblings — and the head actually fitted (`3C56-9638`) is in no public ROHM
+catalogue. No amount of further disassembly or research moves those constants;
+this does.
+
+**Why it matters more than it looks.** At the assumed Po, today's 337.5 µs sits
+at 0.906 of ROHM's maximum-energy envelope and the 450-transposed 405 µs at
+0.991 — but if the real Po is 17 % higher, today is still at 0.99 while the
+ported value is at **1.19**. Today's number absorbs a 20 % error in an unmeasured
+constant. That is the whole reason D30 declined to port the genuine dwell.
+
+**How — and a correction, because the obvious method does not work.** An
+earlier draft of this entry asked for a four-wire resistance across one dot.
+**You cannot measure a single dot externally.** In a KF3002-class head the
+heating elements sit between the common VH rail and the outputs of drivers that
+are *inside the head module*; the only pins the flex brings out are VH, VDD,
+GND, CLK, DI1, DI2, LAT, STB and TM. There is no per-dot terminal to probe, and
+with the drivers off there is no path at all.
+
+So measure the current instead, with a known number of dots energised:
+
+1. **Put a shunt in the VH return** — a few tens of milliohms, non-inductive —
+   and watch it on a scope. A DMM will not do: the strobe is a ~340 µs pulse.
+2. **Print a line with a known dot count.** Our own firmware controls the raster
+   exactly, so print all-black (`HEAD_DOTS` dots, but note the halves fire
+   *sequentially*, so the current you see is one half at a time) and then a line
+   with a small known count for a cross-check.
+3. **Read VH at the head connector during that pulse**, on the same scope. The
+   rail is an unregulated brick and it sags under the pulse; the loaded figure
+   is the one that matters, not 24 V nominal.
+
+Then `I_dot = I_measured / dots_energised`, `Po = V_loaded × I_dot`, and
+`HEAD_MAX_DWELL_US = 0.177 mJ / Po`.
+
+> **This reading now settles two things at once.** D35 found that ROHM's newest
+> head of identical geometry and the same 24 V rail is **850 Ω**, against 1250 Ω
+> on the four others — and nothing public says which grade DYMO specified. A dot
+> draws **19.2 mA through 1250 Ω** and **28.2 mA through 850 Ω**, a 47 %
+> difference this measurement separates easily. If it comes back near 28 mA, the
+> firmware's present dwell is **above** the head's energy ceiling rather than
+> comfortably under it, and `HEAD_MAX_DWELL_US` has to come down to about
+> 260 µs. That is the single most consequential outcome of the whole bench visit.
+
+**Without a scope** there is still a usable approximation: print continuously at
+a known coverage, measure the *average* VH current with a DMM, and divide by the
+duty cycle (strobe time ÷ line period, both of which `GS D 0x04` and the line
+rate give you). Cruder, but it brackets Po, and bracketing it is already better
+than the analogue the firmware assumes today.
+
+**Report both raw numbers**, not the computed Po — the 0.177 mJ comes off a
+curve that itself depends on line time (see below), and a later reader needs to
+redo that arithmetic rather than inherit it.
+
+> **Carry this forward, because it is counter-intuitive and easy to get backwards:**
+> ROHM's rated pulse energy is **not a flat constant**. It rises with scanning
+> line time, so a **faster** printer has a **lower** ceiling. `head.c` carries a
+> `_Static_assert` that refuses to build if `MODEL_LINE_PERIOD_US` leaves the
+> band the current ceiling was derived for.
+
+**Two cheaper experiments that inform it**, in descending order of value:
+- **Scope the 450 board's strobe line while it drives the 550 mechanism.** This
+  is the one experiment the owner's mainboard-swap report makes possible, and it
+  gives the genuine dwell at the genuine rail directly.
+- **Total head current on a full-width black line.** Near 12 A means the head
+  does no hardware dot grouping; a fraction of it means every energy figure in
+  D30 divides by the group count.
+
+**Patch:** `HEAD_MAX_DWELL_US` in `src/printer/head.c`, and then `D30`'s deferred
+port becomes a decision rather than a guess.
 
 ---
 
@@ -687,11 +1071,14 @@ Connect's catalog for your region (an EU install hides US-only SKUs as
 | Motor buzzes, doesn't turn | phase order or `MOTOR_STEP_US` too short | `k_phase[]`, `motor.c` |
 | `diag 1` fires 0 lines | thermal gate — the head reads as over-limit | measurement 3 |
 | Head logic looks right, nothing prints | VH never enabled | measurement 5 |
+| **Label feeds and ejects BLANK, LED blinking fast** | the heat rail is locked out: `OP_FLAG_VH_INHIBIT` is set. Either you set it (`opsend.py vh off`), or the config record failed its checksum and the firmware locked it out for you — see **DECISIONS D32** | `diag 4` / `diag 6` report the flag; `opsend.py vh on` clears it. If it comes back after every power cycle, the EEPROM is not storing: `diag 3`, and check `GS D 0x08`'s **persisted** byte |
+| `diag 4` raw is 0 or 4095, and status byte 8 reads 2 | the head thermistor is open or shorted — or simply not fitted, which is the normal state of a bring-up board. The firmware treats this as a THIRD state, not as a cold head (**DECISIONS D33**): minimum dwell, self test refused, host told. Print is light but the printer works | measurement 3; `thermal.c` `THERMAL_OPEN_RAW` / `THERMAL_SHORT_RAW` |
+| LED blinks fast with a healthy head and paper | same two states as above — the LED's 5 Hz pattern means "cannot put a dot on a label", which now includes the heat lockout and not only over-temperature | `main.c` `led_update()` |
 | Print is stretched or squashed vertically | µsteps per line | measurement 2 |
 | Right half of the image mirrored | DI2 dot order | measurement 6 |
 | Print too light / too dark | dwell and density | `HEAD_BASE_DWELL_US`, `opsend.py density` |
 | Label starts in the wrong place | die-cut gap / tear offset | `LABEL_GAP_DOTS`, `TEAR_EXTRA_DOTS` in `protocol.c` |
-| Connect shows "empty"/JOKER roll | host-side validation | measurement 7, `pc-patch/` |
+| Connect shows "empty"/JOKER roll | host-side validation | bring-up step C, `pc-patch/` |
 
 ---
 
@@ -724,18 +1111,24 @@ GPIO ROUTING (pad number, or "none", or ohms if via a series resistor)
   I2C SCL:             I2C SDA:
 
 MEASUREMENTS (section 8)
-  2 Motor: drive mode, steps issued, mm moved, -> MOTOR_STEPS_PER_LINE:
+  0 450-board capture done? yes/no  (attach the logic-analyser export;
+      data pins seen: __  strobe pins seen: __  strobe idle level: __
+      strobe width __ us at head temp __ C  VH __ V loaded)
+  2 Motor: drive mode (U2 marking: ____), steps issued, mm moved, -> MOTOR_STEPS_PER_LINE:
   3 Thermistor: room temp __ °C -> raw __ ; warmed -> raw __
       (that is enough - the R_p column and both thresholds follow from the table)
   4 Top-of-form photocell: digital or analog? levels with / without stock;
       does the IR emitter need a drive pin?
   5 VH: voltage measured, enable pad, polarity:
-  6 Half-2 dot order (mirrored in test print? yes/no):
-  7 D.MO Connect: roll shown as ____ ; printed? ____ ; pc-patch needed? ____
+  5b Flex: data pins brought out __ (1/2)   strobe pins brought out __ (1/2)
+  6 Half-2 dot order (only if 5b = 2 data pins; mirrored in test print? yes/no):
+  6b STB polarity: idle level __ ; fires on low / high
+  7 Po: VH return current __ mA during a strobe of __ dots at VH __ V
+      -> __ mA per dot (850 ohm grade = 28.2 mA, 1250 ohm = 19.2 mA; D35)
 
 CONFIRMATIONS (free, while you are already scoping - section 4)
   STB pulses low to fire?            yes / no / not scoped
-  DI1 and DI2 both driven?           yes / no / not scoped
+  Only DI1 driven (DI2 idle)?        yes / no / not scoped
   Number of STB lines on the flex:
   diag 3 result (eeprom_match):
 

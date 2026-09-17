@@ -55,7 +55,7 @@ int usb_class_setup(const usb_setup_t *s)
         return 1;
     }
     case 2: /* SOFT_RESET */
-        usb_ep_flush_in(EP_DATA);
+        usb_ep_soft_reset(EP_DATA);
         protocol_reset();
         usb_ctrl_ack();
         return 1;

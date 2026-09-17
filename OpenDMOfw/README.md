@@ -6,9 +6,10 @@
 > complete and verified** (both models build clean; every software-testable path is
 > tested), but the firmware **has not yet been run on a real board**. Before it prints,
 > someone with a genuine LabelWriter 550 must do the **hardware fieldwork** in
-> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **seven** items: GPIO routing,
+> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **nine** items: GPIO routing,
 > the motor drive train, the thermistor divider resistor, the top-of-form sensor,
-> the VH enable pin, the half-2 dot order, and host acceptance.
+> the VH enable pin, the strobe polarity, the half-2 dot order, and host
+> acceptance.
 >
 > **You can help in five minutes without opening anything.** If you own a working
 > LabelWriter and a genuine roll, three USB captures (`FIELDWORK.md` section 1b)
@@ -106,12 +107,23 @@ src/                  firmware (C, hand-rolled USB FS device stack)
   usb/usb_desc.c      USB descriptors: VID/PID/strings/IEEE-1284 device ID
   config/store.c      I2C EEPROM config store (SKU + count), with compiled defaults
 tools/opsend.py       driver-less host sender (libusb) that speaks the real protocol
+tools/probe_genuine.py  read-only interrogation of a GENUINE printer (LIVETEST.md)
+tools/discover_pins.py  self-discovering pin map via GS D on a flashed board (FIELDWORK 3.5)
+tools/calib_thermistor.py  solves the thermistor divider from ADC codes, no meter
+tools/gen_thermal_table.py  regenerates the NTC lookup table in thermal.c
 pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico icon)
 test/test_protocol.c  host unit test of the parser (mocked hardware)
 test/test_usb.c       host unit test of the USB stack (register-level peripheral model)
 test/test_e2e.c       USB stack + parser end to end (a full job through 64-byte packets)
-test/renode/          the real image in the Renode emulator (boot, LED, head shift, EEPROM, DFU)
+test/test_thermal.c   thermistor curve, dwell law and the energy ceiling
+test/test_motor.c     the feed stepper: phase ORDER, break-before-make, idle release
+test/test_store.c     the I2C EEPROM config store against a register-level part model
+test/test_system.c    sys_pin_toggle(): the hot-pin guard on the real function
+test/renode/          the real image in the Renode emulator (boot, LED, head shift,
+                      EEPROM, DFU, and the fault safe state)
 tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
+FIELDWORK.md          what has to be MEASURED on an open printer, and nothing else
+LIVETEST.md           what a genuine printer answers over USB, no screwdriver
 ```
 
 ## Build

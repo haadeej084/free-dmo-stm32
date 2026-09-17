@@ -126,6 +126,19 @@ int main(void)
      *    12-digit serial without a leading zero; unknown index stalls. */
     r = ctrl_in(0x80, 6, 0x0300, 0, 255, b);
     CHECK(r == 4 && b[2] == 0x09 && b[3] == 0x04);
+    /* Index 1, iManufacturer. Windows asks for it during enumeration, and the
+     * comment above has claimed since the file was written that it is tested;
+     * it was not. The whole descriptor is compared rather than just the text,
+     * because bLength comes from the USTR macro's sizeof and is exactly the
+     * field a later edit would break silently. */
+    r = ctrl_in(0x80, 6, 0x0301, 0x0409, 255, b);
+    {
+        static const uint8_t want[10] = { 10, 3, 'D',0,'Y',0,'M',0,'O',0 };
+        CHECK(r == 10 && memcmp(b, want, 10) == 0);
+    }
+    /* A short read honours wLength: one short packet, nothing padded. */
+    r = ctrl_in(0x80, 6, 0x0301, 0x0409, 4, b);
+    CHECK(r == 4 && b[0] == 10 && b[1] == 3 && b[2] == 'D');
     r = ctrl_in(0x80, 6, 0x0302, 0x0409, 255, b);
     {
         char prod[40]; int n = (r - 2) / 2;
@@ -141,6 +154,12 @@ int main(void)
         CHECK(r == 26 && digits && b[2] != '0');
     }
     CHECK(ctrl_in(0x80, 6, 0x0307, 0x0409, 255, b) == STALL);
+    /* An unknown descriptor TYPE stalls too, which is a different branch from
+     * an unknown string INDEX. DEVICE_QUALIFIER (6) is the one a real host
+     * actually asks for: a full-speed-only device must stall it rather than
+     * answer, or the host will go looking for a high-speed configuration that
+     * does not exist. */
+    CHECK(ctrl_in(0x80, 6, 0x0600, 0, 10, b) == STALL);
     /* EP0 recovers from that STALL at the next SETUP (RM0091 30.5.2). */
     r = ctrl_in(0x80, 0, 0, 0, 2, b);
     CHECK(r == 2 && b[0] == 0x01 && b[1] == 0x00);      /* self-powered */
@@ -156,6 +175,16 @@ int main(void)
     CHECK(g_resets == 1 && usb_is_configured());
     r = ctrl_in(0x80, 8, 0, 0, 1, b);
     CHECK(r == 1 && b[0] == 1);
+    /* GET_INTERFACE (USB 2.0 9.4.4). One interface with one alternate setting,
+     * so the answer is always the single byte 0. Implemented since the first
+     * commit and requested by no test until now. */
+    CHECK(ctrl_in(0x81, 10, 0, 0, 1, b) == 1 && b[0] == 0x00);
+    b[1] = 0xAA;
+    CHECK(ctrl_in(0x81, 10, 0, 0, 64, b) == 1 && b[0] == 0x00 && b[1] == 0xAA);
+    /* wIndex is NOT validated: any interface number answers 0, where USB 2.0
+     * 9.4.4 asks for a Request Error. Pinned deliberately, so that tightening
+     * it later is a visible edit rather than a silent behaviour change. */
+    CHECK(ctrl_in(0x81, 10, 0, 3, 1, b) == 1 && b[0] == 0x00);
 
     /* 7) Bulk OUT reaches the parser, and the endpoint re-arms at full
      *    capacity for a maximum-size packet. */
@@ -272,10 +301,79 @@ int main(void)
     CHECK(ctrl_nodata(0x02, 1, 0, 0x02) == 0);
     CHECK(host_out(EP_DATA, (const uint8_t *)"q", 1) == 0);
 
+    /* 14b) An endpoint-recipient request may only name an endpoint that exists.
+     *      EPR[] has eight entries and an endpoint that was never given an
+     *      address would answer for endpoint 0 (RM0091 30.6.2, EA), so a bad
+     *      wIndex is a Request Error, not something to act on. USB 2.0 9.4.5
+     *      also says Halt is not recommended for the default control pipe. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x81) == STALL);    /* no such endpoint */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x03) == STALL);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x0F) == STALL);    /* would index past EPR[] */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x81) == STALL);
+    CHECK(ctrl_in(0x82, 0, 0, 0x81, 2, b) == STALL);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x00) == STALL);    /* halt on EP0: refused */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x80) == 0);        /* clear on EP0: harmless ack */
+    r = ctrl_in(0x82, 0, 0, 0x00, 2, b);
+    CHECK(r == 2 && b[0] == 0);                       /* EP0 is never halted */
+    /* the bulk pair still works, and the endpoints are untouched by the above */
+    CHECK(host_out(EP_DATA, (const uint8_t *)"z", 1) == 0);
+    CHECK(usbp_send_reply((const uint8_t *)"y", 1) == 1);
+    CHECK(host_in(EP_DATA, b, 64) == 1);
+
     /* 15) A SOFT_RESET clears a host-set IN stall (Printer Class 1.1 4.2.3). */
     CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
     CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);
     CHECK(host_in(EP_DATA, b, 64) == NAK);
+
+    /* 15a) A HOST-SET HALT SURVIVES THE DATA PATH.
+     *
+     * USB 2.0 9.4.5 lets only CLEAR_FEATURE, SET_CONFIGURATION, SET_INTERFACE
+     * and - for this class - the printer SOFT_RESET clear Halt. A device-side
+     * data write is none of those, but usb_ep_write() used to end with
+     * STAT_TX = VALID unconditionally, so a single reply un-halted the pipe
+     * underneath the host. No special traffic was needed: one "ESC A" already
+     * in the host's queue is answered through usb_ep_write().
+     *
+     * Everything below passed identically before the fix, which is why it is
+     * here: the whole suite was blind to it. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);           /* host halts IN */
+    CHECK(usbp_send_reply((const uint8_t *)"status", 6) == 0);  /* reply dropped */
+    CHECK(host_in(EP_DATA, b, 64) == STALL);             /* still halted */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 1);                          /* GET_STATUS agrees */
+    CHECK(ctrl_nodata(0x02, 1, 0, 0x82) == 0);           /* CLEAR_FEATURE may */
+    CHECK(host_in(EP_DATA, b, 64) == NAK);
+
+    /* 15b) ...and the same on OUT: the parser saying "I have room again" is
+     *      flow control, not a Halt-clearing request. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x02) == 0);           /* host halts OUT */
+    usb_ep_rx_ready(EP_DATA);                            /* parser re-arms */
+    CHECK(host_out(EP_DATA, (const uint8_t *)"x", 1) == STALL);
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 1);
+
+    /* 15c) SOFT_RESET clears BOTH stall conditions, which is what Printer Class
+     *      1.1 4.2.3 says and what the OUT side did not do: the only thing that
+     *      used to clear a host-set OUT halt was the parser's re-arm, and that
+     *      is now correctly refused. Halt both, then reset. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);              /* SOFT_RESET */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 0);                          /* IN un-halted */
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 0);                          /* OUT un-halted too */
+    usb_ep_rx_ready(EP_DATA);
+    CHECK(host_out(EP_DATA, (const uint8_t *)"x", 1) == 0);
+
+    /* 15d) SET_INTERFACE is the SECOND recovery route chapter 9 gives a host
+     *      after a STALL. It used to report success and do nothing. */
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x82) == 0);
+    CHECK(ctrl_nodata(0x02, 3, 0, 0x02) == 0);
+    CHECK(ctrl_nodata(0x00, 11, 0, 0) == 0);             /* SET_INTERFACE */
+    r = ctrl_in(0x82, 0, 0, 0x82, 2, b);
+    CHECK(r == 2 && b[0] == 0);
+    r = ctrl_in(0x82, 0, 0, 0x02, 2, b);
+    CHECK(r == 2 && b[0] == 0);
 
     /* 16) Re-configuration resets both toggles to DATA0 (RM0091 30.6.2). */
     host_usb.EPR[EP_DATA] |= USB_EP_DTOG_TX | USB_EP_DTOG_RX;

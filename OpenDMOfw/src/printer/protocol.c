@@ -25,14 +25,23 @@
  *                         accepted and ignored (this family is 300x300 only)
  *   ESC U                get SKU info -> 63-byte consumable record
  *   ESC V                get version -> 34-byte reply
- *   ESC $                restore factory settings (config back to defaults).
- *                         0x24 is the byte in the tech ref and the one the host
- *                         tool sends; 0x2A ('*') is accepted as an alias because
- *                         earlier revisions of this firmware only had that one.
+ *   ESC *                restore factory settings (config back to defaults).
+ *                         0x2A is the genuine opcode: the stock Windows port
+ *                         monitor lw5xxmon.dll dispatches 0x2A as
+ *                         RestoreFactorySettings and has no entry for 0x24.
+ *                         The tech ref prints 0x24, so that spelling is
+ *                         accepted as an alias.
  *   ESC o <count u8>     set label count (one argument byte, tech ref p.20)
  *   ESC q <roll>         select roll/tray, ASCII '0'-'3' (Twin Turbo only);
  *                         accepted, ignored
  *   ESC ESC ...          a run of bare ESC bytes collapses to one pending ESC
+ *   ESC # <n>            set number of copies (1 arg, consumed)
+ *   ESC H <2>, ESC m <2>, ESC b <2>, ESC l <4>, ESC t <4>, ESC X <5>,
+ *   ESC p <1>, ESC P, ESC x  the rest of the genuine command set: consumed
+ *                         with the argument counts from the stock port
+ *                         monitor's own length table, so a command meant for
+ *                         a cutter, twin-roll or network model cannot
+ *                         desynchronise the parser
  *   ESC W len dir objid  control-command framing; len counts the 4 header
  *                         bytes after ESC W plus the payload (decompiled
  *                         ControlCommand: len = payload + 6 - 2); payload
@@ -50,7 +59,9 @@
  * Backdoor commands (never sent by the stock host, kept for configuration and
  * driver-less bring-up via tools/opsend.py):
  *   GS C len lo hi sku.. 1D 43 .. set roll config (SKU + count) in EEPROM
- *   GS D sub [arg]         1D 44 ..  self-test / diagnostic (see diagnose()):
+ *   GS D <sub> [args]   diagnostics, subcommands 0x01-0x09: head strobe,
+ *                       motor step, EEPROM self-test, snapshot, build id,
+ *                       full pin/ADC scan, pin toggle, VH interlock, DFU
  *                                0x01 <n> strobe head n lines, 0x02 <n> step motor,
  *                                0x03 EEPROM self-test, 0x04 diagnostic snapshot.
  *                                Replies are 'D'-prefixed so they can't be mistaken
@@ -90,6 +101,7 @@ typedef enum {
     S_ESC_D,        /* ESC D: BPP, Align, W(4), H(4) then raster */
     S_RASTER,       /* consuming raster lines for one label */
     S_ESC_W,        /* ESC W / ESC R: 4 header bytes then len-4 payload bytes */
+    S_ESC_Z,        /* ESC Z: 15 header bytes, then a u32 compressed payload */
     S_ESC_F,        /* ESC f: sub-command byte then one argument byte */
     S_SKIP,         /* consume s_w_payload raw bytes (ESC M media type) */
     S_AFTER_GS,     /* saw 0x1D (backdoor config commands) */
@@ -104,7 +116,7 @@ static uint8_t  s_arg1, s_arg2, s_arg4[4];
 static uint8_t  s_diag_sub;        /* GS D subcommand */
 static uint8_t  s_diag_args[3];    /* GS D argument bytes */
 static uint8_t  s_diag_argn, s_diag_argi;
-static uint8_t  s_hdr[10];            /* ESC D header (10 B) / ESC W header (4 B) */
+static uint8_t  s_hdr[15];            /* ESC D (10 B) / ESC W (4 B) / ESC Z (15 B) */
 static uint8_t  s_hcnt;
 static uint16_t s_bpl;               /* raster bytes per line ON THE WIRE */
 static uint16_t s_use;               /* bytes of that line the head can print */
@@ -112,7 +124,9 @@ static uint16_t s_lines_left;        /* lines still to print for this label */
 static uint16_t s_line_rx;           /* bytes received for the current line */
 static uint8_t  s_line[HEAD_BYTES];
 static uint16_t s_xoff;              /* left padding (bytes) to center narrow rasters */
-static uint16_t s_w_payload;         /* ESC W payload bytes still to consume */
+static uint32_t s_w_payload;         /* framed payload bytes still to consume.
+                                      * u32 because an ESC Z body can exceed
+                                      * 64 KB; ESC W caps at 251 and ESC M at 8. */
 static uint8_t  s_w_cmd;             /* 'W' or 'R': which framed command */
 static int      s_refuse_update;     /* answer ESC r 01 once the skip ends */
 
@@ -129,10 +143,37 @@ static uint8_t  s_density_pct;       /* last ESC C duty, 0-200, reported in stat
 static const paper_t *s_paper;       /* current stock, from ESC L (feed + ESC U) */
 static uint16_t s_len_override;      /* ESC L value treated as a raw dot length */
 static int      s_len_from_raster;   /* continuous / custom size: pitch = raster height */
-static uint16_t s_raster_dots;       /* height (dots) of the current raster block */
+static uint16_t s_raster_lines;      /* dot LINES printed by the current raster
+                                      * block - the feed axis. Not ESC D's H
+                                      * field: that is the width across the
+                                      * head. See begin_raster(). */
 
 /* Feed math: die-cut rolls have a small physical gap between labels. */
-#define LABEL_GAP_DOTS   20          /* ~1.7 mm at 300 dpi */
+/* Die-cut gap between labels, in tenths of a millimetre, and the dot count
+ * derived from it. These used to be two independent constants that disagreed
+ * with each other: the feed advanced LABEL_GAP_DOTS = 20 dots (1.69 mm) while
+ * the ESC U consumable record told the host LABEL_GAP_TENTH_MM = 42 (4.2 mm),
+ * three hundred lines further down the same file.
+ *
+ * 42 is the number with evidence behind it. Joining all 37 genuine roll-tag
+ * records in this repository (Src/main.c, CRC-32 verified) onto the GPD paper
+ * table gives the real gap as marker pitch minus label length: 42 tenths is the
+ * mode and the value on the 550's own default stock (Address 30252, ESC L
+ * 0x0546), and NOT ONE die-cut roll measures below 42. The four zeros in that
+ * histogram are the continuous roll and the two edge-to-edge stocks, where
+ * pitch == length.
+ *
+ * So the feed was short by about 2.5 mm per label, cumulatively, on a printer
+ * whose own comment notes there is "no top-of-form sensing in the feed path" to
+ * take it back. One constant now, so the wire report and the physical feed
+ * cannot disagree again.
+ *
+ * STILL AN APPROXIMATION: the genuine gap varies 42..118 tenths across stocks
+ * (79 on 30323 Shipping, 95 on 30258 Diskette, 118 on 30277 File Folder).
+ * Carrying it per paper code is the right answer and is the next piece of work;
+ * 42 is the measured mode and the correct value for the default stock. */
+#define LABEL_GAP_TENTH_MM 42
+#define LABEL_GAP_DOTS   (((LABEL_GAP_TENTH_MM) * (MODEL_DPI) + 127) / 254)
 #define TEAR_EXTRA_DOTS  15          /* tear bar sits past the next print position */
 /* Hard ceiling on a single feed. The paper table carries continuous/banner
  * stock with a nominal height of 32000 dots; without this, a short label on
@@ -141,23 +182,69 @@ static uint16_t s_raster_dots;       /* height (dots) of the current raster bloc
  * Continuous stock has no inter-label pitch to honour anyway. */
 #define MAX_FEED_DOTS    4000        /* ~34 cm */
 
+/* Hard ceiling on a framed raster body (ESC Z). ESC L accepts a raw dot length
+ * up to 32767 and continuous stock has no pitch at all, so the tallest label
+ * this firmware can be asked to take is bounded by the ESC L range rather than
+ * by the GPD paper tables (whose tallest entries are only 3150 dots on OP57
+ * and 3000 on OP104). 32000 lines x HEAD_BYTES is 2.7 MB on OP57 and 5.0 MB on
+ * OP104: past anything real, and short enough that a malformed header costs a
+ * bounded skip instead of an unbounded one. */
+#define MAX_RASTER_LINES 32000u
+#define MAX_RASTER_BYTES ((uint32_t)HEAD_BYTES * MAX_RASTER_LINES)
+
 void protocol_init(void)
 {
     s_head = s_tail = 0; s_rx_paused = 0;
     s_state = S_CMD;
     s_job_active = 0; s_label_index = 0; s_job_id = 0;
+    s_refuse_update = 0; s_w_payload = 0; s_w_cmd = 0;
     s_density_pct = 100;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
+    s_len_override = 0; s_raster_lines = 0; s_len_from_raster = 0;
 }
+
+/* protocol_reset() runs in USB interrupt context (SOFT_RESET and
+ * SET_CONFIGURATION both reach it from USB_IRQHandler), while protocol_task()
+ * is in the middle of reading the ring. Zeroing the indices there raced
+ * ring_getc()'s read-modify-write of s_tail: the ISR wrote s_tail = 0 between
+ * the main loop's read and its write-back, so the parser resumed with
+ * s_tail = old + 1 and s_head = 0 and then chewed through ~2000 bytes of
+ * pre-reset ring content - exactly the data a SOFT_RESET exists to discard
+ * (USB Printer Class 1.1 section 4.2.3), including raster bytes that would
+ * re-enter the raster state and fire the head.
+ *
+ * So the ISR only records the request and makes the head safe immediately;
+ * the state is cleared by the main loop, between bytes, where nothing else
+ * can be halfway through touching it. */
+static volatile uint8_t  s_reset_req;
+static volatile uint16_t s_reset_mark;   /* discard everything queued before this */
 
 void protocol_reset(void)
 {
-    s_head = s_tail = 0;
+    /* Record how far the producer had got: everything already in the ring is
+     * pre-reset data and must go, everything the host sends after this point
+     * is a new job and must survive. Only the interrupt writes s_head and
+     * s_reset_mark, only the main loop writes s_tail, so neither side ever
+     * has to modify the other's index. */
+    s_reset_mark = s_head;
+    s_reset_req = 1;
+    head_reset();           /* stop heating now; GPIO writes only, ISR-safe */
+}
+
+static void protocol_reset_apply(void)
+{
+    s_tail = s_reset_mark;
     s_state = S_CMD; s_hcnt = 0; s_lines_left = 0; s_line_rx = 0;
-    s_job_active = 0; s_label_index = 0;
+    s_job_active = 0; s_label_index = 0; s_job_id = 0;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
+    s_len_override = 0; s_raster_lines = 0; s_len_from_raster = 0;
+    /* Framed-command state (ESC W / ESC R / ESC M / ESC Z). s_refuse_update is
+     * the load-bearing one: a firmware-update handshake interrupted before its
+     * 128 header bytes arrived would otherwise stay armed across the reset and
+     * fire a stray "ESC r 01" at the end of the next job's ESC M skip - three
+     * bytes of garbage in the middle of the host's reply stream. The other two
+     * are belt-and-braces; every entry into those states assigns them. */
+    s_refuse_update = 0; s_w_payload = 0; s_w_cmd = 0;
     /* Dropping the ring also drops the reason bulk-OUT was throttled. The
      * un-pause in ring_getc() only fires when a byte is actually read, so an
      * empty ring would leave the endpoint NAKing forever after a SOFT_RESET
@@ -165,6 +252,39 @@ void protocol_reset(void)
     s_rx_paused = 0;
     if (usb_is_configured()) usb_ep_rx_ready(EP_DATA);
     head_reset();
+}
+
+/* Take a pending reset, with the USB interrupt masked just long enough to
+ * claim the flag. Called from protocol_task() before every byte, so a reset
+ * that lands mid-drain still discards the rest. */
+/* Mask the USB interrupt just long enough to claim the flag. On the host test
+ * build there is no interrupt and no inline assembly, so both halves compile
+ * away. Saving PRIMASK (rather than a bare cpsie) keeps this safe if it is ever
+ * called from an interrupt itself - the same discipline as usb_core.c. */
+#if defined(__arm__) || defined(__ARM_ARCH)
+static inline uint32_t reset_crit_enter(void)
+{
+    uint32_t pm;
+    __asm volatile("mrs %0, primask" : "=r"(pm));
+    if (pm == 0u) __asm volatile("cpsid i" ::: "memory");
+    return pm;
+}
+static inline void reset_crit_exit(uint32_t pm)
+{
+    if (pm == 0u) __asm volatile("cpsie i" ::: "memory");
+}
+#else
+static inline uint32_t reset_crit_enter(void) { return 0u; }
+static inline void reset_crit_exit(uint32_t pm) { (void)pm; }
+#endif
+
+static void protocol_reset_poll(void)
+{
+    uint32_t pm = reset_crit_enter();
+    uint8_t req = s_reset_req;
+    s_reset_req = 0;
+    reset_crit_exit(pm);
+    if (req) protocol_reset_apply();
 }
 
 void protocol_feed(const uint8_t *data, uint16_t len)
@@ -234,7 +354,18 @@ static void label_printed(void)
  * raster is centered on the head (matches PrintableOrigin geometry). */
 static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
 {
-    s_raster_dots = dots;
+    /* `lines`, not `dots`. ESC D's two 32-bit fields are W then H, and W is
+     * the number of dot lines while H is the width across the head - the
+     * opposite of what the names suggest. The genuine capture settles it:
+     * ESC D 01 02 | 9c 00 00 00 | 10 01 00 00 is W=156, H=272, and the block
+     * that follows is 156 * (272/8) = 5304 bytes, matching the stream exactly.
+     * emit_line() steps the motor once per printed line, so after this block
+     * the paper has advanced exactly `lines` dots; that is the quantity
+     * feed_next_label() must subtract from the label pitch. Storing `dots`
+     * here made the inter-label feed vary with the image's WIDTH, and at the
+     * full head width it collapsed to the bare gap - every label after the
+     * first printed on top of the one before it. */
+    s_raster_lines = lines;
     s_bpl = (uint16_t)(((uint32_t)dots * bpp + 7u) / 8u);
     s_use = (s_bpl > HEAD_BYTES) ? (uint16_t)HEAD_BYTES : s_bpl;
     s_lines_left = lines; s_line_rx = 0;
@@ -250,11 +381,11 @@ static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
  * and tear-bar offset are fixed dot counts, not read from the roll. */
 static void feed_next_label(int to_tear)
 {
-    uint16_t pitch = s_len_from_raster ? s_raster_dots
+    uint16_t pitch = s_len_from_raster ? s_raster_lines
                    : s_len_override     ? s_len_override
-                   : (s_paper ? s_paper->height_dots : s_raster_dots);
+                   : (s_paper ? s_paper->height_dots : s_raster_lines);
     uint32_t dots = LABEL_GAP_DOTS;
-    if (pitch > s_raster_dots) dots += (uint32_t)(pitch - s_raster_dots);
+    if (pitch > s_raster_lines) dots += (uint32_t)(pitch - s_raster_lines);
     if (to_tear) dots += TEAR_EXTRA_DOTS;
     if (dots > MAX_FEED_DOTS) dots = MAX_FEED_DOTS;
     motor_step_lines((uint16_t)dots);
@@ -275,7 +406,21 @@ static void send_status(void)
     r[5] = (uint8_t)(s_label_index & 0xFF);      /* LabelIndex u16 LE */
     r[6] = (uint8_t)((s_label_index >> 8) & 0xFF);
     r[7] = 0;                                    /* Reserved */
-    r[8] = 0;                                    /* PrintHeadStatus: ok */
+    /* PrintHeadStatus: 0 = ok, 1 = overheated, 2 = unknown (550 tech ref p.14).
+     * This was hardwired to 0. It is one of only five fields DYMO's own 550
+     * Linux driver reads - LabelWriterLanguageMonitorV2.cpp does
+     * `byte phStatus = (status[8] & 0x3); if (phStatus == 1) { ... jsHeadOverheat
+     * ... }` and then pauses the job and reprints the page. Reporting a constant
+     * 0 means a host can never see an overheat, while emit_line() may be waiting
+     * up to a second per dot line for the head to cool: on a 1050-line address
+     * label that is a job stalled for minutes with every status reply still
+     * saying "head ok", and the light label that eventually comes out is
+     * recorded as a success.
+     *
+     * D7 deliberately keeps printing after the bounded wait, at a thermally
+     * reduced dwell. Reporting the state does not change that - it lets the host
+     * apply its own documented policy on top of our bounded-energy fallback. */
+    r[8] = thermal_sensor_fault() ? 2u : (thermal_ok() ? 0u : 1u);
     r[9] = s_density_pct;                        /* PrintDensity % (0-200) */
     r[10] = usbp_paper_present() ? 8 : 2;        /* MainBayStatus: ok / no media */
     for (int i = 0; i < 12; i++) {               /* SKU info, NUL-padded */
@@ -340,11 +485,6 @@ static uint16_t dots_to_tenth_mm(uint16_t dots)
     return (uint16_t)(((uint32_t)dots * 254u + MODEL_DPI / 2u) / MODEL_DPI);
 }
 
-/* Inter-label gap, in tenths. Genuine rolls carry 42-118 depending on the
- * stock (mode 42); 57 is the value on our default S0904980. Per-roll in
- * reality, so this is a default rather than a constant. */
-#define LABEL_GAP_TENTH_MM 42
-
 static void send_sku_record(void)
 {
     const op_config_t *c = store_get();
@@ -372,6 +512,12 @@ static void send_sku_record(void)
     r[24] = 0x01;                                /* label color: white */
     r[25] = 0x00;                                /* content color: black */
     r[26] = 0x00;                                /* marker type 0 */
+    /* One caveat, measured: LABEL_GAP_TENTH_MM is the FLEET MODE (42), and the
+     * 5XL's own default stock S0904980 carries 57. So this model's default SKU
+     * reports marker pitch 1594+42 = 1636 where the genuine tag says 1651, and
+     * total media length 17996 against 18161. Carrying the gap per paper code
+     * in paper_t fixes both and is the next piece of work; every other field of
+     * this record matches the genuine tag byte for byte. */
     uint16_t pitch_tmm = (uint16_t)(h_tmm + LABEL_GAP_TENTH_MM);
     r[28] = (uint8_t)(pitch_tmm & 0xFF); r[29] = (uint8_t)(pitch_tmm >> 8);
     r[30] = 30; r[31] = 0;                       /* marker1 width 3.0 mm (35/37) */
@@ -544,9 +690,16 @@ static void diagnose(uint8_t sub)
         if (arg) m->flags |= OP_FLAG_VH_INHIBIT;
         else     m->flags &= (uint8_t)~OP_FLAG_VH_INHIBIT;
         if (m->flags & OP_FLAG_VH_INHIBIT) head_vh_off();
-        store_save();
+        /* Two different facts, reported separately. r[2] is the LIVE interlock,
+         * which head.c gates on and which is already in force. r[3] says whether
+         * it reached the EEPROM - PROTOCOL.md promises this subcommand persists
+         * the bit, and a part that ACKs without storing (write-protected, wrong
+         * device fitted, worn cell) used to make store_save() return 0 anyway.
+         * An operator who armed the interlock, read the confirming reply and
+         * power-cycled would have found it gone. */
         r[2] = m->flags;
-        usbp_send_reply(r, 3);
+        r[3] = (store_save() == 0) ? 1u : 0u;      /* persisted */
+        usbp_send_reply(r, 4);
         break; }
     case 0x05: {                              /* firmware build id (ASCII) */
         const char *b = OPENDMO_BUILD;
@@ -560,7 +713,7 @@ static void diagnose(uint8_t sub)
         r[2] = (uint8_t)(MODEL_PID & 0xFF);   /* model id (PID low byte) */
         r[3] = (uint8_t)(traw >> 8); r[4] = (uint8_t)(traw & 0xFF);      /* thermistor raw (BE) */
         r[5] = thermal_ok() ? 1 : 0;
-        r[6] = (gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL) ? 1 : 0;
+        r[6] = paper_present() ? 1 : 0;
         if (gpio_get(PIN_BUTTON) == BUTTON_PRESSED_LEVEL) r[6] |= 2;
         r[7] = s_density_pct;
         r[8] = c->flags;
@@ -578,10 +731,16 @@ static void factory_reset(void)
     const char *d = MODEL_DEFAULT_SKU;
     uint8_t i = 0;
     for (; i < OP_SKU_MAX - 1 && d[i]; i++) cfg->sku[i] = d[i];
-    cfg->sku[i] = 0;
+    for (; i < OP_SKU_MAX; i++) cfg->sku[i] = 0;   /* erase the old tail too */
     cfg->label_count = MODEL_DEFAULT_COUNT;
     cfg->density = 8;
-    cfg->flags = OP_FLAG_PAPER_FORCE;
+    /* Keep OP_FLAG_VH_INHIBIT if it is set. store.h promises that while that
+     * bit is set "no sequence of commands can heat the head", and ESC $ is a
+     * command like any other - a host (or a stray byte pair) could otherwise
+     * disarm the one interlock protecting the head during bring-up. The
+     * assignment is monotone: it never sets the bit either, so a finished
+     * printer that has it clear stays that way. */
+    cfg->flags = (uint8_t)(OP_FLAG_PAPER_FORCE | (cfg->flags & OP_FLAG_VH_INHIBIT));
     store_save();
     set_density(100);
 }
@@ -625,6 +784,7 @@ void protocol_self_test(void)
     if (s_job_active) return;
     uint8_t line[HEAD_BYTES];
     int released = 0;
+    uint16_t printed = 0;
 
     for (uint16_t y = 0; y < SELFTEST_LINES; y++) {
         for (uint16_t b = 0; b < HEAD_BYTES; b++) line[b] = 0;
@@ -634,17 +794,39 @@ void protocol_self_test(void)
             int diag = ((x + y) % 32u) < 2u;
             if (edge || diag) line[x >> 3] |= (uint8_t)(0x80u >> (x & 7u));
         }
+        /* A sensor we cannot believe stops the self test outright, where a
+         * host raster would print anyway at a reduced dwell. Nobody is waiting
+         * on this pattern, and on a bring-up board an unpopulated thermistor
+         * divider is the normal state - so this is exactly the case D7 means by
+         * "a bring-up self-test must never be the thing that cooks the head". */
+        if (thermal_sensor_fault()) break;
         for (int g = 0; g < 100 && !thermal_ok(); g++) { delay_ms(10); wdt_kick(); }
         if (!thermal_ok()) break;                    /* D7: never strobe over the limit */
         head_print_line(line, HEAD_BYTES);
         motor_step_line_after(head_last_strobe_us());
+        printed++;                 /* counted after the step, so both the D7
+                                    * thermal break above and the second-press
+                                    * break below leave an accurate total */
         wdt_kick();
         /* A second press stops it, as on the genuine printer. The button is
          * still held when we start, so wait for a release first. */
         if (gpio_get(PIN_BUTTON) != BUTTON_PRESSED_LEVEL) released = 1;
         else if (released) break;
     }
+    /* The pattern's own lines advanced the paper exactly as a raster does, and
+     * feed_next_label() subtracts the printed length from the label pitch - so
+     * it has to be told, the same way an ESC D block tells it. Without this the
+     * self test is charged a FULL pitch on top of the 400 lines it already
+     * moved: a 33.9 mm over-feed, once per press, cumulative. With no
+     * top-of-form sensing in the feed path there is nothing to take it back,
+     * so after a few presses every later label prints across a die cut.
+     *
+     * This is the same defect family as the cycle-2 feed-axis bug (DECISIONS
+     * D30's neighbour entry): the feed math is right, and the caller failed to
+     * tell it what had already moved. */
+    s_raster_lines = printed;
     feed_next_label(1);                              /* present it at the tear bar */
+    s_raster_lines = 0;                              /* as ESC Q: nothing carries */
 }
 
 /* Process as many bytes as are available; resume exactly where we stopped. */
@@ -655,11 +837,13 @@ void protocol_task(void)
      * do we track the real paper sensor for the status byte. The LED still reads
      * the sensor directly (main.c) either way. */
     if (!(store_get()->flags & OP_FLAG_PAPER_FORCE))
-        usbp_set_paper_present(gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
+        usbp_set_paper_present(paper_present());
 
     int ci;
+    protocol_reset_poll();
     while ((ci = ring_getc()) >= 0) {
         uint8_t c = (uint8_t)ci;
+        if (s_reset_req) { protocol_reset_poll(); break; }
         switch (s_state) {
         case S_CMD:
             if (c == 0x1B)       s_state = S_AFTER_ESC;
@@ -709,7 +893,39 @@ void protocol_task(void)
             case 'c': set_density(75);  s_state = S_CMD; break;  /* Light   75 %   */
             case 'd': set_density(88);  s_state = S_CMD; break;  /* Medium  87.5 % */
             case 'g': set_density(113); s_state = S_CMD; break;  /* Dark   112.5 % */
+            /* The rest of the genuine command set, with the argument counts
+             * from the stock port monitor's own length table (its DPL iterator
+             * knows the exact fixed byte length of every command). We do not
+             * act on these - they are for the cutter, the twin-roll and the
+             * network models, or they query things we have no model for - but
+             * consuming the RIGHT number of bytes is what keeps the parser in
+             * step. The old "unknown byte after ESC eats one argument" rule was
+             * wrong for six of them: ESC l and ESC t take four argument bytes,
+             * ESC X takes five, ESC H / ESC m / ESC b take two. A four-byte
+             * command read as a one-byte one desynchronises by three bytes, and
+             * the next raster block is then parsed as commands. */
+            case '#': s_arg1 = '#'; s_state = S_ARG1; break;    /* SetNumberOfCopies */
+            case 'p': s_arg1 = 'p'; s_state = S_ARG1; break;    /* DoCutLabel (cutter) */
+            case 'P':                                           /* GetEthernetPhyState */
+            case 'x': s_state = S_CMD; break;                   /* GetPrintEngineParams */
+            case 'H':                                           /* SetHorzResolution */
+            case 'm':                                           /* GetSensorsValues */
+            case 'b': s_w_payload = 2; s_state = S_SKIP; break; /* PrintEngineStatusTwin */
+            case 'l':                                           /* SetLabelLeader */
+            case 't': s_w_payload = 4; s_state = S_SKIP; break; /* SetLabelTrailer */
+            case 'X': s_w_payload = 5; s_state = S_SKIP; break; /* SetPrintEngineParams */
             case 'D': s_hcnt = 0; s_state = S_ESC_D; break;     /* raster header */
+            /* ESC Z = CompressedPrintData in lw5xxmon.dll's opcode table, the
+             * compressed sibling of ESC D. The monitor emits it only when the
+             * registry value LabelCompressMode under Software\DYMO\LW5xx asks
+             * for it; the header is 17 bytes (ESC Z, a scheme byte, a u32 LE
+             * payload length, then ESC D's own 10-byte header) followed by
+             * exactly that many compressed bytes. We cannot decompress it - the
+             * monitor statically links zlib, but the payload format is not
+             * established - so we consume it exactly and print nothing rather
+             * than letting the body run through the command parser, where every
+             * stray 0x1B would start a bogus command. */
+            case 'Z': s_hcnt = 0; s_state = S_ESC_Z; break;     /* compressed raster */
             case 'W':                                           /* control cmd   */
             case 'R': s_hcnt = 0; s_w_cmd = c; s_state = S_ESC_W; break; /* update */
             case 'M': s_w_payload = 8; s_state = S_SKIP; break; /* media type +8B */
@@ -718,8 +934,15 @@ void protocol_task(void)
             case 'G': feed_next_label(0); s_state = S_CMD; break;  /* short feed  */
             case 'E': feed_next_label(1); s_state = S_CMD; break;  /* tear feed   */
             case 'Q':                                 /* end of job / unlock     */
-                s_job_active = 0; s_label_index = 0;
-                s_raster_dots = 0;   /* no printed height carries into the next job */
+                /* The job id MUST go back to zero here. DYMO's published
+                 * language monitor takes the print lock only when the status
+                 * struct reports an idle engine AND job id 0
+                 * (LW5xx_Linux/src/lw/LabelWriterLanguageMonitorV2.cpp,
+                 * CheckLock(): "if(peStatus == 0 && jobID == 0) return true").
+                 * Leaving the previous id there meant the genuine driver could
+                 * never acquire the lock again after the first job. */
+                s_job_active = 0; s_label_index = 0; s_job_id = 0;
+                s_raster_lines = 0;  /* no printed length carries into the next job */
                 s_state = S_CMD; break;
             case 'e': set_density(100); s_state = S_CMD; break;  /* Normal 100 % */
             case 'U': send_sku_record(); s_state = S_CMD; break;
@@ -736,7 +959,9 @@ void protocol_task(void)
             case 'A': send_status(); break;
             case 'C': set_density(c); break;
             case 'o': store_get_mut()->label_count = c; store_save(); break;
-            /* 'T' speed, 'q' tray, '?': accept and ignore */
+            /* 'T' speed, 'q' roll, '#' copies, 'p' cut, '?': accept and ignore.
+             * Copies are a host-side concept here: the driver sends each copy
+             * as its own label, and we print exactly the rasters we are given. */
             }
             s_state = S_CMD;
             break;
@@ -800,8 +1025,8 @@ void protocol_task(void)
                     s_job_active = 1;
                     s_label_index = 0;
                     /* A feed before this job's first ESC D must advance a full
-                     * pitch, not the height of the previous job's last label. */
-                    s_raster_dots = 0;
+                     * pitch, not the length of the previous job's last label. */
+                    s_raster_lines = 0;
                 }
                 s_state = S_CMD;
             }
@@ -875,6 +1100,54 @@ void protocol_task(void)
             }
             break;
 
+        case S_ESC_Z:
+            /* [0] scheme, [1..4] payload length u32 LE, [5] BPP, [6] Align,
+             * [7..10] width u32 LE, [11..14] height u32 LE - the last ten
+             * bytes are a verbatim copy of the ESC D header. We keep none of
+             * it: a compressed label is skipped whole, so the feed math and
+             * the label counter are left exactly as they were. */
+            s_hdr[s_hcnt++] = c;
+            if (s_hcnt == 15) {
+                /* The declared length is host data and must not be trusted.
+                 * 0xFFFFFFFF puts us in S_SKIP for 4 GiB, and S_SKIP has no
+                 * escape: the device accepts every byte and answers nothing,
+                 * for this job and every job behind it, until a printer-class
+                 * SOFT_RESET, a SET_CONFIGURATION after a bus reset, or a power
+                 * cycle. No byte sequence can recover it.
+                 *
+                 * Bound it with what the SAME header already declares. Bytes
+                 * [5..14] are ESC D's own header, so the UNCOMPRESSED size of
+                 * this raster is known - and a compressed body larger than the
+                 * raw raster is not a compressed body. Both factors are 16-bit,
+                 * so their product alone still permits a ~4 GB skip; the
+                 * MAX_RASTER_BYTES clamp is what actually closes it. */
+                uint32_t len   = (uint32_t)s_hdr[1] | ((uint32_t)s_hdr[2] << 8)
+                               | ((uint32_t)s_hdr[3] << 16) | ((uint32_t)s_hdr[4] << 24);
+                uint8_t  zbpp  = s_hdr[5] ? s_hdr[5] : 1;
+                uint32_t zlin  = (uint32_t)s_hdr[7]  | ((uint32_t)s_hdr[8] << 8)
+                               | ((uint32_t)s_hdr[9] << 16) | ((uint32_t)s_hdr[10] << 24);
+                uint32_t zdots = (uint32_t)s_hdr[11] | ((uint32_t)s_hdr[12] << 8)
+                               | ((uint32_t)s_hdr[13] << 16) | ((uint32_t)s_hdr[14] << 24);
+                uint32_t zbpl  = (zdots > 0xFFFFu) ? 0x10000u
+                                                   : ((zdots * zbpp + 7u) / 8u);
+                uint32_t zmax  = (zlin > 0xFFFFu || zbpl > 0xFFFFu) ? 0u
+                                                                    : zlin * zbpl;
+                if (zmax > MAX_RASTER_BYTES) zmax = MAX_RASTER_BYTES;
+                /* Slack for a body that does not compress: stored deflate costs
+                 * 5 bytes per 65535 block, about 0.008 %, so 1.5 % + 64 is
+                 * generous for any container we might be handed. */
+                uint32_t zcap = zmax + (zmax >> 6) + 64u;
+                /* Malformed: skip nothing and resync on the next ESC. The body
+                 * then runs through the command parser, which the comment above
+                 * would rather avoid - but that is exactly the trade-off
+                 * S_ESC_D already makes for an out-of-range header, and a
+                 * bounded desync beats an unbounded wedge. */
+                if (zmax == 0u || len > zcap) len = 0;
+                s_w_payload = len;
+                s_state = (s_w_payload ? S_SKIP : S_CMD);
+            }
+            break;
+
         case S_SKIP:
             if (--s_w_payload == 0) {                  /* skipped bytes done */
                 s_state = S_CMD;
@@ -898,7 +1171,12 @@ void protocol_task(void)
                 op_config_t *cfg = store_get_mut();
                 cfg->label_count = (uint16_t)(s_hdr[1] | (s_hdr[2] << 8));
                 s_sku_len = s_hdr[0]; s_sku_i = 0;
-                if (s_sku_len == 0) { cfg->sku[0] = 0; store_save(); s_state = S_CMD; }
+                if (s_sku_len == 0) {
+                    /* Clearing the SKU must erase the whole field: the roll
+                     * record copies a fixed width out of it. */
+                    for (uint8_t k = 0; k < OP_SKU_MAX; k++) cfg->sku[k] = 0;
+                    store_save(); s_state = S_CMD;
+                }
                 else s_state = S_GSC_SKU;
             }
             break;
@@ -909,7 +1187,7 @@ void protocol_task(void)
             s_sku_i++;
             if (s_sku_i >= s_sku_len) {
                 uint8_t z = s_sku_len < OP_SKU_MAX-1 ? s_sku_len : OP_SKU_MAX-1;
-                cfg->sku[z] = 0;
+                for (uint8_t k = z; k < OP_SKU_MAX; k++) cfg->sku[k] = 0;
                 store_save();
                 s_state = S_CMD;
             }

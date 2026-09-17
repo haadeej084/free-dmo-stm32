@@ -26,7 +26,34 @@ static op_config_t g_cfg;
 
 void head_init(void){}
 void head_reset(void){}
-void head_print_line(const unsigned char *b, unsigned short n){ (void)b;(void)n; g_lines++; }
+/* KEEP THE BYTES. This mock used to throw away everything handed to the head
+ * and count calls, which made the whole raster-geometry engine unobservable:
+ * the centering offset, the head-width clamp and the over-wide discard could
+ * all be changed without a single check noticing. A parser test that does not
+ * look at what it printed is only testing that it did not crash. */
+static unsigned char g_last[HEAD_BYTES];
+static unsigned      g_last_n;
+void head_print_line(const unsigned char *b, unsigned short n){
+    g_last_n = n < HEAD_BYTES ? n : HEAD_BYTES;
+    for (unsigned i = 0; i < g_last_n; i++) g_last[i] = b[i];
+    for (unsigned i = g_last_n; i < HEAD_BYTES; i++) g_last[i] = 0;
+    g_lines++;
+}
+/* Index of the first and last set dot in the last line handed to the head, or
+ * -1 if it was blank. These two numbers are the geometry. */
+static int last_first_dot(void){
+    for (unsigned i = 0; i < g_last_n; i++)
+        for (int k = 7; k >= 0; k--)
+            if (g_last[i] & (1u << k)) return (int)(i * 8 + (7 - k));
+    return -1;
+}
+static int last_last_dot(void){
+    int r = -1;
+    for (unsigned i = 0; i < g_last_n; i++)
+        for (int k = 7; k >= 0; k--)
+            if (g_last[i] & (1u << k)) r = (int)(i * 8 + (7 - k));
+    return r;
+}
 void head_set_density(unsigned char d){ g_density = d; }
 void motor_init(void){}
 void motor_enable(int on){ (void)on; }
@@ -39,7 +66,16 @@ static int g_vh_on = 0;
 int  head_vh_is_on(void){ return g_vh_on; }
 void head_vh_off(void){ g_vh_on = 0; }
 static unsigned short g_adc[10] = {10,20,30,40,50,60,70,80,90,100};
-void thermal_scan_adc(unsigned short *out){ for (int i=0;i<10;i++) out[i]=g_adc[i]; }
+/* Record the rail state AT THE MOMENT the pins float. The scan switches
+ * PA0-PA7, PB0 and PB1 into analog mode one at a time, and PB0/PB1 are the two
+ * fitted heat strobes - so a strobe is tri-stated during this call. protocol.c
+ * drops the 24 V rail first for exactly that reason, and a final-state check
+ * cannot see whether it did. */
+static int g_vh_during_scan;
+void thermal_scan_adc(unsigned short *out){
+    g_vh_during_scan = g_vh_on;
+    for (int i=0;i<10;i++) out[i]=g_adc[i];
+}
 static unsigned short g_idr[3] = {0x1111, 0x2222, 0x4444};
 unsigned short sys_port_idr(unsigned char port){ return port < 3 ? g_idr[port] : 0; }
 static int g_toggle_port = -1, g_toggle_pin = -1, g_toggle_n = -1;
@@ -49,13 +85,34 @@ int sys_pin_toggle(unsigned char port, unsigned char pin, unsigned char n){
     g_toggle_port = port; g_toggle_pin = pin; g_toggle_n = n; return 1; }
 void thermal_init(void){}
 unsigned short thermal_read_raw(void){ return 0; }
-static int g_thermal_ok = 1;       /* flip to exercise the D7 thermal gate */
-int thermal_ok(void){ return g_thermal_ok; }
+/* The D7 thermal gate is the one safety interlock that is pure software, so
+ * the mock has to be able to express both shapes it can be in: over the limit
+ * for a while and then cool (the normal case, where the firmware waits and
+ * then prints), and over the limit indefinitely (where the two call sites take
+ * DELIBERATELY OPPOSITE decisions - see cases 61 and 62). A fixed flag can
+ * only ever express one of them, which is why the gate had no coverage.
+ *   g_hot_polls > 0: report not-ok for the next N polls, then ok.
+ *   g_hot_polls < 0: never ok. */
+static int g_hot_polls = 0;
+static int g_delays = 0;           /* delay_ms() calls, i.e. cool-down polls */
+int thermal_ok(void){
+    if (g_hot_polls < 0) return 0;
+    if (g_hot_polls > 0) { g_hot_polls--; return 0; }
+    return 1;
+}
+/* A sensor we cannot believe - open circuit, short, or no divider fitted. It is
+ * a separate axis from "too hot": see thermal.c. */
+static int g_sensor_fault;
+int thermal_sensor_fault(void){ return g_sensor_fault; }
+int paper_present(void){ return 1; }
 unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }
 op_config_t *store_get_mut(void){ return &g_cfg; }
-int store_save(void){ return 0; }
+/* A part that ACKs a write and stores nothing - write-protected, wrong device
+ * fitted, worn cell - is the case store_save() used to report as success. */
+static int g_store_fail;
+int store_save(void){ return g_store_fail ? -1 : 0; }
 int store_selftest(void){ return 1; }
 void store_load(void){}
 void usb_ep_rx_ready(unsigned char ep){ (void)ep; }
@@ -66,7 +123,7 @@ static int g_paper_present = 1;
 void usbp_set_paper_present(int p){ g_paper_present = p; }
 int  usbp_paper_present(void){ return g_paper_present; }
 int  gpio_get(pin_t p){ (void)p; return PAPER_PRESENT_LEVEL; }  /* paper present */
-void delay_ms(unsigned int ms){ (void)ms; }
+void delay_ms(unsigned int ms){ (void)ms; g_delays++; }
 #include <setjmp.h>
 static jmp_buf g_dfu_jmp;
 static int     g_dfu_calls;
@@ -79,7 +136,8 @@ static int fails;
                      else printf("ok   %s\n", #c); }while(0)
 
 static void reset_state(void){ g_lines=0; g_feed=0; g_density=-1; g_reply_len=-1;
-                               g_thermal_ok=1; g_paper_present=1; g_vh_on=0;
+                               g_hot_polls=0; g_delays=0; g_sensor_fault=0;
+                               g_paper_present=1; g_vh_on=0;
                                g_toggle_port=-1; g_toggle_pin=-1; g_toggle_n=-1;
                                memset(&g_cfg,0,sizeof g_cfg); protocol_init(); }
 
@@ -362,7 +420,7 @@ int main(void){
 
     /* 27) DECISIONS D7: GS D 0x01 runs all dots on at maximum dwell, so it must
      *     refuse to fire while the head is over its limit and report 0 lines. */
-    reset_state(); g_thermal_ok = 0;
+    reset_state(); g_hot_polls = -1;
     unsigned char hot[] = { 0x1D, 'D', 0x01, 5 };
     protocol_feed(hot, sizeof hot); protocol_task();
     CHECK(g_reply_len == 4);
@@ -449,13 +507,18 @@ int main(void){
     unsigned char l1000[] = { 0x1B, 'L', 0x03, 0xE8 };   /* 1000 dots, raw, BE */
     protocol_feed(l1000, sizeof l1000); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
-    CHECK(g_feed == 1000 + 20);                    /* override + gap */
+    /* 50 dots = 42 tenths of a mm at 300 dpi, the measured die-cut gap. The
+     * literal is pinned here rather than derived from LABEL_GAP_DOTS: a test
+     * that recomputes the firmware's own formula would agree with any value
+     * the firmware chose (DECISIONS D34). It used to be 20, which disagreed
+     * with the 42 tenths the ESC U record reports to the host. */
+    CHECK(g_feed == 1000 + 50);                    /* override + gap */
     {
         int after_override = g_feed;
         unsigned char l0[] = { 0x1B, 'L', 0, 0 };
         protocol_feed(l0, sizeof l0); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK((g_feed - after_override) != 1000 + 20);  /* back to the paper table */
+        CHECK((g_feed - after_override) != 1000 + 50);  /* back to the paper table */
     }
 
     /* 35) The printed height of one job must not leak into the next: a feed
@@ -531,6 +594,29 @@ int main(void){
     protocol_self_test();
     CHECK(g_lines == 400);                         /* SELFTEST_LINES */
     CHECK(g_feed >= 400);                          /* stepped per line + tear feed */
+    /* ...and exactly as far as a host job that printed the same number of
+     * lines. This used to be the loose bound above ONLY, which let a 400-line
+     * over-feed sail through: the self test moved the paper 400 lines with the
+     * pattern and was then charged a FULL label pitch on top, because it never
+     * told feed_next_label() what it had already printed. 33.9 mm too far, once
+     * per press, cumulative, with no top-of-form sensing to take it back. */
+    {
+        int selftest_feed = g_feed;
+        static unsigned char hj[32 + 400 * 2];
+        int k = 0;
+        reset_state();
+        hj[k++] = 0x1B; hj[k++] = 's'; hj[k++] = 1; hj[k++] = 0; hj[k++] = 0; hj[k++] = 0;
+        esc_d(&hj[k], 400, 16); k += 12;               /* 400 lines x 2 bytes */
+        for (int i = 0; i < 400 * 2; i++) hj[k++] = 0x00;
+        hj[k++] = 0x1B; hj[k++] = 'E';                 /* same tear feed */
+        for (int off = 0; off < k; off += 64) {
+            int chunk = (k - off < 64) ? (k - off) : 64;
+            protocol_feed(&hj[off], (unsigned)chunk);
+            protocol_task();
+        }
+        CHECK(g_lines == 400);
+        CHECK(g_feed == selftest_feed);
+    }
 
     /* 41) Neither button action may interrupt a running host job. */
     reset_state();
@@ -555,6 +641,12 @@ int main(void){
     CHECK((g_reply[22] | (g_reply[23] << 8)) == 0x1111);
     CHECK((g_reply[26] | (g_reply[27] << 8)) == 0x4444);
     CHECK(g_vh_on == 0);
+    /* ORDER, not final state. Moving head_vh_off() to after the scan used to
+     * pass the entire host suite on both models - and the source comment at
+     * that line calls a floating strobe with 24 V behind it "the one mistake
+     * that costs a print head". Same shape as the motor test: assert the
+     * sequence, because the sequence is the safety property. */
+    CHECK(g_vh_during_scan == 0);
 
     /* 43) GS D 0x07 toggle: three argument bytes, and the pins that carry this
      *     very command are refused instead of ending the session. */
@@ -571,12 +663,31 @@ int main(void){
     CHECK(g_reply[5] == 31);
 
     /* 44) GS D 0x08 VH interlock: persisted in the config, and setting it drops
-     *     the rail immediately. */
+     *     the rail immediately. The reply carries TWO different facts - r[2] is
+     *     the live interlock, already in force because head.c gates on the RAM
+     *     copy, and r[3] says whether it reached the EEPROM. They are separate
+     *     because a part can ACK a write and store nothing (write-protected,
+     *     wrong device fitted, worn cell), and an operator who armed the
+     *     interlock, read a confirming reply and power-cycled would have found
+     *     it gone. */
     reset_state(); g_vh_on = 1;
     unsigned char vh1[] = { 0x1D, 'D', 0x08, 1 };
     protocol_feed(vh1, sizeof vh1); protocol_task();
-    CHECK(g_reply_len == 3 && (g_cfg.flags & OP_FLAG_VH_INHIBIT));
+    CHECK(g_reply_len == 4 && (g_cfg.flags & OP_FLAG_VH_INHIBIT));
+    CHECK(g_reply[2] & OP_FLAG_VH_INHIBIT);        /* live */
+    CHECK(g_reply[3] == 1);                        /* and persisted */
     CHECK(g_vh_on == 0);
+    /* A store that silently fails must be reported as not persisted, while the
+     * live interlock still stands. */
+    {
+        g_store_fail = 1;
+        unsigned char vh1b[] = { 0x1D, 'D', 0x08, 1 };
+        protocol_feed(vh1b, sizeof vh1b); protocol_task();
+        CHECK(g_reply_len == 4);
+        CHECK(g_reply[2] & OP_FLAG_VH_INHIBIT);    /* still in force */
+        CHECK(g_reply[3] == 0);                    /* but not stored */
+        g_store_fail = 0;
+    }
     unsigned char vh0[] = { 0x1D, 'D', 0x08, 0 };
     protocol_feed(vh0, sizeof vh0); protocol_task();
     CHECK(!(g_cfg.flags & OP_FLAG_VH_INHIBIT));
@@ -635,7 +746,7 @@ int main(void){
     unsigned char lbe[] = { 0x1B, 'L', 0x00, 0x64 };
     protocol_feed(lbe, sizeof lbe); protocol_task();
     protocol_feed(g, sizeof g); protocol_task();
-    CHECK(g_feed == 100 + 20);                     /* override 100 + gap */
+    CHECK(g_feed == 100 + 50);                     /* override 100 + gap */
 
     /* 48) ESC L sentinels: 7F 00 (custom size) and FF FF (continuous) are not
      *     lengths. With no raster printed yet the pitch is 0, so ESC G feeds
@@ -646,16 +757,16 @@ int main(void){
         reset_state();
         protocol_feed(s1, sizeof s1); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 20);
+        CHECK(g_feed == 50);
         reset_state();
         protocol_feed(s2, sizeof s2); protocol_task();
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 20);
+        CHECK(g_feed == 50);
         /* a later real length clears the sentinel again */
         protocol_feed(lbe, sizeof lbe); protocol_task();
         g_feed = 0;
         protocol_feed(g, sizeof g); protocol_task();
-        CHECK(g_feed == 100 + 20);
+        CHECK(g_feed == 100 + 50);
     }
 
     /* 49) A run of ESC bytes (the driver pads with them) must not swallow the
@@ -740,6 +851,438 @@ int main(void){
         CHECK(g_dfu_calls == 1);
         CHECK(g_reply_len == 3 && g_reply[1] == 0x09 && g_reply[2] == 1);
         CHECK(g_vh_on == 0);                                  /* heat rail dropped */
+    }
+
+    /* 54) ESC Q must clear the job id. DYMO's own language monitor only takes
+     *     the print lock when the status reports an idle engine AND job id 0
+     *     (LabelWriterLanguageMonitorV2.cpp, CheckLock), so a stale id meant
+     *     the genuine driver could never print a second job. */
+    reset_state();
+    {
+        unsigned char job[] = { 0x1B, 's', 0x44, 0x33, 0x22, 0x11 };
+        unsigned char endj[] = { 0x1B, 'Q' };
+        protocol_feed(job, sizeof job); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[0] == 1 && g_reply[1] == 0x44 && g_reply[4] == 0x11);
+        protocol_feed(endj, sizeof endj); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[0] == 0 && g_reply[1] == 0 && g_reply[2] == 0 &&
+              g_reply[3] == 0 && g_reply[4] == 0);
+        /* and the same through the out-of-band reset (SOFT_RESET / ESC @) */
+        protocol_feed(job, sizeof job); protocol_task();
+        protocol_reset();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[1] == 0 && g_reply[4] == 0);
+    }
+
+    /* 55) ESC * / ESC $ must not disarm the 24 V interlock. store.h promises
+     *     that while OP_FLAG_VH_INHIBIT is set no command sequence can heat the
+     *     head; a factory reset is a command like any other. */
+    reset_state();
+    {
+        unsigned char fr[] = { 0x1B, '*' };
+        g_cfg.flags = OP_FLAG_VH_INHIBIT;
+        protocol_feed(fr, sizeof fr); protocol_task();
+        CHECK(g_cfg.flags == (OP_FLAG_PAPER_FORCE | OP_FLAG_VH_INHIBIT));
+        /* everything else still resets, and the bit is never set by itself */
+        g_cfg.flags = 0;
+        protocol_feed(fr, sizeof fr); protocol_task();
+        CHECK(g_cfg.flags == OP_FLAG_PAPER_FORCE);
+    }
+
+    /* 56) An interrupted firmware-update handshake must not leave the refusal
+     *     armed: the next job's ESC M skip would end in the same state and fire
+     *     a stray ESC r 01 into the host's reply stream. */
+    reset_state();
+    {
+        unsigned char up[] = { 0x1B, 'R', 0x00, 0x01, 0x00, 0xF1 };
+        unsigned char partial[10];
+        memset(partial, 0xAA, sizeof partial);
+        protocol_feed(up, sizeof up); protocol_task();
+        protocol_feed(partial, sizeof partial); protocol_task();
+        CHECK(g_reply_len == -1);                 /* header not complete yet */
+        protocol_reset();
+        g_reply_len = -1;
+        unsigned char escm[10] = { 0x1B, 'M', 0, 0, 0, 0, 0, 0, 0, 0 };
+        protocol_feed(escm, sizeof escm); protocol_task();
+        CHECK(g_reply_len == -1);                 /* no spurious ESC r */
+        unsigned char idx[] = { 0x1B, 'n', 31, 0 };
+        protocol_feed(idx, sizeof idx); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 31);                  /* and the parser is in step */
+    }
+
+    /* 57) ESC Z (CompressedPrintData, from lw5xxmon.dll's opcode table): the
+     *     17-byte header plus exactly the declared payload is consumed, nothing
+     *     is printed or fed, and the next command still parses. */
+    reset_state();
+    {
+        unsigned char z[2 + 15 + 40];
+        int k = 0;
+        z[k++] = 0x1B; z[k++] = 'Z';
+        z[k++] = 0x03;                              /* scheme */
+        z[k++] = 40; z[k++] = 0; z[k++] = 0; z[k++] = 0;   /* payload u32 LE */
+        z[k++] = 1; z[k++] = 2;                     /* BPP, Align */
+        z[k++] = 10; z[k++] = 0; z[k++] = 0; z[k++] = 0;   /* W = lines */
+        z[k++] = (unsigned char)(HEAD_DOTS & 0xFF);
+        z[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+        z[k++] = 0; z[k++] = 0;                     /* H = dots */
+        for (int i = 0; i < 40; i++) z[k++] = (i & 1) ? 0x1B : 'A';  /* hostile body */
+        protocol_feed(z, sizeof z); protocol_task();
+        CHECK(g_lines == 0 && g_feed == 0);         /* consumed, nothing printed */
+        CHECK(g_reply_len == -1);                   /* body never became commands */
+        unsigned char idx[] = { 0x1B, 'n', 27, 0 };
+        protocol_feed(idx, sizeof idx); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 27);
+        /* a zero-length body returns to the command state directly */
+        reset_state();
+        unsigned char z0[2 + 15 + 4];
+        memcpy(z0, z, 17);
+        z0[3] = z0[4] = z0[5] = z0[6] = 0;
+        z0[17] = 0x1B; z0[18] = 'n'; z0[19] = 5; z0[20] = 0;
+        protocol_feed(z0, sizeof z0); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 5);
+    }
+
+    /* 58) Every fixed-length command in the genuine language consumes exactly
+     *     its own argument bytes. The lengths come from the stock port
+     *     monitor's own DPL iterator, which carries a byte length per opcode.
+     *     Getting one wrong desynchronises the parser into reading raster data
+     *     as commands: the old "unknown byte after ESC eats one argument" rule
+     *     was wrong for ESC l, ESC t (4 bytes), ESC X (5) and ESC H, ESC m,
+     *     ESC b (2).
+     *
+     *     The probe is built so BOTH directions fail loudly. The arguments end
+     *     in 0x1B, so a command that eats too FEW leaves an ESC pending and the
+     *     following GS D is swallowed as its opcode - no reply. A command that
+     *     eats too MANY swallows the GS itself - also no reply. */
+    {
+        static const struct { unsigned char op; int args; } cmds[] = {
+            { '#', 1 },   /* SetNumberOfCopies    */
+            { 'p', 1 },   /* DoCutLabel           */
+            { 'P', 0 },   /* GetEthernetPhyState  */
+            { 'x', 0 },   /* GetPrintEngineParams */
+            { 'H', 2 },   /* SetHorzResolution    */
+            { 'm', 2 },   /* GetSensorsValues     */
+            { 'b', 2 },   /* PrintEngineStatusTwin*/
+            { 'l', 4 },   /* SetLabelLeader       */
+            { 't', 4 },   /* SetLabelTrailer      */
+            { 'X', 5 },   /* SetPrintEngineParams */
+            { 'T', 1 },   /* SetFeedSpeed         */
+            { 'q', 1 },   /* SelectRoll           */
+            { 'C', 1 },   /* SetPrintDensity      */
+            { 'A', 1 },   /* PrintEngineStatus    */
+            { 'n', 2 },   /* SetLabelIndex        */
+            { 's', 4 },   /* StartPrintJob        */
+            { 'M', 8 },   /* SetMediaType         */
+        };
+        int bad = 0;
+        for (unsigned k = 0; k < sizeof cmds / sizeof cmds[0]; k++) {
+            unsigned char buf[24];
+            int n = 0;
+            reset_state();
+            buf[n++] = 0x1B; buf[n++] = cmds[k].op;
+            for (int i = 0; i < cmds[k].args; i++)
+                buf[n++] = (unsigned char)((i == cmds[k].args - 1) ? 0x1B : 0x77);
+            buf[n++] = 0x1D; buf[n++] = 'D'; buf[n++] = 0x05;   /* build id, replies */
+            protocol_feed(buf, n); protocol_task();
+            if (g_reply_len < 3 || g_reply[0] != 'D' || g_reply[1] != 0x05) {
+                printf("     ESC %c (%d args): no build-id reply - out of step\n",
+                       cmds[k].op, cmds[k].args);
+                bad++;
+            }
+        }
+        CHECK(bad == 0);
+    }
+
+    /* 59) The inter-label feed is measured along the FEED axis. ESC D's two
+     *     32-bit fields are W then H, and W is the number of dot LINES while H
+     *     is the width across the head - the opposite of what the names
+     *     suggest. The genuine capture settles it: ESC D 01 02 | 9c 00 00 00 |
+     *     10 01 00 00 is W=156, H=272, and the raster that follows is
+     *     156 * (272/8) = 5304 bytes, matching the stream byte for byte.
+     *
+     *     emit_line() steps the motor once per printed line, so after a block
+     *     the paper has advanced exactly `lines` dots; that is what must be
+     *     subtracted from the label pitch. The property that pins the axis is
+     *     the second case: the SAME line count at a different raster WIDTH must
+     *     feed the same distance, because the image's width has no physical
+     *     bearing on how far paper moves.
+     *
+     *     Storing the width instead made the advance shrink as the image got
+     *     wider, and at the full head width it collapsed to the bare gap -
+     *     1.7 mm instead of 46 mm, so every label after the first printed on
+     *     top of the one before it. The whole rest of this suite passes either
+     *     way, which is why this case exists. */
+    {
+        static unsigned char fj[32 + 100 * (HEAD_DOTS / 8)];
+        /* 1111 dots as a RAW ESC L length: 0x0457 is in neither model's paper
+         * table, so both take the raw-length path and the arithmetic below is
+         * one number for both. (The table path is covered by cases 34-35.) */
+        const int pitch = 1111;
+        const int lines = 100;
+        static const unsigned widths[2] = { HEAD_DOTS, 272 };
+        int feed[2];
+        for (int w = 0; w < 2; w++) {
+            unsigned bpl = widths[w] / 8;
+            int k = 0;
+            reset_state();
+            fj[k++] = 0x1B; fj[k++] = 'L';
+            fj[k++] = (unsigned char)((pitch >> 8) & 0xFF);   /* ESC L is BE */
+            fj[k++] = (unsigned char)(pitch & 0xFF);
+            esc_d(&fj[k], (unsigned)lines, widths[w]); k += 12;
+            for (unsigned i = 0; i < lines * bpl; i++) fj[k++] = 0xFF;
+            fj[k++] = 0x1B; fj[k++] = 'G';
+            /* 8.4 kB does not fit the input ring, so deliver it the way the USB
+             * stack does: one 64-byte bulk packet at a time, draining between
+             * packets. A single oversized protocol_feed() would silently drop
+             * the tail and the raster would never finish. */
+            for (int off = 0; off < k; off += 64) {
+                int chunk = (k - off < 64) ? (k - off) : 64;
+                protocol_feed(&fj[off], (unsigned)chunk);
+                protocol_task();
+            }
+            feed[w] = g_feed;
+            CHECK(g_lines == lines);
+        }
+        /* printed lines + the rest of the pitch + the die-cut gap */
+        CHECK(feed[0] == lines + (pitch - lines) + 50);
+        CHECK(feed[1] == feed[0]);              /* width must not move the paper */
+    }
+
+    /* 60) ESC Z's declared payload length is host data and must be bounded by
+     *     the raster geometry in the same header. 0xFFFFFFFF once put the
+     *     parser in S_SKIP for 4 GiB, with no escape in the byte stream at all:
+     *     the device accepted everything and answered nothing, for this job and
+     *     every job behind it, until a SOFT_RESET or a power cycle. */
+    {
+        static const unsigned long bogus[] = { 0xFFFFFFFFul, 0x10000000ul, 0x00100000ul };
+        for (unsigned b = 0; b < sizeof bogus / sizeof bogus[0]; b++) {
+            unsigned char z[2 + 15 + 4];
+            int k = 0;
+            reset_state();
+            z[k++] = 0x1B; z[k++] = 'Z';
+            z[k++] = 0x03;                                  /* scheme */
+            z[k++] = (unsigned char)(bogus[b]        & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >>  8) & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >> 16) & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >> 24) & 0xFF);
+            z[k++] = 1; z[k++] = 2;                         /* BPP, Align */
+            z[k++] = 10; z[k++] = 0; z[k++] = 0; z[k++] = 0; /* W = 10 lines */
+            z[k++] = (unsigned char)(HEAD_DOTS & 0xFF);      /* H = head width */
+            z[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+            z[k++] = 0; z[k++] = 0;
+            /* A body of 10 * HEAD_BYTES could never compress to any of these,
+             * so the length is rejected and the parser stays live. */
+            z[k++] = 0x1B; z[k++] = 'n'; z[k++] = 29; z[k++] = 0;
+            protocol_feed(z, (unsigned)k); protocol_task();
+            protocol_feed(q, sizeof q); protocol_task();
+            CHECK(g_reply[5] == 29);
+        }
+        /* An honest length still skips exactly its own body (case 57 covers the
+         * in-range path; this asserts the bound did not break it). */
+        reset_state();
+        unsigned char zo[2 + 15 + 40 + 4];
+        int k = 0;
+        zo[k++] = 0x1B; zo[k++] = 'Z'; zo[k++] = 0x03;
+        zo[k++] = 40; zo[k++] = 0; zo[k++] = 0; zo[k++] = 0;
+        zo[k++] = 1; zo[k++] = 2;
+        zo[k++] = 10; zo[k++] = 0; zo[k++] = 0; zo[k++] = 0;
+        zo[k++] = (unsigned char)(HEAD_DOTS & 0xFF);
+        zo[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+        zo[k++] = 0; zo[k++] = 0;
+        for (int i = 0; i < 40; i++) zo[k++] = (i & 1) ? 0x1B : 'A';
+        zo[k++] = 0x1B; zo[k++] = 'n'; zo[k++] = 30; zo[k++] = 0;
+        protocol_feed(zo, (unsigned)k); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 30);
+    }
+
+    /* 61) The cool-down wait in emit_line(): over the limit, then cool. The
+     *     firmware must WAIT and then print - dropping the line would leave a
+     *     white band in the middle of a label with no error anywhere. */
+    {
+        reset_state();
+        g_hot_polls = 3;
+        unsigned char j[64]; int n = 0;
+        j[n++] = 0x1B; j[n++] = 's'; j[n++] = 1; j[n++] = 0; j[n++] = 0; j[n++] = 0;
+        esc_d(&j[n], 3, 16); n += 12;
+        for (int i = 0; i < 6; i++) j[n++] = 0xFF;
+        protocol_feed(j, (unsigned)n); protocol_task();
+        CHECK(g_lines == 3);            /* waited, then printed all three */
+        CHECK(g_delays == 3);           /* three 10 ms polls, only on line 1 */
+    }
+
+    /* 62) The same gate, over the limit FOREVER, at both call sites - and the
+     *     two make opposite decisions on purpose:
+     *
+     *     emit_line() prints anyway after the bounded ~1 s wait. By then the
+     *     dwell has already been scaled down by thermal_dwell_scale(), so the
+     *     energy is reduced rather than nominal, and a host job that stalls
+     *     forever is worse than a slightly light label.
+     *
+     *     protocol_self_test() REFUSES. Nobody is waiting on its output, it is
+     *     the operator's own bring-up tool, and DECISIONS D7 is explicit that a
+     *     bring-up self-test must never be the thing that cooks the head.
+     *
+     *     Writing these two the same way round would be the natural mistake,
+     *     so both are pinned here. */
+    {
+        reset_state();
+        g_hot_polls = -1;
+        unsigned char j[64]; int n = 0;
+        j[n++] = 0x1B; j[n++] = 's'; j[n++] = 1; j[n++] = 0; j[n++] = 0; j[n++] = 0;
+        esc_d(&j[n], 3, 16); n += 12;
+        for (int i = 0; i < 6; i++) j[n++] = 0xFF;
+        protocol_feed(j, (unsigned)n); protocol_task();
+        CHECK(g_lines == 3);            /* prints anyway, at a reduced dwell */
+        CHECK(g_delays == 300);         /* 100 bounded polls per line */
+
+        reset_state();
+        g_hot_polls = -1;
+        protocol_self_test();
+        CHECK(g_lines == 0);            /* refuses: not one dot */
+        CHECK(g_delays == 100);         /* one bounded wait, then it gives up */
+    }
+
+    /* 63) GS with an unknown sub-command consumes exactly that one byte and
+     *     resyncs. PROTOCOL.md defines only GS C (1D 43) and GS D (1D 44);
+     *     every other 1D xx lands on the resync, which no test had ever
+     *     executed. The sweep is exhaustive because it is free. */
+    {
+        int bad = 0;
+        for (int x = 0; x < 256; x++) {
+            if (x == 'C' || x == 'D') continue;
+            reset_state();
+            unsigned char b[] = { 0x1D, (unsigned char)x, 0x1B, 'A', 0x00 };
+            protocol_feed(b, sizeof b); protocol_task();
+            if (g_reply_len != 32 || g_lines != 0 || g_feed != 0) bad++;
+        }
+        CHECK(bad == 0);
+        /* The corollary: the resync eats the byte itself, so an ESC that lands
+         * in that position is consumed and the command behind it is not. */
+        reset_state();
+        unsigned char b2[] = { 0x1D, 0x1B, 'A', 0x00 };
+        protocol_feed(b2, sizeof b2); protocol_task();
+        CHECK(g_reply_len == -1);
+    }
+
+    /* 64) Status byte 8 is PrintHeadStatus, and it must follow the thermal
+     *     gate. DYMO's own 550 Linux driver reads exactly this byte -
+     *     `phStatus = status[8] & 3; if (phStatus == 1) -> jsHeadOverheat` -
+     *     and then pauses the job and reprints the page. It was hardwired to 0,
+     *     so a host could never see an overheat while emit_line() was waiting
+     *     up to a second per dot line for the head to cool. */
+    {
+        reset_state();
+        g_hot_polls = -1;                       /* over the limit, indefinitely */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 1);   /* overheated */
+        reset_state();                          /* g_hot_polls back to 0 = cool */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 0);   /* ok */
+    }
+
+    /* 65) A sensor fault is reported to the host as "unknown" (byte 8 = 2, the
+     *     tech reference's own default for that byte), and it stops the button
+     *     self test outright - where a host raster prints anyway at a reduced
+     *     dwell. Nobody is waiting on the self test, and on a bring-up board an
+     *     unpopulated thermistor divider is the normal state, so this is exactly
+     *     the case D7 means by "a bring-up self-test must never be the thing
+     *     that cooks the head". */
+    {
+        reset_state();
+        g_sensor_fault = 1;
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 2);   /* unknown */
+        protocol_self_test();
+        CHECK(g_lines == 0);                                 /* not one dot */
+        /* ...and a believable sensor still runs it, so the guard is not simply
+         * disabling the self test. */
+        reset_state();
+        protocol_self_test();
+        CHECK(g_lines == 400);
+    }
+
+    /* 66) RASTER GEOMETRY, asserted on the bytes the head was actually handed.
+     *
+     *     A narrow raster is centered on the head and a wide one is clipped,
+     *     and until now nothing could see either: the mock discarded the line
+     *     and counted the call. The mutation survivors were exactly here -
+     *     s_xoff could be forced to 0 and the s_use clamp inverted with the
+     *     whole suite still green.
+     *
+     *     The full-width case is the anchor: it must start at dot 0 and end at
+     *     the last dot of the head, so the narrow cases below are measured
+     *     against a known edge rather than against each other. */
+    {
+        reset_state();
+        {
+            unsigned char j[32 + HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, HEAD_DOTS); n += 12;
+            for (unsigned i = 0; i < HEAD_BYTES; i++) j[n++] = 0xFF;
+            protocol_feed(j, (unsigned)n); protocol_task();
+            CHECK(g_lines == 1);
+            CHECK(last_first_dot() == 0);
+            CHECK(last_last_dot() == HEAD_DOTS - 1);
+        }
+        /* A raster half the head width is centered: the margin on each side is
+         * (HEAD_DOTS - 8*bpl)/2 rounded to whole BYTES, which is what
+         * begin_raster() computes as s_xoff. */
+        {
+            reset_state();
+            const unsigned bpl = HEAD_BYTES / 2;
+            unsigned char j[32 + HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, bpl * 8); n += 12;
+            for (unsigned i = 0; i < bpl; i++) j[n++] = 0xFF;
+            protocol_feed(j, (unsigned)n); protocol_task();
+            CHECK(g_lines == 1);
+            unsigned xoff = (HEAD_BYTES - bpl) / 2;
+            CHECK(last_first_dot() == (int)(xoff * 8));
+            CHECK(last_last_dot() == (int)(xoff * 8 + bpl * 8 - 1));
+        }
+        /* An OVER-wide raster is clipped to the head, not wrapped, and the
+         * surplus bytes are consumed so the block stays aligned - the command
+         * after it must still parse. */
+        {
+            reset_state();
+            const unsigned bpl = HEAD_BYTES + 4;
+            static unsigned char j[64 + 2 * HEAD_BYTES]; int n = 0;
+            esc_d(&j[n], 1, bpl * 8); n += 12;
+            for (unsigned i = 0; i < bpl; i++) j[n++] = 0xFF;
+            j[n++] = 0x1B; j[n++] = 'n'; j[n++] = 33; j[n++] = 0;
+            for (int off = 0; off < n; off += 64) {
+                int chunk = (n - off < 64) ? (n - off) : 64;
+                protocol_feed(&j[off], (unsigned)chunk);
+                protocol_task();
+            }
+            CHECK(g_lines == 1);
+            CHECK(last_first_dot() == 0);
+            CHECK(last_last_dot() == HEAD_DOTS - 1);   /* clipped, not wrapped */
+            protocol_feed(q, sizeof q); protocol_task();
+            CHECK(g_reply[5] == 33);                   /* still in step */
+        }
+    }
+
+    /* 67) The 5XL inherits the 550's paper codes. lw5xl.gpd opens with
+     *     `*Include: "lw5xx.gpd"` and then restates exactly one inherited
+     *     option (CUSTOMSIZE, only to widen MaxSize and MaxPrintableWidth) -
+     *     which under GPD merge-with-override semantics means the real driver
+     *     can emit every 550 code too.
+     *
+     *     The transcription used to read lw5xl.gpd alone, so 24 codes missed
+     *     paper_lookup() on an OP104 build and fell back to the 1883-dot
+     *     default: a 550 Address label fed 1883 lines instead of 1050, about
+     *     70 mm of blank stock per label. Asserted on BOTH models, because the
+     *     rows are now shared. */
+    {
+        reset_state();
+        unsigned char l[] = { 0x1B, 'L', 0x05, 0x46 };   /* Address 30252, BE */
+        protocol_feed(l, sizeof l); protocol_task();
+        protocol_feed(g, sizeof g); protocol_task();
+        CHECK(g_feed == 1050 + 50);                      /* pitch + die-cut gap */
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

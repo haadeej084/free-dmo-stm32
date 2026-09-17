@@ -17,7 +17,12 @@ what can be checked without a board:
 Two things Renode does not model are bridged, and only these two:
   * RCC_CR2.HSI48RDY and RCC_CFGR.SWS for HSI48 (Renode's STM32F0 RCC leaves
     them 0, so SystemInit would wait forever);
-  * ADC_DR, which is forced to a chosen thermistor code per scenario.
+  * ADC_DR, which is forced to a chosen code per scenario. The hook feeds EVERY
+    conversion, so the same code reaches the thermistor channel and, since D42,
+    the analog photocell channel; the codes are chosen below to satisfy both at
+    once, from the thresholds and the divider orientation the firmware itself
+    declares (thermal.c, pins.h) - a topology change cannot silently invert a
+    scenario, it either still fits or the script says so.
 (The platform's SysTick reference clock is also set to our 48 MHz SYSCLK.)
 USB is not modelled by Renode at all; test/test_usb.c covers that layer.
 
@@ -36,8 +41,52 @@ LED_BIT = 2          # PIN_LED  = PA2
 PAPER_PIN = 0        # PIN_PAPER_SENSE = PA0, present = low
 BUTTON_PIN = 3       # PIN_BUTTON = PA3, pressed = low
 
-COLD_RAW = 1638      # thermal.c THERMAL_COLD_RAW  (25 degC)
-HOT_RAW = 3500       # above THERMAL_LIMIT_RAW 3240 (70 degC)
+
+
+def _define(rel, name, default=None):
+    """An integer #define from a source file - the firmware is the authority."""
+    src = open(os.path.join(ROOT, *rel), encoding="utf-8").read()
+    m = re.search(r"^\s*#define\s+%s\s+(\d+)" % name, src, re.M)
+    return int(m.group(1)) if m else default
+
+
+_TH = ("src", "printer", "thermal.c")
+_PI = ("src", "pins.h")
+HOTTER_IS_HIGHER = _define(_TH, "THERMAL_HOTTER_IS_HIGHER", 1)
+T_LIMIT = _define(_TH, "THERMAL_LIMIT_RAW")
+T_OPEN = _define(_TH, "THERMAL_OPEN_RAW")
+T_SHORT = _define(_TH, "THERMAL_SHORT_RAW")
+P_ANALOG = _define(_PI, "PAPER_SENSE_ANALOG", 0)
+P_ABSENT_ABOVE = _define(_PI, "PAPER_ADC_ABSENT_ABOVE", 4096)
+P_HIGH_IS_ABSENT = _define(_PI, "PAPER_ADC_HIGH_IS_ABSENT", 1)
+
+
+def _paper_present_after(raw):
+    """What one sample of this raw code does to the photocell state, from its
+    initial 'present' (paper_present() starts at 1 and needs the far threshold
+    to change)."""
+    v = raw if P_HIGH_IS_ABSENT else 4095 - raw
+    return v < P_ABSENT_ABOVE
+
+
+def _pick(norm_lo, norm_hi, want_present, what):
+    """A raw ADC code whose NORMALISED thermistor value (higher = hotter, as
+    thermal.c sees it after its own inversion) lies in [norm_lo, norm_hi] and
+    which the analog photocell reads as the wanted paper state."""
+    for n in range(norm_lo, norm_hi + 1):
+        raw = n if HOTTER_IS_HIGHER else 4095 - n
+        if not P_ANALOG or _paper_present_after(raw) == want_present:
+            return raw
+    sys.exit(f"no ADC code satisfies the '{what}' scenario with the firmware's "
+             f"thermistor and photocell thresholds - re-derive this script")
+
+
+# believable and under the limit, paper present  -> 1 Hz "waiting for host"
+OK_RAW = _pick(T_OPEN + 1, T_LIMIT - 1, True, "cold")
+# at or over the 70 degC limit, still believable  -> 5 Hz
+HOT_RAW = _pick(T_LIMIT, T_SHORT - 1, True, "hot")
+# believable and under the limit, paper ABSENT    -> double blink
+NOPAPER_RAW = _pick(T_OPEN + 1, T_LIMIT - 1, False, "nopaper") if P_ANALOG else OK_RAW
 
 
 def elf_symbols(path):
@@ -80,8 +129,8 @@ def led_expected(kind, m):
 
 
 def run_scenario(kind, millis_addr, fault_addr, main_lo, main_hi):
-    adc_raw = HOT_RAW if kind == "hot" else COLD_RAW
-    paper_level = "true" if kind == "nopaper" else "false"
+    adc_raw = {"hot": HOT_RAW, "nopaper": NOPAPER_RAW}.get(kind, OK_RAW)
+    paper_level = "true" if kind == "nopaper" else "false"   # the digital fallback pad
     lines = [
         'mach create "opendmo"',
         "machine LoadPlatformDescription @platforms/cpus/stm32f072.repl",

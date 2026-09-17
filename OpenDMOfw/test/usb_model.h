@@ -9,6 +9,7 @@
 #include <string.h>
 #include "mcu.h"
 #include "usb/usb_core.h"
+#include "host_periph.h"
 
 /* ---- peripheral model --------------------------------------------------- */
 USB_Type host_usb;

@@ -16,7 +16,7 @@ carries replies (status, SKU record, version).
 | Field | 5XL geometry (`MODEL=OP104`) | 550 (default, OP57) |
 |-------|----------------------|--------------------|
 | idVendor | `0x0922` (D.mo) | `0x0922` |
-| idProduct | `0x002A` | `0x0028` (DYMO Connect's own table: 550 `0x28`, 550 Turbo `0x29`, 5XL `0x2A`, 550 Twin Turbo `0x2B`, Twin Pro `0x2C`, 5XL Pro `0x2D`) |
+| idProduct | `0x002A` | `0x0028`. The driver's own PID→model table: `0x28` 550, `0x29` 550 Turbo, `0x2A` 5XL, `0x2B` 550 Twin Turbo, `0x2C` 550 **Twin** Pro, `0x2D` 5XL Pro, `0x1010` LabelManager Executive 640. Source: `dcx/src_DYMO.PrinterCommands/DYMO.PrinterCommands/PID.cs` and `CommandUtils.PidToModel`, which map exactly these seven and nothing else. Earlier revisions of this row invented a "550 Pro" at `0x2C` and shifted everything after it by one, giving a `0x2E` the driver does not define — DYMO's own PID space has no plain 550 Pro at all |
 | Manufacturer | `DYMO` | `DYMO` |
 | Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
 | Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
@@ -42,6 +42,13 @@ the driver GPDs' `MaxPrintableWidth`.
 | 1 | GET_PORT_STATUS | IN (`0xA1`) | 1 byte: bit3 no-error, bit4 select, bit5 paper-out |
 | 2 | SOFT_RESET | OUT (`0x21`, `0x23` also accepted) | reset the print pipeline, drop a queued bulk-IN reply and clear an IN stall (DTOG untouched) |
 
+Standard requests with an **endpoint recipient** (`GET_STATUS`, `SET_FEATURE`,
+`CLEAR_FEATURE`) are honoured only for the two endpoints that exist, `0x02` and
+`0x82`; any other `wIndex` is a Request Error and is stalled. `HALT` on the
+default control pipe is refused for `SET_FEATURE` and acknowledged without
+touching a register for `CLEAR_FEATURE` (USB 2.0 9.4.5: Halt on the default
+pipe "is neither required nor recommended").
+
 ## Data commands (bulk OUT)
 
 Multi-byte fields are little-endian unless noted — **`ESC L` is the exception and
@@ -52,21 +59,22 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 73` + JobID(u32) | **ESC s** | Start of print job (mandatory; ID echoed in status) | tech ref p.11 |
 | `1B 4C` + len(**u16 BE**) | **ESC L** | "Sets the print engine mode between normal label stock and continuous label stock" (tech ref p.11 — it gives no parameter table). We take a u16 **MSB-first**: `0` = die-cut (roll sets the pitch, clears any override), a plain dot length is the feed pitch. Three independent sources for the byte order: DYMO's own CUPS driver writes `(v>>8)` then `v&0xff` and pins it in a unit test; Microsoft's GPD rule makes `<1B>L<0867>` emit bytes `08 67` in that order; and read big-endian, 12 of 14 LW5XX.GPD entries are exactly `height_dots + 300` where byte-swapped they are noise | CUPS driver `SendLabelLength`; GPD; LW5XX.GPD |
 | `1B 68` / `1B 69` | **ESC h / i** | Text / graphics output mode | tech ref p.11 |
-| `1B 54` + speed | **ESC T** | Speed: `0x10` normal, `0x20` high. The tech ref prints `1B 74`, a typo: `0x74` is `t`; the driver GPD sends `<1B>T` | tech ref p.11; LW5XX.GPD |
+| `1B 54` + speed | **ESC T** | Speed: `0x10` = "High speed Off", `0x20` = "High speed On" (the driver's own UI wording). The tech ref prints `1B 74`, and that is not just a wrong name: `0x74` is `ESC t` = `SetLabelTrailer`, a **four**-argument command. A parser that treats `ESC t` as a one-argument speed command desynchronises by three bytes | tech ref p.11; LW5XX.GPD; port monitor tables |
 | `1B 6E` + idx(u16) | **ESC n** | Set label index (echoed in status) | tech ref p.12 |
 | `1B 44` + BPP Align W(u32) H(u32) + data | **ESC D** | Start of label print data: **W = number of lines**, **H = number of dots**; then `W × ⌈H·BPP/8⌉` bytes. Driver sends `BPP=1, Align=2` (2 = bottom, the only value the manual documents, and what genuine driver captures carry). MSB of the first byte = leftmost dot | tech ref p.12 |
+| `1B 5A` + 15 B header + payload | **ESC Z** | **Compressed print data** — the compressed sibling of `ESC D`. Header: scheme byte, payload length u32 LE, then `ESC D`'s own 10 bytes (BPP, Align, W, H); then exactly that many compressed bytes. The stock port monitor emits it only when `LabelCompressMode` is set under `HKLM\Software\DYMO\LW5xx`. We consume the header and the payload exactly and print nothing: the compression format is not established (the monitor statically links zlib), and letting the body reach the parser would turn every stray `0x1B` in it into a command | lw5xxmon.dll opcode table + its emitter |
 | `1B 47` | **ESC G** | Feed to print head (short form feed, between labels) | tech ref p.13 |
 | `1B 45` | **ESC E** | Feed to tear position (long form feed) | tech ref p.13 |
 | `1B 51` | **ESC Q** | End of print job (releases the lock) | tech ref p.13 |
 | `1B 41` + lock | **ESC A** | Request status → 32-byte struct on bulk-IN. Lock: 0 read, 1 lock, 2 no-lock-multiple | tech ref p.13 |
 | `1B 43` + duty | **ESC C** | Print density, `0–200` % (0 = off); echoed in status byte 9. The Windows driver's density ladder is `0x4B`/`0x58`/`0x64`/`0x71` (75/88/100/113 %), mirroring the ESC c/d/e/g presets below | tech ref p.16; capture byte9=0x64; LW5XX.GPD |
 | `1B 63` / `1B 64` / `1B 65` / `1B 67` | **ESC c / d / e / g** | Zero-argument print-density presets: Light 75 %, Medium 87.5 %, Normal 100 %, Dark 112.5 %. The CUPS driver emits one of these per job for the PPD's darkness choice. **`ESC d` was previously our feed backdoor** — a collision that would have eaten the next command's `ESC`; the feed now lives on `GS D 0x02` and `ESC f 1 n` | LW450 tech ref p.19; CUPS driver `SetPrintDensity` |
-| `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes); always sent by the driver, consumed + ignored | decompiled driver |
+| `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes), consumed + ignored. The 8-byte argument is confirmed by the driver's own length table, but note that the **Windows spooler driver never sends it** — no `1B 4D` is constructed anywhere in the three driver DLLs or any GPD. Only the managed DYMO Connect path emits it | port monitor length table; decompiled driver |
 | `1B 55` | **ESC U** | Get SKU info → 63-byte consumable record (below) | tech ref p.16 |
 | `1B 56` | **ESC V** | Get version → 34-byte reply (below) | tech ref p.20 |
-| `1B 24` | **ESC $** | Restore factory settings (config back to defaults). `1B 2A` (`ESC *`) is accepted as an alias | tech ref p.20 |
+| `1B 2A` | **ESC *** | Restore factory settings (config back to defaults). `0x2A` is the opcode the stock port monitor dispatches as `RestoreFactorySettings`; it has no entry for `0x24`, which lands in its Unknown handler. The tech ref prints `1B 24` — the mnemonic is right and the hex is the typo — so we accept `1B 24` as an alias. The reset never clears `OP_FLAG_VH_INHIBIT`: the heat-rail interlock is not a setting a host may switch off | lw5xxmon.dll opcode table; tech ref p.20 |
 | `1B 6F` + count(u8) | **ESC o** | Set label count. **One** argument byte: the tech ref's table is `Byte 0 1 2 / 'ESC' 'o' Count`, three bytes total, where `ESC n`/`ESC L` get explicit two-byte tables. If a host does send a u16, its `0x00` high byte is ignored as a stray rather than eaten as a command — the safe direction. Use `GS C` for counts above 255 | tech ref p.20 |
-| `1B 71` + ID | **ESC q** | "Select output tray" on the 550 ("will be supported by LW550 Twin Turbo"). On the 450 the same opcode is "Select Roll (Twin Turbo only)" with an **ASCII digit** argument: `0x30` '0' automatic, `0x31` '1' left, `0x32` '2' right - not binary 0/1/2. One roll here, so the byte is accepted and ignored under either encoding | tech ref p.5; LW450 tech ref p.16 |
+| `1B 71` + ID | **ESC q** | Select roll. The argument is an **ASCII digit**, and the 550 family has four values, not three: `'0'` auto-switch left (default), `'1'` left roll, `'2'` right roll, `'3'` auto-switch right. One roll here, so the byte is accepted and ignored | lw550tt.gpd; driver string table; tech ref p.5 |
 | `1B 79` / `1B 7A` | **ESC y / z** | 400-series "set print resolution" 300x300 / 203x300. **Zero-argument**; accepted and ignored - this family is 300x300 in every mode, so the only point is not to eat the next command | LW400 tech ref p.19 |
 | `1B 66 01` + n | **ESC f 1 n** | Skip `n` dot lines. Documented in the **450** series tech ref; dropped from the 550 manual but cheap to honour | LW450 tech ref p.10 |
 | `1B 40` | **ESC @** | Restart print engine → full pipeline reset here | tech ref p.20 |
@@ -83,7 +91,8 @@ test); no DYMO command is `ESC ESC`.
 
 **`ESC L` sentinels.** The value is a length, but two values are not: `7F 00`
 (custom size) and `FF FF` (continuous stock). Both clear the length override and
-take the label pitch from the raster height of the page just printed.
+take the label pitch from the number of dot lines the page just printed (the
+feed axis — see the `ESC D` note below, whose field names are inverted).
 
 **Label counter vs. eject (deliberate deviation).** On a genuine 550 the roll
 tag's counter advances on every label **eject**, including a feed with nothing
@@ -96,14 +105,36 @@ unverified. The parser is byte-driven and resumable: if the
 ring buffer runs dry mid-raster it continues on the next `protocol_task()`
 without losing the job.
 
-**Over-wide rasters.** `ESC D` may declare a height larger than the head
-(`H > 1248` / `672`). The surplus bytes of every line are consumed and discarded
-rather than clipped away, so the rest of the block stays aligned; only the first
-`HEAD_BYTES` are printed. A header whose width or derived bytes-per-line does
-not fit in 16 bits is dropped entirely (its length is unknowable) and the parser
-resyncs on the next `ESC`.
+**`ESC D`'s two 32-bit fields are `W` then `H`, and they do NOT mean what the
+letters suggest.** `W` is the number of dot **LINES** (the feed axis) and `H` is
+the width **ACROSS the head**. The genuine capture settles it: `1B 44 01 02 |
+9C 00 00 00 | 10 01 00 00` is W=156, H=272, and the raster that follows is
+156 × (272/8) = 5304 bytes, matching the stream byte for byte.
+
+This paragraph used to call `H` the "height", and that wording is exactly what
+licensed a real defect: the firmware stored `H` as the printed length and
+subtracted it from the label pitch, so the inter-label feed shrank as the image
+got *wider* and, at full head width, collapsed to the bare 20-dot gap — every
+label after the first printing on top of the previous one. Keep the axes in the
+names.
+
+**Over-wide rasters.** `ESC D` may declare an across-head width larger than the
+head itself (`H > 1248` / `672`). The surplus bytes of every line are consumed
+and discarded rather than clipped away, so the rest of the block stays aligned;
+only the first `HEAD_BYTES` are printed. A header whose line count or derived
+bytes-per-line does not fit in 16 bits is dropped entirely (its length is
+unknowable) and the parser resyncs on the next `ESC`.
 
 ### 32-byte status struct (ESC A reply)
+
+The request is always three bytes (`1B 41 lock`). The **reply length is
+model-dependent**: 32 bytes for the single-roll models (PID `0x28`, `0x29`,
+`0x2A`, `0x2D`), and 70 bytes for the twin-roll ones (`0x2B`, `0x2C`) —
+a 6-byte outer header followed by two 32-byte per-roll blocks. The host treats
+any other length as a hard failure, so a single-roll build must never advertise
+a twin PID. A genuine newer unit may also answer with a framed `ESC S`
+(`StatusResponse`) instead of the raw struct; the host accepts either, and our
+raw 32-byte reply is the one its length table expects for our PIDs.
 
 Layout per tech ref p.13–16; values cross-checked against a live capture
 (`capture_long.log`: byte9=`0x64`=100 % density, byte10=`8` OK / `10` counterfeit).
@@ -114,7 +145,7 @@ Layout per tech ref p.13–16; values cross-checked against a live capture
 | 1–4 | PrintJobID (u32 LE) | Job ID of the ongoing job (from ESC s) |
 | 5–6 | LabelIndex (u16 LE) | Label index (from ESC n) |
 | 7 | Reserved | 0 |
-| 8 | PrintHeadStatus | 0 ok, 1 overheated, 2 status unknown (the manual's default) — we report `0` |
+| 8 | PrintHeadStatus | `0` = ok, `1` = overheated, `2` = unknown. Derived from the thermal path since cycle 3: `2` when the thermistor reading is not believable (open circuit, short, or no divider fitted — DECISIONS D33), `1` while the D7 over-temperature latch is set, `0` otherwise. DYMO's own 550 Linux driver reads exactly this byte (`phStatus = status[8] & 3`) and pauses the job and reprints the page on `1`, so a constant `0` meant a host could never see an overheat |
 | 9 | PrintDensity (%) | 0–200 (last ESC C / default 100) |
 | 10 | MainBayStatus | Full range (tech ref p.14): 0 unknown, 1 bay open, 2 no media, 3 not inserted properly, 4 media present/status unknown, 5 empty, 6 critically low, 7 low, **8 media present – ok**, 9 jammed, 10 **counterfeit media**. Always `8` here |
 | 11–22 | SKU info | 12 chars, NUL-padded (the configured SKU) |
@@ -180,9 +211,18 @@ four four-character groups, no separators.
 | 28–31 | Release date | `MMYY` |
 | 32–33 | USB PID (LE) | `0x002A` (5XL) / `0x0028` (550) |
 
-We send `FWAP000100010921`. The *values* are still ours (D12) — the host treats
-them as informational — but the shape is now the documented one; the earlier
-`FWAP01.02.2112` was not a well-formed reply.
+We send `FWAP000100010921`. The shape is not optional and the values are **not**
+purely informational — that was wrong, and the driver's own decoder says so:
+
+* bytes 16–19 must be literally `FWAP` (application) or `FWBL` (boot loader);
+  anything else makes the host classify the firmware mode as Unknown;
+* bytes 20–23 and 24–27 are parsed as **base-10 ASCII** major and minor, and the
+  host discards the whole version record unless both parse as non-zero;
+* bytes 32–33 are the PID, and if it maps to a known model the host **overrides**
+  the model it derived from the Windows hardware ID. Since the model then
+  selects how many bytes the host expects back from `ESC A` (see below), a wrong
+  PID here silently breaks status reads. Ours is `MODEL_PID`, so it agrees with
+  the USB descriptor by construction — keep it that way.
 
 ## Backdoor commands (never sent by the stock host)
 
@@ -207,8 +247,8 @@ The stock host never sends `GS D`, so this cannot collide with the genuine proto
 | `0x04` | – | Diagnostic snapshot | 24 B (below) |
 | `0x05` | – | Firmware build id (ASCII, from `git describe` at build time; `dev` outside a checkout) | 2–50 B: `'D' sub build[…]`, capped at 48 chars |
 | `0x06` | – | **Scan**: sample every ADC-capable pin and read the input level of every pin on ports A/B/C. Drops the 24 V rail first, because sampling briefly floats pins — including the strobes | 29 B (below) |
-| `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode. PA11/PA12 (USB) and PA13/PA14 (SWD) are refused | 3 B: `'D' sub done(1/0)` |
-| `0x08` | 0 or 1 | Clear/set **`OP_FLAG_VH_INHIBIT`**, the hard interlock on the 24 V heat rail, and persist it. Setting it drops the rail immediately | 3 B: `'D' sub flags` |
+| `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode **and its output level**. Refused: PA11/PA12 (USB) and PA13/PA14 (SWD), because toggling those ends the session instead of answering the question — **and every pin that can put heat into the head**: the VH gate `PA8` and each fitted strobe (`PB0`, `PB1`). The command cannot know a pin's polarity, so on the active-low VH gate it would switch the rail ON, and on a strobe it would fire an unmetered pulse outside the thermal gate. The spare strobes `PB2`/`PB3` stay toggleable — finding them is the point | 3 B: `'D' sub done(1/0)` |
+| `0x08` | 0 or 1 | Clear/set **`OP_FLAG_VH_INHIBIT`**, the hard interlock on the 24 V heat rail, and persist it. Setting it drops the rail immediately. The reply carries **two different facts**: `flags` is the LIVE interlock, already in force (`head.c` gates on the RAM copy), and `persisted` says whether it reached the EEPROM. They are separate because a part can ACK a write and store nothing — write-protected, wrong device fitted, worn cell — and an operator who armed the interlock, read a confirming reply and power-cycled would have found it gone | 4 B: `'D' sub flags persisted` |
 | `0x09` | `'D' 'F' 'U'` | **Reboot into ST's USB DFU boot loader** (appears as `0483:df11`). Only with exactly these three confirmation bytes and never during a job; drops the heat rail, replies, then resets | 3 B: `'D' sub accepted(1/0)` |
 
 Snapshot (24 B): `[0]'D' [1]sub [2]model id (PID low) [3-4]thermistor raw u16 BE
@@ -251,3 +291,103 @@ and for continuous stock a second `ESC L FF FF`.
 
 `tools/opsend.py` sends the same command set (plus `ESC M` with 8 zero bytes,
 as the decompiled driver does) and can send a test pattern or a PNG.
+
+## Appendix — the engine's own opcode table (recovered)
+
+The stock Windows port monitor `lw5xxmon.dll` dispatches print-engine opcodes
+through a jump table, with a byte index table based at opcode `0x23`. Decoding
+both tables gives the list below. The names are the monitor's own; an entry here
+means the monitor knows the opcode, not that a 550 accepts it (the table is
+shared across the LW5xx family, so some entries are for the Twin Turbo, the
+cutter models or the network models). Anything not in the table lands in its
+Unknown handler.
+
+| Opcode | Char | Name in the monitor | Us |
+|--------|------|---------------------|----|
+| `0x23` | `#` | SetNumberOfCopies | not implemented |
+| `0x2A` | `*` | RestoreFactorySettings | yes (and `0x24` as the manual's typo) |
+| `0x40` | `@` | RestartPrintEngine | yes |
+| `0x41` | `A` | PrintEngineStatus | yes |
+| `0x43` | `C` | SetPrintDensity | yes |
+| `0x44` | `D` | LabelPrintData | yes |
+| `0x45` | `E` | FeedToCutPosition | yes |
+| `0x47` | `G` | FeedToPrintHead | yes |
+| `0x48` | `H` | SetHorzResolution | not implemented |
+| `0x4C` | `L` | SetMaxLabelLen | yes |
+| `0x4D` | `M` | SetMediaType | yes (consumed) |
+| `0x50` | `P` | GetEthernetPhyState | network models |
+| `0x51` | `Q` | EndPrintJob | yes |
+| `0x52` | `R` | UpdateRequest | yes (refused) |
+| `0x53` | `S` | StatusResponse | printer → host |
+| `0x54` | `T` | SetFeedSpeed | yes (consumed) |
+| `0x55` | `U` | GetSkuInfo | yes |
+| `0x56` | `V` | PrintEngineVer | yes |
+| `0x57` | `W` | ControlRequest | yes (consumed) |
+| `0x58` | `X` | SetPrintEngineParams | not implemented |
+| `0x5A` | `Z` | CompressedPrintData | consumed, not decompressed |
+| `0x62` | `b` | PrintEngineStatusTwin | Twin Turbo |
+| `0x63` | `c` | Light | yes |
+| `0x64` | `d` | Medium | yes |
+| `0x65` | `e` | Normal | yes |
+| `0x67` | `g` | Dark | yes |
+| `0x68` | `h` | SelectTextOutMode | yes |
+| `0x69` | `i` | SelectGraphOutMode | yes |
+| `0x6C` | `l` | SetLabelLeader | not implemented |
+| `0x6D` | `m` | GetSensorsValues | not implemented |
+| `0x6E` | `n` | SetLabelIndex | yes |
+| `0x70` | `p` | DoCutLabel | cutter models |
+| `0x71` | `q` | SelectRoll | yes (consumed) |
+| `0x72` | `r` | UpdateResponse | printer → host (our `ESC r 01`) |
+| `0x73` | `s` | StartPrintJob | yes |
+| `0x74` | `t` | SetLabelTrailer | not implemented |
+| `0x77` | `w` | ControlResponse | printer → host |
+| `0x78` | `x` | GetPrintEngineParams | not implemented |
+
+### Argument counts — the authoritative table
+
+The same DLL carries a second switch, in its DPL iterator, giving the exact
+fixed byte length of every command *including* the `ESC` and the opcode. That is
+the table a parser has to match, and it is why the commands above are consumed
+rather than ignored: the old "an unknown byte after `ESC` takes one argument"
+rule is wrong for six of them.
+
+| Command | Total bytes | Argument bytes | Command | Total bytes | Argument bytes |
+|---|---|---|---|---|---|
+| `ESC #` | 3 | 1 | `ESC X` | 7 | 5 |
+| `ESC *` | 2 | 0 | `ESC Z` | 17 + payload | 15 + payload |
+| `ESC @` | 2 | 0 | `ESC b` | 4 | 2 |
+| `ESC A` | 3 | 1 | `ESC c/d/e/g` | 2 | 0 |
+| `ESC C` | 3 | 1 | `ESC h`, `ESC i` | 2 | 0 |
+| `ESC D` | 12 + raster | 10 + raster | `ESC l` | 6 | 4 |
+| `ESC E`, `ESC G` | 2 | 0 | `ESC m` | 4 | 2 |
+| `ESC H` | 4 | 2 | `ESC n` | 4 | 2 |
+| `ESC L` | 4 | 2 | `ESC p` | 3 | 1 |
+| `ESC M` | 10 | 8 | `ESC q` | 3 | 1 |
+| `ESC P` | 2 | 0 | `ESC s` | 6 | 4 |
+| `ESC Q` | 2 | 0 | `ESC t` | 6 | 4 |
+| `ESC T` | 3 | 1 | `ESC x` | 2 | 0 |
+| `ESC U`, `ESC V` | 2 | 0 | | | |
+
+`ESC R`, `ESC S`, `ESC W`, `ESC r` and `ESC w` are variable-length; the
+iterator refuses them outright ("Unsupported varlen command"), which is a
+reminder that they are transport framing rather than print commands.
+
+Every fixed-length command above is consumed with exactly these counts by
+`protocol.c`, and `test/test_protocol.c` scenario 58 probes each one with a
+trailing `GS D` that only replies if the parser is still in step.
+
+### Job grammar
+
+The monitor's job parser is stricter than the example above suggests, and it is
+worth matching:
+
+* the stream **must** begin with `ESC s`;
+* the job header runs from `ESC s` up to (not including) the first `ESC n`;
+  meeting `ESC D` or `ESC Z` before an `ESC n` aborts header parsing;
+* a label runs from `ESC n` until `ESC G` or `ESC p` (inclusive), or until
+  `ESC E`, `ESC Q` or the next `ESC n` (exclusive) — so `ESC G` and `ESC p` are
+  per-label terminators while `ESC E` and `ESC Q` are per-job.
+
+`SetLabelLeader`, `SetLabelTrailer`, `GetSensorsValues`, `SetPrintEngineParams`
+and `GetPrintEngineParams` remain the interesting unknowns: we know their
+lengths, but their argument layouts are in no manual we have.

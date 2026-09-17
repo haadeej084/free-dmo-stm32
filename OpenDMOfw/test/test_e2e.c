@@ -56,6 +56,8 @@ void motor_idle_tick(uint32_t ms) { (void)ms; }
 void thermal_init(void) {}
 uint16_t thermal_read_raw(void) { return 1638; }
 int thermal_ok(void) { return 1; }
+int thermal_sensor_fault(void){ return 0; }   /* a believable sensor */
+int paper_present(void) { return 1; }
 uint16_t thermal_dwell_scale(void) { return 256; }
 void thermal_scan_adc(uint16_t *out) { for (int i = 0; i < 10; i++) out[i] = 0; }
 void store_init(void) {}
@@ -235,6 +237,20 @@ int main(void)
         send_stream(idx, sizeof idx);
         CHECK(read_reply(r) == 32 && r[5] == 9);
         CHECK(g_lines == 5);                         /* nothing printed after the reset */
+    }
+
+    /* 4b) The printer-class SOFT_RESET must also clear the job id, or DYMO's
+     *     language monitor can never re-acquire the lock after a host crash. */
+    {
+        const uint8_t job[] = { 0x1B, 's', 0x78, 0x56, 0x34, 0x12 };
+        const uint8_t q[] = { 0x1B, 'A', 0x00 };
+        send_stream(job, sizeof job);
+        send_stream(q, sizeof q);
+        CHECK(read_reply(r) == 32 && r[0] == 1 && r[1] == 0x78);
+        CHECK(ctrl_nodata(0x21, 2, 0, 0) == 0);
+        send_stream(q, sizeof q);
+        CHECK(read_reply(r) == 32 && r[0] == 0 && r[1] == 0 && r[2] == 0 &&
+              r[3] == 0 && r[4] == 0);
     }
 
     /* 5) Backdoor over the same path: GS D 0x05 build id. */

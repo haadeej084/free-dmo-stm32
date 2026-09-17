@@ -33,7 +33,11 @@ int  usb_ep_write(uint8_t ep, const uint8_t *data, uint16_t len);
 void usb_ep_rx_ready(uint8_t ep);
 /* Drop a queued-but-uncollected bulk IN reply and clear an IN-side STALL.
  * Used by the printer-class SOFT_RESET. */
-void usb_ep_flush_in(uint8_t ep);
+/* Printer-class SOFT_RESET on the bulk pair: drop a queued IN reply and clear
+ * a host-set Halt on BOTH directions (Printer Class 1.1 4.2.3, "this request
+ * clears all stall conditions"). Named for what it is: the data path may not
+ * clear a Halt, so this is the only place that does it for this class. */
+void usb_ep_soft_reset(uint8_t ep);
 
 int  usb_is_configured(void);
 

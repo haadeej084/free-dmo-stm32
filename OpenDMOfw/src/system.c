@@ -193,16 +193,26 @@ int sys_pin_toggle(uint8_t port, uint8_t pin, uint8_t n)
      * and PA13/PA14 are SWD. Toggling those would end the session rather than
      * answer a question. */
     if (g == GPIOA && (pin == 11 || pin == 12 || pin == 13 || pin == 14)) return 0;
+    /* Refuse the head's hot pins unconditionally (pins.h): this function has no
+     * polarity table, so "drive it low for a millisecond" is exactly how the
+     * 24 V gate is switched ON and how a strobe fires outside the thermal gate. */
+    if (pin_is_head_hot(g, pin)) return 0;
 
     pin_t p = { g, pin };
-    uint32_t save = g->MODER;
+    uint32_t save_mode = g->MODER;
+    uint32_t save_odr  = g->ODR;
     gpio_mode(p, GPIO_OUT);
     for (uint8_t i = 0; i < n; i++) {
         gpio_set(p, 1); delay_ms(1);
         gpio_set(p, 0); delay_ms(1);
         wdt_kick();
     }
-    g->MODER = save;               /* back to whatever it was, level untouched */
+    /* Restore the mode FIRST, so a pin that was an input is an input again
+     * before the level write lands, then put the output level back. The old
+     * code left every toggled pin driving low, which on an output pin is not
+     * "untouched" at all - it is a permanent low. */
+    g->MODER = save_mode;
+    g->BSRR = (save_odr & (1u << pin)) ? (1u << pin) : (1u << (pin + 16));
     return 1;
 }
 

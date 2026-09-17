@@ -46,8 +46,14 @@ OBJ := $(patsubst %.c,$(BUILD)/%.o,$(SRC))
 # exact image it was measured on. Outside a git checkout this becomes "dev".
 BUILD_ID ?= $(shell git describe --always --dirty --abbrev=8 2>/dev/null || echo dev)
 
-# -Os: this is a 128KB-flash / 16KB-RAM target, code size matters.
-CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
+# The warning-free rule was a convention no job checked: CI ran `make` with
+# -Wall -Wextra and no -Werror, so a new warning went green. Both models build
+# clean with it, so enforcing it is free. Override with `make WERROR=` while
+# exploring.
+WERROR ?= -Werror
+
+# -Os: this is a 64KB-flash / 16KB-RAM target, code size matters.
+CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding $(WERROR) \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra -Wno-unused-parameter \
   -fno-common $(MODELDEF) $(INC) -DOPENDMO_BUILD='"$(BUILD_ID)"' $(CFLAGS_EXTRA)
@@ -78,11 +84,32 @@ flash: $(BUILD)/$(TARGET).bin
 	st-flash write $< 0x08000000
 
 # Host tests: wire-layout transcription, the native parser and the USB stack
-# against a register model (both models each). python3 is required; the C tests
+# against a register model (both models each). The thermal suite is built TWICE:
+# once as shipped and once with HEAD_SAG_FULL_US forced to the value the genuine
+# LW450 firmware implies, so the energy ceiling is proved to hold at a non-zero
+# sag rather than only at the zero it currently ships with. python3 is required; the C tests
 # run when a host compiler (cc or gcc) is present. `set -e` so a failure in ANY
 # of them fails the target, not only the last one.
 USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
 E2E_TEST_SRC = test/test_e2e.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c src/printer/protocol.c
+THERMAL_TEST_SRC = test/test_thermal.c src/printer/thermal.c src/printer/head.c
+# motor.c had no host harness at all. Its behaviour is a SEQUENCE of GPIO
+# writes, so the harness records their order and asserts on it - a
+# final-state test cannot see a coil that is shorted only between two writes.
+MOTOR_TEST_SRC = test/test_motor.c src/printer/motor.c
+# system.c was compiled by no host suite and reached by no Renode assertion.
+# A mutation run measured 3 of 33 real mutants killed, and the concrete cost
+# was that the hot-pin guard on GS D 0x07 - the one stopping a host command
+# from driving the 24 V heat gate - could be DELETED with every suite green,
+# because test_protocol.c re-implements sys_pin_toggle() instead of calling it.
+SYSTEM_TEST_SRC = test/test_system.c src/system.c
+# store.c holds OP_FLAG_VH_INHIBIT, the one flag protecting an irreplaceable
+# head, and had no host harness: Renode's eeprom.py killed 47 of 109 mutants
+# and its write-protect scenario preloads a BLANK part - the one case where a
+# read-back verify is vacuous. This harness models the part at the I2C
+# register level so /WP, a wrong device, a torn page write and a mid-data NAK
+# are all reachable.
+STORE_TEST_SRC = test/test_store.c src/config/store.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -90,15 +117,30 @@ test:
 	HOSTCC=$$(command -v cc || command -v gcc || true); \
 	if [ -z "$$HOSTCC" ]; then echo "skip native C tests (no host C compiler)"; exit 0; fi; \
 	for m in OP57 OP104; do \
-	  $$HOSTCC -Wall -Wextra -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m \
 	    test/test_protocol.c src/printer/protocol.c; \
 	  /tmp/opendmo-test-$$m; \
-	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); \
 	  /tmp/opendmo-usbtest-$$m; \
-	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-e2etest-$$m $(E2E_TEST_SRC); \
 	  /tmp/opendmo-e2etest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	    -o /tmp/opendmo-thermaltest-$$m $(THERMAL_TEST_SRC) -lm; \
+	  /tmp/opendmo-thermaltest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	    -DHEAD_SAG_FULL_US=47 -o /tmp/opendmo-sagtest-$$m $(THERMAL_TEST_SRC) -lm; \
+	  /tmp/opendmo-sagtest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); \
+	  /tmp/opendmo-motortest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-systest-$$m $(SYSTEM_TEST_SRC); \
+	  /tmp/opendmo-systest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-storetest-$$m $(STORE_TEST_SRC); \
+	  /tmp/opendmo-storetest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the
@@ -120,6 +162,10 @@ renode: $(BUILD)/$(TARGET).elf
 	RENODE=$(RENODE) python3 test/renode/head_shift.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/eeprom.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/dfu.py $(MODEL)
+# fault.py costs about 15 s per model: four Renode launches, each with a
+# 1 s emulated boot. It is the only suite that asserts what the firmware
+# does to the print head when the CPU stops being trustworthy.
+	RENODE=$(RENODE) python3 test/renode/fault.py $(MODEL)
 
 clean:
 	rm -rf $(BUILD)

@@ -88,7 +88,10 @@
    * sequentially to split peak current. Verify half count on the board. */
   #define MODEL_STROBE_SEGMENTS 2
   /* Dots clocked in on DI1 and DI2. ASSUMED 336 + 336: the head part number,
-   * and so its register split, is not confirmed (FIELDWORK section 3). */
+   * and so its register split, is not confirmed (FIELDWORK section 3). A
+   * KF3002 variant with an UNEQUAL split exists - the GD31A puts dots 1-384 on
+   * DI1 and 385-640 on DI2, with four strobes of 256/128/128/128 - so this is
+   * a real possibility, not a formality. head.c handles unequal halves. */
   #define MODEL_DI1_DOTS        336
   #define MODEL_DI2_DOTS        336
   #define MODEL_DEFAULT_SKU     "30387"  /* Internet Postage, biggest 550 roll */
@@ -98,7 +101,9 @@
    * model's PID/MDL so a 550 reports a 550 hardware string. */
   #define MODEL_HW_VERSION      "LW550-REV.K"
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
-#else /* default: OP104 (4", 300 dpi - shipping-label class) */
+#else /* OP104 (4", 300 dpi - shipping-label class). NOT the default: model.h
+       * selects MODEL_OP57 above when neither is defined, because OP57 is the
+       * LabelWriter 550, the only model with a board this firmware runs on. */
   /* 1248-dot / 105.7 mm head, presents as the 5XL-class printer. */
   #define MODEL_NAME            "OP104"
   #define MODEL_PID             0x002A
@@ -128,6 +133,60 @@
   #define MODEL_HW_VERSION      "LW5XL-REV.K"
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
 #endif
+
+/* Strobe polarity: which level FIRES the heat drivers.
+ *
+ * ASSUMED, and genuinely unknown for our head. This was previously recorded as
+ * "confirmed active-low from the ROHM KF3002 timing chart"; re-reading the
+ * chart withdraws that. In KF3002-GL50A and -GD31A Fig.2 the STROBE trace
+ * idles LOW and pulses HIGH (DRIVER OUT idles high and pulses low), and inside
+ * the same figure /LATCH carries a drawn overbar while STROBE does not. But
+ * KF3002-GM50A, KF3004-GM50A and KD3004-DC72A spell the pin "/STB1" in text -
+ * so ROHM do mark it when a variant is active-low, and at least one KF3002
+ * variant is. Polarity is per-variant, and the GK11C has no public datasheet.
+ *
+ * CORROBORATED since: the genuine LabelWriter 450 firmware drives its head
+ * strobe ACTIVE LOW (see DECISIONS D30), and a 450 mainboard is reported to
+ * print correctly on a 550 mechanism - so the head this firmware talks to
+ * accepts an active-low strobe. That is evidence from working hardware rather
+ * than from a datasheet drawing, and it is why the assumption stays Low.
+ *
+ * Getting this wrong means the head fires continuously the moment VH comes up,
+ * which is why OP_FLAG_VH_INHIBIT exists and why FIELDWORK has a
+ * current-limited polarity check before the first 24 V test. One constant, one
+ * place to flip. */
+/* Nominal time for one dot line, feed included. DYMO rate the 550 at 62
+ * labels/min and the 5XL at 53 on a 4-line address label (1050 dot lines), so
+ * 0.92 ms and 1.08 ms per line; 800 us is the working figure both models are
+ * built around. It lives here rather than in motor.c because head.c needs it
+ * too: the head's energy ceiling is derived from ROHM's maximum-energy
+ * envelope, which is a FUNCTION OF LINE TIME, not a constant. Move this and
+ * HEAD_MAX_DWELL_US has to be re-derived - head.c has a static assert that
+ * says so at build time. */
+#define MODEL_LINE_PERIOD_US   800
+
+/* How many DATA lines the head's shift register is fed on.
+ *
+ *   1 = one data line, HEAD_DOTS clocks  <- what the vendor's firmware does
+ *   2 = two data lines, HEAD_DOTS/2 clocks, the halves shifted in parallel
+ *
+ * THE VENDOR DRIVES ONE LINE. The LabelWriter 450 application - which the owner
+ * reports drives this very mechanism correctly when its mainboard is fitted to
+ * a 550 - feeds the head 84 bytes = 672 dots over SSP1 MOSI on a SINGLE pin,
+ * and its run-length path bit-bangs that same pair as GPIO with ONE clock pulse
+ * PER DOT. The complete GPIO inventory of that image contains no second head
+ * data pin at all. See DECISIONS D36.
+ *
+ * This firmware clocked 336 times on two lines. If the fitted head is one
+ * 672-stage chain, that fills half of it twice and no label is ever correct; if
+ * it is two 336-stage chains daisy-chained DO1 -> DI2 on the flex, then driving
+ * DI2 from the MCU is a bus conflict against the head's own output. Either way
+ * the two-line path is the unverified alternative, so it is no longer the
+ * default - but it is kept, because a 550 flex that really does bring out two
+ * independent data pins remains possible and one continuity check settles it. */
+#define MODEL_HEAD_SHIFT_LINES 1
+
+#define MODEL_STB_ACTIVE_LEVEL 0     /* 0 = Low fires (current assumption) */
 
 /* Derived values used by the rest of the firmware. */
 #define HEAD_DOTS            MODEL_HEAD_DOTS

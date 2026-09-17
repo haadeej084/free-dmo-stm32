@@ -169,6 +169,7 @@ typedef struct {
 #define ADC1 ((ADC_Type*)0x40012400u)
 #define ADC_CR_ADEN    (1u<<0)
 #define ADC_CR_ADSTART (1u<<2)
+#define ADC_CR_ADSTP   (1u<<4)
 #define ADC_CR_ADCAL   (1u<<31)
 #define ADC_ISR_ADRDY  (1u<<0)
 #define ADC_ISR_EOC    (1u<<2)
@@ -274,6 +275,52 @@ extern uint32_t host_uid[3];
 #define USB          (&host_usb)
 #define USB_PMA_BASE ((uintptr_t)host_pma)
 #define UID_BASE     ((uintptr_t)host_uid)
+
+/* The peripherals the printer-side modules touch, so their arithmetic can be
+ * tested natively (test/test_thermal.c). Only the tests that actually use a
+ * given peripheral define its storage, so the USB tests are unaffected.
+ *
+ * The ADC goes through a function rather than a plain struct: a conversion is
+ * several register accesses, and a test that wants a DIFFERENT sample per
+ * conversion (a median filter has three) needs a hook. host_adc() is called on
+ * every access, so a test can load the next sample when it sees ADSTART set. */
+#undef ADC1
+#undef RCC
+#undef GPIOA
+#undef GPIOB
+#undef GPIOC
+#undef TIM3
+#undef IWDG
+#undef SysTick
+ADC_Type *host_adc(void);
+extern RCC_Type     host_rcc;
+extern GPIO_Type    host_gpioa, host_gpiob, host_gpioc;
+extern TIM_Type     host_tim3;
+/* IWDG and SysTick joined the list when system.c got its first host harness:
+ * sys_pin_toggle() calls wdt_kick() and delay_ms(), which are IN system.c, so
+ * they cannot be stubbed out by the test - they have to hit storage instead of
+ * a hardcoded peripheral address. Before this, a host build of system.c
+ * segfaulted on the first watchdog kick, which is why the file had no harness
+ * and why its hot-pin guard could be deleted with every suite still green. */
+extern IWDG_Type    host_iwdg;
+extern SysTick_Type host_systick;
+#define ADC1    host_adc()
+#define RCC     (&host_rcc)
+#define GPIOA   (&host_gpioa)
+#define GPIOB   (&host_gpiob)
+#define GPIOC   (&host_gpioc)
+#define TIM3    (&host_tim3)
+#define IWDG    (&host_iwdg)
+#define SysTick (&host_systick)
+/* I2C1 goes through a function for the same reason the ADC does: a transfer is
+ * a sequence of register accesses whose result depends on what a PART on the
+ * bus does, so a test needs a hook on every access rather than plain storage.
+ * test/i2c_eeprom_model.h defines host_i2c() over a 24Cxx model that can be
+ * told to misbehave - write-protected, absent, NAKing mid-data, or losing
+ * power between page writes. */
+#undef I2C1
+I2C_Type *host_i2c(void);
+#define I2C1 host_i2c()
 #endif
 
 #endif /* OP57_MCU_H */

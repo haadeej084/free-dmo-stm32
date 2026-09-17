@@ -12,6 +12,11 @@ void head_set_density(uint8_t d);      /* 0 = heat off; 1..16 base dwell */
  * (256 = 1.0), including the energy ceiling. Exposed so the arithmetic can be
  * tested on the host without a head: see test/test_thermal.c. */
 uint32_t head_dwell_us(uint8_t density, uint16_t thermal_scale);
+/* The same, plus rail-sag compensation for the coverage of one strobe.
+ * `dots` is the energised dot count of the segment, `dots_max` its full
+ * width. Re-clamps to the energy ceiling after the addition. */
+uint32_t head_dwell_sag_us(uint8_t density, uint16_t thermal_scale,
+                           uint16_t dots, uint16_t dots_max);
 /* Microseconds of strobe the last head_print_line() spent: the COMMANDED dwell
  * times HEAD_STROBE_SEGMENTS. The true energised time per segment differs by
  * the head driver's edge skew (see head.c). The feed step can subtract this

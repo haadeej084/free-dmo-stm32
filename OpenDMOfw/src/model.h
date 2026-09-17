@@ -153,6 +153,16 @@
  * which is why OP_FLAG_VH_INHIBIT exists and why FIELDWORK has a
  * current-limited polarity check before the first 24 V test. One constant, one
  * place to flip. */
+/* Nominal time for one dot line, feed included. DYMO rate the 550 at 62
+ * labels/min and the 5XL at 53 on a 4-line address label (1050 dot lines), so
+ * 0.92 ms and 1.08 ms per line; 800 us is the working figure both models are
+ * built around. It lives here rather than in motor.c because head.c needs it
+ * too: the head's energy ceiling is derived from ROHM's maximum-energy
+ * envelope, which is a FUNCTION OF LINE TIME, not a constant. Move this and
+ * HEAD_MAX_DWELL_US has to be re-derived - head.c has a static assert that
+ * says so at build time. */
+#define MODEL_LINE_PERIOD_US   800
+
 #define MODEL_STB_ACTIVE_LEVEL 0     /* 0 = Low fires (current assumption) */
 
 /* Derived values used by the rest of the firmware. */

@@ -78,7 +78,10 @@ flash: $(BUILD)/$(TARGET).bin
 	st-flash write $< 0x08000000
 
 # Host tests: wire-layout transcription, the native parser and the USB stack
-# against a register model (both models each). python3 is required; the C tests
+# against a register model (both models each). The thermal suite is built TWICE:
+# once as shipped and once with HEAD_SAG_FULL_US forced to the value the genuine
+# LW450 firmware implies, so the energy ceiling is proved to hold at a non-zero
+# sag rather than only at the zero it currently ships with. python3 is required; the C tests
 # run when a host compiler (cc or gcc) is present. `set -e` so a failure in ANY
 # of them fails the target, not only the last one.
 USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
@@ -103,6 +106,9 @@ test:
 	  $$HOSTCC -Wall -Wextra -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
 	    -o /tmp/opendmo-thermaltest-$$m $(THERMAL_TEST_SRC) -lm; \
 	  /tmp/opendmo-thermaltest-$$m; \
+	  $$HOSTCC -Wall -Wextra -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	    -DHEAD_SAG_FULL_US=47 -o /tmp/opendmo-sagtest-$$m $(THERMAL_TEST_SRC) -lm; \
+	  /tmp/opendmo-sagtest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

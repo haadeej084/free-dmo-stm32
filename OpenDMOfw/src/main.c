@@ -82,10 +82,14 @@ static void button_task(void)
 
 int main(void)
 {
-    /* SystemInit() (48 MHz system clock) was already done by Reset_Handler.
-     * The watchdog goes first: from here on any hang, including one inside a
-     * peripheral init or a fault handler, ends in a reset rather than a brick. */
-    wdt_init();
+    /* SystemInit() (48 MHz system clock) and wdt_init() were both already done
+     * by Reset_Handler - the watchdog deliberately before SystemInit(), so that
+     * a clock that never comes up ends in a reset instead of a silent hang.
+     * Kick it here rather than re-initialising: writes to IWDG_PR/RLR are
+     * ignored while the previous ones are still being synchronised to the LSI
+     * domain, so a second wdt_init() would be a no-op that merely looks like
+     * configuration. */
+    wdt_kick();
     systick_init();
     io_init();
 

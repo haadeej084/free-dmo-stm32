@@ -62,7 +62,13 @@ void delay_ms(uint32_t ms) { (void)ms; }
 static uint32_t g_ms;
 uint32_t millis(void) { return g_ms; }
 void gpio_mode(pin_t p, gpio_mode_t m) { (void)p; (void)m; }
-void gpio_set(pin_t p, int high) { (void)p; (void)high; }
+/* Record the level of every pin, so the heat strobes can be observed. */
+static int g_level[2][16];
+void gpio_set(pin_t p, int high)
+{
+    int port = (p.port == GPIOB) ? 1 : 0;
+    if (p.pin < 16) g_level[port][p.pin] = high ? 1 : 0;
+}
 int  gpio_get(pin_t p) { (void)p; return 0; }
 void gpio_pull(pin_t p, int pull) { (void)p; (void)pull; }
 void gpio_od(pin_t p, int od) { (void)p; (void)od; }
@@ -189,6 +195,37 @@ int main(void)
         CHECK(head_dwell_us(9, 320) == 378 && head_dwell_us(9, 320) < 410);  /* not clipped */
         CHECK(head_dwell_us(16, 320) == 410);       /* ESC C 200 % is clipped */
         CHECK(head_dwell_us(0, 320) == 0);          /* density 0 = no heat */
+
+        /* Rail-sag compensation must live INSIDE the energy ceiling. It used
+         * to be added at the call site, outside head_dwell_us(), so it went
+         * straight past HEAD_MAX_DWELL_US - a hole in the only energy guard
+         * this firmware has, invisible while the constant was 0 and open the
+         * moment anyone set it. This binary is built twice, the second time
+         * with HEAD_SAG_FULL_US forced to 47, so the clamp below is actually
+         * exercised rather than merely asserted against zero. */
+        {
+            int over_sag = 0, mono_sag = 1, zero_ok = 1;
+            for (int d = 0; d <= 16; d++)
+                for (int sc = 0; sc <= 512; sc += 8)
+                    for (int n = 0; n <= 336; n += 16) {
+                        uint32_t v = head_dwell_sag_us((uint8_t)d, (uint16_t)sc,
+                                                       (uint16_t)n, 336);
+                        if (v > 410) over_sag++;
+                        if (n == 0 && v != head_dwell_us((uint8_t)d, (uint16_t)sc))
+                            zero_ok = 0;
+                        if (n > 0 && v < head_dwell_sag_us((uint8_t)d, (uint16_t)sc,
+                                                           (uint16_t)(n - 16), 336))
+                            mono_sag = 0;
+                    }
+            CHECK(over_sag == 0);      /* the ceiling holds at every coverage */
+            CHECK(zero_ok);            /* a blank segment gets no sag at all  */
+            CHECK(mono_sag);           /* more dots never means less dwell    */
+            /* A dot count above the segment width is clamped, not scaled past
+             * full coverage: an unbounded count is not a count. */
+            CHECK(head_dwell_sag_us(8, 256, 9999, 336) ==
+                  head_dwell_sag_us(8, 256,  336, 336));
+            CHECK(head_dwell_sag_us(8, 256, 336, 0) == head_dwell_us(8, 256));
+        }
         /* monotone in density and in temperature scale */
         int mono = 1;
         for (int d = 1; d < 16; d++)
@@ -196,6 +233,38 @@ int main(void)
         for (int sc = 160; sc < 320; sc += 8)
             if (head_dwell_us(8, (uint16_t)sc) > head_dwell_us(8, (uint16_t)(sc + 8))) mono = 0;
         CHECK(mono);
+    }
+
+    /* The heat strobe must release even if its time base never advances.
+     *
+     * strobe() busy-waits on TIM3's counter. Under OPENDMO_HOST_TEST that
+     * counter is a plain RAM word that nothing increments - which is exactly
+     * the on-target failure worth worrying about: a TIM3 whose clock gets
+     * gated, whose peripheral is held in reset, or that a debugger halts. A
+     * wait that trusts it alone never ends, and it never ends WITH A HEAT
+     * STROBE ASSERTED. That is a livelock, not a fault, so the fault handler in
+     * startup.c never sees it, and the only thing left is the watchdog seconds
+     * later - DECISIONS D31 has the arithmetic on what that costs the head.
+     *
+     * So this is not a normal assertion: if the iteration guard in strobe() is
+     * removed, THIS TEST DOES NOT FAIL, IT HANGS. That is the correct signal
+     * (CI reports a timeout), and it is the only way to state the property from
+     * the host side. The checks below then confirm the strobes came back to
+     * their inactive level rather than merely that the loop exited. */
+    {
+        static uint8_t line[HEAD_BYTES];
+        for (unsigned i = 0; i < HEAD_BYTES; i++) line[i] = 0xFF;  /* solid black */
+        g_level[1][0] = g_level[1][1] = MODEL_STB_ACTIVE_LEVEL;    /* poisoned */
+        head_set_density(8);
+        head_print_line(line, HEAD_BYTES);
+        CHECK(g_level[1][0] == !MODEL_STB_ACTIVE_LEVEL);
+        CHECK(g_level[1][1] == !MODEL_STB_ACTIVE_LEVEL);
+        /* And a blank line must not strobe at all, so the guard is not quietly
+         * doing the work that dots_in()'s skip is supposed to do. */
+        for (unsigned i = 0; i < HEAD_BYTES; i++) line[i] = 0x00;
+        g_level[1][0] = g_level[1][1] = 0x55;                      /* sentinel */
+        head_print_line(line, HEAD_BYTES);
+        CHECK(g_level[1][0] == 0x55 && g_level[1][1] == 0x55);
     }
 
     printf(fails ? "\n%d of %d THERMAL check(s) FAILED\n" : "\nALL %d THERMAL CHECKS PASSED\n",

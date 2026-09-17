@@ -1027,47 +1027,194 @@ Three things follow directly:
 
 ### The pulse-width computation
 
-In timer ticks of 0.375 µs:
+Four agents disassembled `0x2926`-`0x2996` independently, without being told
+each other's answers, and came back **byte-identical**. In timer ticks of
+375 ns:
 
-    w = 400 + P/2 + 3·B + 3·(V/4),   clamped to 200 ≤ w ≤ 2500
+    W0 = (P >> 1) + 3*B + 3*(T >> 2) + 400
+    if  S:          W1 = (W0 >> 1) + 175        /* 600 dpi / fine mode */
+    elif P >= 255:  W1 = W0 + (P - 250)
+    else:           W1 = W0
+    W2 = W1 * { 0.750 (ESC c), 0.875 (ESC d), 1.000 (ESC e), 1.125 (ESC g) }
+    W  = clamp(W2, 200, 2500)                   /* 75 us .. 937.5 us */
 
-* `400` ticks = 150 µs base;
-* `P` = the current **line period** in the same ticks, so a slower line gets
-  more energy — exactly the adaptive-speed behaviour ROHM publish as a curve
-  and which our fixed dwell does not model at all;
-* `B` = the number of **dot-data bytes in this line** (0…84), i.e. a real
-  dot-count term worth up to 252 ticks = 94.5 µs. This is the rail-sag
-  compensation our `HEAD_SEGMENT_SAG_US` knob was left at zero for;
-* `V` = a 10-bit ADC reading (the firmware reads three channels; which one
-  feeds this term is not yet pinned down), contributing up to 765 ticks =
-  287 µs;
-* the clamp is **75 µs … 937.5 µs**.
+Note the order: **density first, clamp last**, so `ESC g` cannot push past the
+ceiling. An earlier reading of this entry had it the other way round.
 
-Then the density command multiplies it: `ESC c ×0.75`, `ESC d ×0.875`,
-`ESC e ×1.0`, `ESC g ×1.125` — integer shift-and-add in the firmware, and
-exactly the 75 / 87.5 / 100 / 112.5 % ladder we already implement. That part of
-our model is now confirmed against the vendor's own code.
+* `400` ticks = 150 us, the floor.
+* `P` is the **motor STEP period**, not the line period — `CT32B0`'s match is
+  re-armed with it on every step interrupt, and a line is 12 steps at 300 dpi
+  (6 at 600 dpi), i.e. 3600 steps/inch either way. Getting this wrong is what
+  produced the alarming number this entry used to carry; see below.
+* Because P is essentially always >= 255 in 300 dpi, the real coefficient of P
+  is **1.5·P - 250**, not P/2.
+* `B` is the host-declared **image data byte count** of the line, so the term is
+  worth up to 252 ticks = 94.5 us on a full line and nothing on a blank one. It
+  is *not* bounded to 0..84: the parser only special-cases the 0xFF sentinel, so
+  a host byte of 254 is taken at face value.
+* `T` is **ADC channel 5, the head's own thermistor** — settled, see below.
+  Pre-clamped to <= 766, so `3*(T>>2)` maxes at 573 ticks = 215 us.
 
-### What this does NOT license yet
+### What `T` is — the open question from the first version of this entry
 
-Our own dwell is a fixed 270 µs at density 100 %, scaled by temperature and
-capped at 410 µs (D28). The genuine model would give roughly 850 µs for a full
-line at the 550's rated line rate — about three times more energy per dot, in
-one pulse rather than two. That is a real conflict with the ROHM family rating
-(TON 0.28 ms) that D28's ceiling was derived from, and it is not a conflict to
-resolve by taking the larger number: the two could differ because the 450 runs
-its line slower, because `V` is a supply-voltage term that idles high, or
-because the 450's head is driven at a different effective rail. Raising the
-energy into an irreplaceable head on one reading of one disassembly is exactly
-the kind of step this project does not take.
+It is the **head temperature**, and higher counts mean **colder**. The
+identification does not rest on the ADC plumbing but on the threshold ladder in
+the same routine: halt at 176 counts, resume only above 255, warn at 232. The
+450 technical reference describes those thresholds in plain English — *"halt
+printing if the print head temperature exceeds 70 C. Printing resumes when the
+print head cools to 56 C"* — and 176 ↔ 70 C, 255 ↔ 56 C. Fitting the KF3002's
+own built-in NTC (30 kOhm, B = 3950, the part `thermal.c` already models)
+through a single pull-up of ~25.75 kOhm reproduces both to about 1 %.
 
-So this entry records the model and **queues the port as the next piece of
-work**, with its own verification: re-derive `P`, `B` and `V` from the
-disassembly independently, establish which ADC channel `V` is, and reconcile
-the result with ROHM's rated operating point before any constant in `head.c`
-moves. Until then `head.c` keeps its conservative ceiling, and the parts of the
-model that are already confirmed — the density ladder, the dot-count term's
-existence, the active-low strobe and latch — are documented here.
+**That confirms D28's 70/56 C hysteresis against the vendor's own firmware**,
+and it upgrades it from an assumption read off a datasheet to a measured
+agreement with shipping code.
+
+The supply-voltage term this entry once suspected `T` of being does exist — but
+it is **channel 6, and it never enters the strobe width**. It gates printing
+instead: suspend at 676 counts, resume at 751, motor slow-down at 770. The same
+technical reference: *"If the voltage drops below 19.3 volts at the print head,
+printing is suspended until the power supply recovers to 21 volts"* — 676 ↔
+19.3 V, 751 ↔ 21 V. Channel 7 is the label-gap sensor, with a software Schmitt
+trigger between 294 and 320.
+
+### The conflict with the ROHM rating was a misreading, not a conflict
+
+The first version of this entry reported that the genuine model would give
+"roughly 850 us for a full line", three times our own, and refused to port it
+on that basis. **The 850 us was wrong**, for two compounding reasons:
+
+1. **P was read as the line period.** It is the step period, and a line is
+   twelve of them. The raster print mode uses `P = 255`, giving a line period of
+   12 x 255 x 375 ns = **1147.5 us** — not the 1.6 ms a P of 358 implies. (358
+   is reached only by the feed and eject modes. The "51" in DYMO's
+   specifications is **labels per minute**, not mm/s: P = 255 gives 49.8
+   labels/min against a published 51, and the Turbo's P = 182 gives 69.8
+   against a published 71.)
+2. **The 2500-tick clamp was read as an operating point.** It is a ceiling.
+
+Corrected, the genuine firmware's typical dwell is **374-448 us** depending on
+head temperature and coverage, with an ordinary worst corner (cold head, full
+width, `ESC g`) of about 504 us, at roughly a third duty cycle.
+
+And the rating it has to fit inside is **not flat**. ROHM's maximum-energy
+curve rises with scanning line time: fitted, `E_max ~= 0.045 + 0.144 * SLT(ms)`
+mJ/dot. The rated point everyone quotes — TON 0.308 ms at 0.42 W/dot, i.e.
+0.129 mJ — is the value **at a 0.83 ms line**. The 450 runs a 1.1475 ms line, so
+its head asks about 0.135 mJ and permits about 0.212; it delivers 0.161, which
+is 1.19x nominal and **0.76 of permitted**. Entirely in spec.
+
+An independent cross-check falls out of the 600 dpi branch, which nothing in
+the derivation was fitted to: it computes 770 ticks = 288.8 us = 0.1242 mJ,
+**1.03x the family's published rated point**. Three separate quantities — the
+375 ns tick, the 0.43 W/dot at 24 V, and the head identification — all had to be
+right for that to land where it did.
+
+> **The lesson to carry forward is the opposite of the one this entry first
+> drew.** The danger is not that the genuine firmware runs hot; it is that
+> *a faster printer has a lower ceiling*. Treating ROHM's rated point as a flat
+> constant is the single most dangerous simplification a 550 implementer could
+> make, because OpenDMOfw targets a **shorter** line than the 450 does.
+
+### What was ported, and what was not
+
+Transposed to our 800 us line, the genuine law asks about **405 us** where we
+give 337.5 us. We are 17 % cold, not 3x cold — so `HEAD_BASE_DWELL_US` (270)
+and `HEAD_MAX_DWELL_US` (410) both survive the comparison and **neither moves**.
+
+They stay because of sensitivity, not stubbornness. `Rave = 1250 Ohm` and
+`Po = 0.43 W/dot` are analogues from published KF3002 siblings; the head
+actually fitted is not in ROHM's public catalogue. At Po = 0.43 today's 337.5 us
+sits at 0.906 of the envelope and the 450-transposed 405 us at 0.991 — but if
+the real Po is 17 % higher, today's setting is still at 0.99 while the ported
+one is at **1.19**. Today's number absorbs a 20 % error in an unmeasured
+constant. The ported one does not.
+
+Ported now:
+
+* **`MODEL_LINE_PERIOD_US`** (model.h) is the single source of truth for the
+  line period, with `motor.c` deriving its step from it and `head.c` carrying a
+  `_Static_assert` that fails the build if it leaves the band the energy ceiling
+  was derived for. The ceiling depends on the line time; nothing used to say so.
+* **The coverage term's shape**, as `HEAD_SAG_FULL_US`. `3*B` proves the rail-sag
+  compensation scales with printed content — where our own knob was a flat
+  constant added to the second segment by ordinal. It is now keyed to the true
+  energised-dot count (`dots_in()`, better than the 450's byte-span proxy) and
+  halved, because we fire half a line per strobe where the 450 fires all 672
+  dots at once. **The magnitude stays 0**: 47 us is what the genuine firmware
+  implies, but it was calibrated against the 450's 60 W supply, and the 550
+  ships a 42 W brick — our rail sags *more* while our headroom is *smaller*.
+  That is exactly the cross-hardware copy this entry declined to make for the
+  base dwell.
+* **A real latent bug the port exposed.** The sag was added at the call site,
+  *outside* `head_dwell_us()`, so it bypassed `HEAD_MAX_DWELL_US` entirely — a
+  hole in the only energy guard this firmware has. Invisible at 0, and open the
+  moment anyone set the constant, which is precisely when someone is measuring a
+  rail and least wants a surprise. `head_dwell_sag_us()` re-clamps after the
+  addition, and the thermal suite is now built twice, the second time with the
+  constant forced to 47, so the clamp is exercised rather than asserted against
+  zero.
+* **One temperature sample per line**, not per segment: the two halves of one
+  dot line must not print at different darknesses because a 20 ms ADC cache
+  expired between them.
+* **`MODEL_STROBE_SEGMENTS` stays 2.** The 450 fires one strobe for all 672
+  dots, but the asymmetry is the board, not the head: the plain 550's
+  DSA-42PFC-24 is 24 V / 1.75 A (42 W) against the 450's 2.5 A (60 W), and we
+  have a 24 V load switch on `PIN_HEAD_VH` of unknown rating that the 450 does
+  not have at all. Split, we sit at 6.0 A against 1.75 A; the 450 sits at 12.0 A
+  against 2.5 A.
+
+Deliberately **not** ported: the base dwell itself; flattening our -1.11 %/K
+temperature slope toward the 450's -0.575 %/K (the 450 can afford a shallow
+pulse slope because it *also* stretches the line up to 3.1x when the head warms,
+and we do not slow down at all, so our steeper slope substitutes for that); and
+the thermal slow-down itself, which needs a variable step period and a
+`MOTOR_STEPS_PER_LINE` that is still unmeasured.
+
+### The one measurement that unlocks the rest
+
+**Po at the fitted head**: VH at the head under load, plus a four-wire
+resistance across one dot. Then `HEAD_MAX_DWELL_US = 0.177 mJ / Po_measured`,
+and the base dwell can move for the first time on evidence rather than on an
+analogue. Nothing further in the disassembly will settle it — this is a bench
+measurement, not a research question. Three more, in descending order of value:
+a scope on the 450 board's strobe line while it drives the 550 mechanism (the
+one experiment the owner's mainboard-swap report makes possible); total head
+current on a full-width black line, which settles whether the head groups dots
+in hardware; and the rail under solid black, which decides whether the two-way
+split can be dropped and 400 us of line time taken back.
+
+### Known unresolved, recorded so nobody re-derives them
+
+* The cold-start corner is disputed between reconcilers: a job starting from the
+  idle `P = 767` default with a cold head at darkest density reaches 896 us for
+  about 42 lines (0.14 inch). One reconciler calls that 1.8x a flat maximum and
+  offers three explanations it cannot choose between; the other holds the corner
+  is unreachable at a full rail. Nobody settled it.
+* Typical 450 dwell spans 374 / 421 / 448 us across three agents, purely from
+  differing assumptions about `T` and `B`. The spread is assumption-driven, not
+  evidence-driven.
+* Whether the head groups dots in hardware is not established. One agent argues
+  the `3*B` term is evidence *against* grouping; another reads the KF3002 as
+  exposing STB1/STB2 on separate pins with the halves chained. A current probe
+  settles it.
+* `PIO0_8` is pulsed per line between latch and strobe, before every ADC read,
+  and in the step routine, and **no agent identified it**. If it were a second
+  head latch, the segment count above would be wrong.
+* `0x70FC`/`0x70FD` — the bytes that select which `P` a unit uses, i.e. plain
+  450 versus Turbo — lie past the end of the 20480-byte dump. They cannot be
+  read from this artifact at all.
+* The 12 MHz crystal is inferred from the USB requirement, not measured. Every
+  absolute time above scales inversely with it.
+* Disassembly coverage is not exhaustive: 17974 of 20480 bytes in the best pass.
+  "Exactly one strobe channel" rests on the three timer registrations that were
+  found, not on exhaustive coverage.
+
+Defects in the genuine firmware, noted so they are not copied: the 16-bit timer
+wrap fixup adds `0xFFFF0001` where a mod-65536 counter needs `-0x10000`; `B` is
+unclamped; nothing compares the computed width against the line period; there is
+a dead store of `W/8` in the `ESC d` branch; and SSP1's CR1 is written with both
+SSE and loop-back set.
 
 ## D31 — A fault is not allowed to leave the head hot
 

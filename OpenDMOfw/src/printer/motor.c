@@ -32,6 +32,7 @@
  * one head line height (no stretching/compression of the image).
  */
 #include "motor.h"
+#include "../model.h"
 #include "../mcu.h"
 #include "../system.h"
 #include "../pins.h"
@@ -41,7 +42,12 @@
 #define MOTOR_DRIVE         MOTOR_DRIVE_4PHASE   /* expected: IN1-IN4 dual H-bridge */
 
 #define MOTOR_STEPS_PER_LINE 1
-#define MOTOR_STEP_US        800         /* per step; see the time budget above */
+/* Derived, not chosen: the line period is a model constant (model.h) because
+ * the head's energy ceiling depends on it. One step per line makes the two
+ * equal today; if MOTOR_STEPS_PER_LINE is ever calibrated to something else,
+ * the step shortens and the LINE period - the quantity that matters to the
+ * head - stays put. */
+#define MOTOR_STEP_US        (MODEL_LINE_PERIOD_US / MOTOR_STEPS_PER_LINE)
 
 void motor_init(void)
 {

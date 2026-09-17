@@ -12,12 +12,25 @@
  *    Printing resumes when the print head cools to 56 C."
  *
  * So: halt at 70 C, resume at 56 C - a latched limit with 14 C of hysteresis,
- * not a single threshold. The same manual also describes how the genuine
- * firmware sets dwell: "the control electronics measure the print voltage and
- * the head temperature before each print cycle, and then calculate the required
- * print [energy]". We do the temperature half of that in thermal_dwell_scale();
- * the voltage half needs a divider on the 24 V rail that is not in pins.h yet
- * (see PINMAP.md "head voltage sense").
+ * not a single threshold.
+ *
+ * CONFIRMED AGAINST THE GENUINE FIRMWARE (DECISIONS D30). The LabelWriter 450
+ * image - which drives this very mechanism, per the owner's mainboard-swap
+ * report - carries the same two thresholds as raw ADC counts: it halts at 176
+ * and resumes only above 255, on a 10-bit channel whose sense is inverted
+ * (higher count = colder). Fitting the KF3002's own 30 kOhm B=3950 NTC through
+ * a single pull-up reproduces 70 C at 174 counts and 56 C at 256, i.e. both to
+ * about 1 %. This is no longer a rule read out of a manual: it is the same rule
+ * observed in shipping code, on the same head.
+ *
+ * The same manual also describes how the genuine firmware sets dwell: "the
+ * control electronics measure the print voltage and the head temperature before
+ * each print cycle, and then calculate the required print [energy]". The
+ * recovered firmware does exactly that, and D30 has the arithmetic. We do the
+ * temperature half of it in thermal_dwell_scale(); the voltage half is the
+ * 450's ADC channel 6, which gates printing (suspend below 19.3 V, resume at
+ * 21 V) rather than entering the pulse width - and it needs a divider on the
+ * 24 V rail that is not in pins.h yet (see PINMAP.md "head voltage sense").
  *
  * ASSUMPTION (the only one left here): the divider topology on the D.mo board,
  * i.e. the pull resistor R_p and whether the NTC pulls the ADC pin up or down.

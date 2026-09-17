@@ -145,6 +145,24 @@ void Reset_Handler(void)
                       ((const uint32_t *)SYSMEM_BASE)[1]);
     }
 
+    /* The watchdog starts HERE, not in main(). SystemInit() contains four
+     * unbounded spins waiting on clock-ready flags - HSERDY, PLLRDY, the SW/SWS
+     * handshake and HSI48RDY - and a dead crystal or a PLL that never locks
+     * hangs in one of them forever. That is a HANG, not a fault, so the fault
+     * handler cannot see it, and until now nothing else could either: the
+     * device would sit there drawing power with no LED, no USB and no reset,
+     * looking exactly like a dead board.
+     *
+     * The IWDG is clocked from the LSI, which is independent of everything
+     * SystemInit() is waiting for, so it keeps counting even if the system
+     * clock never arrives. ~4 s later the part resets and tries again.
+     *
+     * It must come AFTER the DFU hand-over above and not before: once started
+     * the IWDG cannot be stopped, and it would reset the part out of ST's boot
+     * loader mid-download. That ordering is the whole reason this is here
+     * rather than at the top of the function. */
+    wdt_init();
+
     uint32_t *src = &_sidata, *dst = &_sdata;
     while (dst < &_edata) *dst++ = *src++;
     for (dst = &_sbss; dst < &_ebss; ) *dst++ = 0;

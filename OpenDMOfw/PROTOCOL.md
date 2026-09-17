@@ -145,7 +145,7 @@ Layout per tech ref p.13–16; values cross-checked against a live capture
 | 1–4 | PrintJobID (u32 LE) | Job ID of the ongoing job (from ESC s) |
 | 5–6 | LabelIndex (u16 LE) | Label index (from ESC n) |
 | 7 | Reserved | 0 |
-| 8 | PrintHeadStatus | 0 ok, 1 overheated, 2 status unknown (the manual's default) — we report `0` |
+| 8 | PrintHeadStatus | `0` = ok, `1` = overheated, `2` = unknown. Derived from the thermal path since cycle 3: `2` when the thermistor reading is not believable (open circuit, short, or no divider fitted — DECISIONS D33), `1` while the D7 over-temperature latch is set, `0` otherwise. DYMO's own 550 Linux driver reads exactly this byte (`phStatus = status[8] & 3`) and pauses the job and reprints the page on `1`, so a constant `0` meant a host could never see an overheat |
 | 9 | PrintDensity (%) | 0–200 (last ESC C / default 100) |
 | 10 | MainBayStatus | Full range (tech ref p.14): 0 unknown, 1 bay open, 2 no media, 3 not inserted properly, 4 media present/status unknown, 5 empty, 6 critically low, 7 low, **8 media present – ok**, 9 jammed, 10 **counterfeit media**. Always `8` here |
 | 11–22 | SKU info | 12 chars, NUL-padded (the configured SKU) |

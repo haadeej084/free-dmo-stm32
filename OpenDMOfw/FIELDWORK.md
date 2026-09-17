@@ -10,7 +10,9 @@ own published manuals, the head datasheet or a board photo could answer has been
 read and folded into the firmware already (DECISIONS D21) — thermal limits, the
 VH rail voltage, the version-reply format, what the paper sensor actually senses,
 the per-line time budget. Section 4 lists what is settled so you do not measure
-it again. What is left is **seven measurements**, plus a five-minute contribution
+it again. What is left is **eight measurements** — seven, plus the strobe
+polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
+datasheet reading. Plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
 
 **Two routes.** Sections 3–7 are the careful one: measure first, then power.
@@ -732,6 +734,9 @@ Connect's catalog for your region (an EU install hides US-only SKUs as
 | Motor buzzes, doesn't turn | phase order or `MOTOR_STEP_US` too short | `k_phase[]`, `motor.c` |
 | `diag 1` fires 0 lines | thermal gate — the head reads as over-limit | measurement 3 |
 | Head logic looks right, nothing prints | VH never enabled | measurement 5 |
+| **Label feeds and ejects BLANK, LED blinking fast** | the heat rail is locked out: `OP_FLAG_VH_INHIBIT` is set. Either you set it (`opsend.py vh off`), or the config record failed its checksum and the firmware locked it out for you — see **DECISIONS D32** | `diag 4` / `diag 6` report the flag; `opsend.py vh on` clears it. If it comes back after every power cycle, the EEPROM is not storing: `diag 3`, and check `GS D 0x08`'s **persisted** byte |
+| `diag 4` raw is 0 or 4095, and status byte 8 reads 2 | the head thermistor is open or shorted — or simply not fitted, which is the normal state of a bring-up board. The firmware treats this as a THIRD state, not as a cold head (**DECISIONS D33**): minimum dwell, self test refused, host told. Print is light but the printer works | measurement 3; `thermal.c` `THERMAL_OPEN_RAW` / `THERMAL_SHORT_RAW` |
+| LED blinks fast with a healthy head and paper | same two states as above — the LED's 5 Hz pattern means "cannot put a dot on a label", which now includes the heat lockout and not only over-temperature | `main.c` `led_update()` |
 | Print is stretched or squashed vertically | µsteps per line | measurement 2 |
 | Right half of the image mirrored | DI2 dot order | measurement 6 |
 | Print too light / too dark | dwell and density | `HEAD_BASE_DWELL_US`, `opsend.py density` |

@@ -8,7 +8,8 @@
 > someone with a genuine LabelWriter 550 must do the **hardware fieldwork** in
 > [`FIELDWORK.md`](FIELDWORK.md) — which is down to **eight** items: GPIO routing,
 > the motor drive train, the thermistor divider resistor, the top-of-form sensor,
-> the VH enable pin, the half-2 dot order, and host acceptance.
+> the VH enable pin, the strobe polarity, the half-2 dot order, and host
+> acceptance.
 >
 > **You can help in five minutes without opening anything.** If you own a working
 > LabelWriter and a genuine roll, three USB captures (`FIELDWORK.md` section 1b)

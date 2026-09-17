@@ -62,7 +62,7 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * KF3002 architecture). If the board shows more heat lines on the wide head,
  * raise it in model.h; enough PIN_HEAD_STROBE* are defined here. */
 /* HEAD_DOTS / HEAD_BYTES / HEAD_STROBE_SEGMENTS come from model.h (per model).
- * OP104 (default): 1248 dots = two 624-dot halves -> STB1+STB2.
+ * OP104: 1248 dots = two 624-dot halves -> STB1+STB2.
  * OP57 (-DMODEL_OP57): 672 dots = two 336-dot halves -> STB1+STB2. */
 
 /* ---- Feed stepper -------------------------------------------------------- *

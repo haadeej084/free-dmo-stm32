@@ -118,7 +118,10 @@ test:
 	  /tmp/opendmo-thermaltest-$$m; \
 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
 	    -DHEAD_SAG_FULL_US=47 -o /tmp/opendmo-sagtest-$$m $(THERMAL_TEST_SRC) -lm; \
-	  /tmp/opendmo-sagtest-$$m; 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest 	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); 	  /tmp/opendmo-motortest-$$m; \
+	  /tmp/opendmo-sagtest-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); \
+	  /tmp/opendmo-motortest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

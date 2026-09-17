@@ -101,7 +101,9 @@
    * model's PID/MDL so a 550 reports a 550 hardware string. */
   #define MODEL_HW_VERSION      "LW550-REV.K"
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
-#else /* default: OP104 (4", 300 dpi - shipping-label class) */
+#else /* OP104 (4", 300 dpi - shipping-label class). NOT the default: model.h
+       * selects MODEL_OP57 above when neither is defined, because OP57 is the
+       * LabelWriter 550, the only model with a board this firmware runs on. */
   /* 1248-dot / 105.7 mm head, presents as the 5XL-class printer. */
   #define MODEL_NAME            "OP104"
   #define MODEL_PID             0x002A

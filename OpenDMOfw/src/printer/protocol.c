@@ -59,7 +59,9 @@
  * Backdoor commands (never sent by the stock host, kept for configuration and
  * driver-less bring-up via tools/opsend.py):
  *   GS C len lo hi sku.. 1D 43 .. set roll config (SKU + count) in EEPROM
- *   GS D sub [arg]         1D 44 ..  self-test / diagnostic (see diagnose()):
+ *   GS D <sub> [args]   diagnostics, subcommands 0x01-0x09: head strobe,
+ *                       motor step, EEPROM self-test, snapshot, build id,
+ *                       full pin/ADC scan, pin toggle, VH interlock, DFU
  *                                0x01 <n> strobe head n lines, 0x02 <n> step motor,
  *                                0x03 EEPROM self-test, 0x04 diagnostic snapshot.
  *                                Replies are 'D'-prefixed so they can't be mistaken
@@ -704,7 +706,7 @@ static void factory_reset(void)
     const char *d = MODEL_DEFAULT_SKU;
     uint8_t i = 0;
     for (; i < OP_SKU_MAX - 1 && d[i]; i++) cfg->sku[i] = d[i];
-    cfg->sku[i] = 0;
+    for (; i < OP_SKU_MAX; i++) cfg->sku[i] = 0;   /* erase the old tail too */
     cfg->label_count = MODEL_DEFAULT_COUNT;
     cfg->density = 8;
     /* Keep OP_FLAG_VH_INHIBIT if it is set. store.h promises that while that
@@ -1144,7 +1146,12 @@ void protocol_task(void)
                 op_config_t *cfg = store_get_mut();
                 cfg->label_count = (uint16_t)(s_hdr[1] | (s_hdr[2] << 8));
                 s_sku_len = s_hdr[0]; s_sku_i = 0;
-                if (s_sku_len == 0) { cfg->sku[0] = 0; store_save(); s_state = S_CMD; }
+                if (s_sku_len == 0) {
+                    /* Clearing the SKU must erase the whole field: the roll
+                     * record copies a fixed width out of it. */
+                    for (uint8_t k = 0; k < OP_SKU_MAX; k++) cfg->sku[k] = 0;
+                    store_save(); s_state = S_CMD;
+                }
                 else s_state = S_GSC_SKU;
             }
             break;
@@ -1155,7 +1162,7 @@ void protocol_task(void)
             s_sku_i++;
             if (s_sku_i >= s_sku_len) {
                 uint8_t z = s_sku_len < OP_SKU_MAX-1 ? s_sku_len : OP_SKU_MAX-1;
-                cfg->sku[z] = 0;
+                for (uint8_t k = z; k < OP_SKU_MAX; k++) cfg->sku[k] = 0;
                 store_save();
                 s_state = S_CMD;
             }

@@ -62,14 +62,15 @@ tag / DRM / authentication.
 Narrowed to **eight** measurements — see `FIELDWORK.md` section 8. The count was
 seven until DECISIONS D28 withdrew the strobe-polarity claim and put it back on
 the list as measurement 6b, paired with the VH gate polarity (measurement 5).
-Everything
-that could be settled from the datasheets has been: STB polarity, DI1/DI2
-topology, strobe-segment count and the EEPROM part are no longer open questions,
-the NTC curve and the divider lookup are tabulated so two readings finish the
+Much of what could be settled from the datasheets has been: DI1/DI2 topology,
+the strobe-segment count and the EEPROM part are no longer open questions, the
+NTC curve and the divider lookup are tabulated so two readings finish the
 thermal calibration, and the silicon narrows the thermistor search to 10 pads and
-I2C to 4. What is left is the GPIO routing, the motor drive train, the divider
-resistor, the paper-sensor type, the VH enable pin, the half-2 dot order, and
-host acceptance.
+I2C to 4. **STB polarity is NOT among them** — this paragraph used to list it as
+settled three lines after the sentence above says D28 withdrew it. What is left
+is the GPIO routing, the motor drive train, the divider resistor, the
+paper-sensor type, the VH enable pin (5), the strobe polarity (6b), the half-2
+dot order, and host acceptance — eight, matching the count above.
 
 GPIO pin routing (including VH enable), LATCH/STROBE polarity/timing, heat-segment
 count, dwell/density calibration, motor steps/line, I2C TIMINGR + EEPROM WP,

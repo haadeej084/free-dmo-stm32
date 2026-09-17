@@ -141,7 +141,10 @@ static uint8_t  s_density_pct;       /* last ESC C duty, 0-200, reported in stat
 static const paper_t *s_paper;       /* current stock, from ESC L (feed + ESC U) */
 static uint16_t s_len_override;      /* ESC L value treated as a raw dot length */
 static int      s_len_from_raster;   /* continuous / custom size: pitch = raster height */
-static uint16_t s_raster_dots;       /* height (dots) of the current raster block */
+static uint16_t s_raster_lines;      /* dot LINES printed by the current raster
+                                      * block - the feed axis. Not ESC D's H
+                                      * field: that is the width across the
+                                      * head. See begin_raster(). */
 
 /* Feed math: die-cut rolls have a small physical gap between labels. */
 #define LABEL_GAP_DOTS   20          /* ~1.7 mm at 300 dpi */
@@ -153,6 +156,16 @@ static uint16_t s_raster_dots;       /* height (dots) of the current raster bloc
  * Continuous stock has no inter-label pitch to honour anyway. */
 #define MAX_FEED_DOTS    4000        /* ~34 cm */
 
+/* Hard ceiling on a framed raster body (ESC Z). ESC L accepts a raw dot length
+ * up to 32767 and continuous stock has no pitch at all, so the tallest label
+ * this firmware can be asked to take is bounded by the ESC L range rather than
+ * by the GPD paper tables (whose tallest entries are only 3150 dots on OP57
+ * and 3000 on OP104). 32000 lines x HEAD_BYTES is 2.7 MB on OP57 and 5.0 MB on
+ * OP104: past anything real, and short enough that a malformed header costs a
+ * bounded skip instead of an unbounded one. */
+#define MAX_RASTER_LINES 32000u
+#define MAX_RASTER_BYTES ((uint32_t)HEAD_BYTES * MAX_RASTER_LINES)
+
 void protocol_init(void)
 {
     s_head = s_tail = 0; s_rx_paused = 0;
@@ -161,7 +174,7 @@ void protocol_init(void)
     s_refuse_update = 0; s_w_payload = 0; s_w_cmd = 0;
     s_density_pct = 100;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
+    s_len_override = 0; s_raster_lines = 0; s_len_from_raster = 0;
 }
 
 /* protocol_reset() runs in USB interrupt context (SOFT_RESET and
@@ -198,7 +211,7 @@ static void protocol_reset_apply(void)
     s_state = S_CMD; s_hcnt = 0; s_lines_left = 0; s_line_rx = 0;
     s_job_active = 0; s_label_index = 0; s_job_id = 0;
     s_paper = paper_lookup(PAPER_DEFAULT_CODE);
-    s_len_override = 0; s_raster_dots = 0; s_len_from_raster = 0;
+    s_len_override = 0; s_raster_lines = 0; s_len_from_raster = 0;
     /* Framed-command state (ESC W / ESC R / ESC M / ESC Z). s_refuse_update is
      * the load-bearing one: a firmware-update handshake interrupted before its
      * 128 header bytes arrived would otherwise stay armed across the reset and
@@ -315,7 +328,18 @@ static void label_printed(void)
  * raster is centered on the head (matches PrintableOrigin geometry). */
 static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
 {
-    s_raster_dots = dots;
+    /* `lines`, not `dots`. ESC D's two 32-bit fields are W then H, and W is
+     * the number of dot lines while H is the width across the head - the
+     * opposite of what the names suggest. The genuine capture settles it:
+     * ESC D 01 02 | 9c 00 00 00 | 10 01 00 00 is W=156, H=272, and the block
+     * that follows is 156 * (272/8) = 5304 bytes, matching the stream exactly.
+     * emit_line() steps the motor once per printed line, so after this block
+     * the paper has advanced exactly `lines` dots; that is the quantity
+     * feed_next_label() must subtract from the label pitch. Storing `dots`
+     * here made the inter-label feed vary with the image's WIDTH, and at the
+     * full head width it collapsed to the bare gap - every label after the
+     * first printed on top of the one before it. */
+    s_raster_lines = lines;
     s_bpl = (uint16_t)(((uint32_t)dots * bpp + 7u) / 8u);
     s_use = (s_bpl > HEAD_BYTES) ? (uint16_t)HEAD_BYTES : s_bpl;
     s_lines_left = lines; s_line_rx = 0;
@@ -331,11 +355,11 @@ static void begin_raster(uint16_t lines, uint16_t dots, uint8_t bpp)
  * and tear-bar offset are fixed dot counts, not read from the roll. */
 static void feed_next_label(int to_tear)
 {
-    uint16_t pitch = s_len_from_raster ? s_raster_dots
+    uint16_t pitch = s_len_from_raster ? s_raster_lines
                    : s_len_override     ? s_len_override
-                   : (s_paper ? s_paper->height_dots : s_raster_dots);
+                   : (s_paper ? s_paper->height_dots : s_raster_lines);
     uint32_t dots = LABEL_GAP_DOTS;
-    if (pitch > s_raster_dots) dots += (uint32_t)(pitch - s_raster_dots);
+    if (pitch > s_raster_lines) dots += (uint32_t)(pitch - s_raster_lines);
     if (to_tear) dots += TEAR_EXTRA_DOTS;
     if (dots > MAX_FEED_DOTS) dots = MAX_FEED_DOTS;
     motor_step_lines((uint16_t)dots);
@@ -847,7 +871,7 @@ void protocol_task(void)
                  * Leaving the previous id there meant the genuine driver could
                  * never acquire the lock again after the first job. */
                 s_job_active = 0; s_label_index = 0; s_job_id = 0;
-                s_raster_dots = 0;   /* no printed height carries into the next job */
+                s_raster_lines = 0;  /* no printed length carries into the next job */
                 s_state = S_CMD; break;
             case 'e': set_density(100); s_state = S_CMD; break;  /* Normal 100 % */
             case 'U': send_sku_record(); s_state = S_CMD; break;
@@ -930,8 +954,8 @@ void protocol_task(void)
                     s_job_active = 1;
                     s_label_index = 0;
                     /* A feed before this job's first ESC D must advance a full
-                     * pitch, not the height of the previous job's last label. */
-                    s_raster_dots = 0;
+                     * pitch, not the length of the previous job's last label. */
+                    s_raster_lines = 0;
                 }
                 s_state = S_CMD;
             }
@@ -1013,8 +1037,42 @@ void protocol_task(void)
              * the label counter are left exactly as they were. */
             s_hdr[s_hcnt++] = c;
             if (s_hcnt == 15) {
-                s_w_payload = (uint32_t)s_hdr[1] | ((uint32_t)s_hdr[2] << 8)
-                            | ((uint32_t)s_hdr[3] << 16) | ((uint32_t)s_hdr[4] << 24);
+                /* The declared length is host data and must not be trusted.
+                 * 0xFFFFFFFF puts us in S_SKIP for 4 GiB, and S_SKIP has no
+                 * escape: the device accepts every byte and answers nothing,
+                 * for this job and every job behind it, until a printer-class
+                 * SOFT_RESET, a SET_CONFIGURATION after a bus reset, or a power
+                 * cycle. No byte sequence can recover it.
+                 *
+                 * Bound it with what the SAME header already declares. Bytes
+                 * [5..14] are ESC D's own header, so the UNCOMPRESSED size of
+                 * this raster is known - and a compressed body larger than the
+                 * raw raster is not a compressed body. Both factors are 16-bit,
+                 * so their product alone still permits a ~4 GB skip; the
+                 * MAX_RASTER_BYTES clamp is what actually closes it. */
+                uint32_t len   = (uint32_t)s_hdr[1] | ((uint32_t)s_hdr[2] << 8)
+                               | ((uint32_t)s_hdr[3] << 16) | ((uint32_t)s_hdr[4] << 24);
+                uint8_t  zbpp  = s_hdr[5] ? s_hdr[5] : 1;
+                uint32_t zlin  = (uint32_t)s_hdr[7]  | ((uint32_t)s_hdr[8] << 8)
+                               | ((uint32_t)s_hdr[9] << 16) | ((uint32_t)s_hdr[10] << 24);
+                uint32_t zdots = (uint32_t)s_hdr[11] | ((uint32_t)s_hdr[12] << 8)
+                               | ((uint32_t)s_hdr[13] << 16) | ((uint32_t)s_hdr[14] << 24);
+                uint32_t zbpl  = (zdots > 0xFFFFu) ? 0x10000u
+                                                   : ((zdots * zbpp + 7u) / 8u);
+                uint32_t zmax  = (zlin > 0xFFFFu || zbpl > 0xFFFFu) ? 0u
+                                                                    : zlin * zbpl;
+                if (zmax > MAX_RASTER_BYTES) zmax = MAX_RASTER_BYTES;
+                /* Slack for a body that does not compress: stored deflate costs
+                 * 5 bytes per 65535 block, about 0.008 %, so 1.5 % + 64 is
+                 * generous for any container we might be handed. */
+                uint32_t zcap = zmax + (zmax >> 6) + 64u;
+                /* Malformed: skip nothing and resync on the next ESC. The body
+                 * then runs through the command parser, which the comment above
+                 * would rather avoid - but that is exactly the trade-off
+                 * S_ESC_D already makes for an out-of-range header, and a
+                 * bounded desync beats an unbounded wedge. */
+                if (zmax == 0u || len > zcap) len = 0;
+                s_w_payload = len;
                 s_state = (s_w_payload ? S_SKIP : S_CMD);
             }
             break;

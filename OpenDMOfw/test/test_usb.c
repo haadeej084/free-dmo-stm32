@@ -126,6 +126,19 @@ int main(void)
      *    12-digit serial without a leading zero; unknown index stalls. */
     r = ctrl_in(0x80, 6, 0x0300, 0, 255, b);
     CHECK(r == 4 && b[2] == 0x09 && b[3] == 0x04);
+    /* Index 1, iManufacturer. Windows asks for it during enumeration, and the
+     * comment above has claimed since the file was written that it is tested;
+     * it was not. The whole descriptor is compared rather than just the text,
+     * because bLength comes from the USTR macro's sizeof and is exactly the
+     * field a later edit would break silently. */
+    r = ctrl_in(0x80, 6, 0x0301, 0x0409, 255, b);
+    {
+        static const uint8_t want[10] = { 10, 3, 'D',0,'Y',0,'M',0,'O',0 };
+        CHECK(r == 10 && memcmp(b, want, 10) == 0);
+    }
+    /* A short read honours wLength: one short packet, nothing padded. */
+    r = ctrl_in(0x80, 6, 0x0301, 0x0409, 4, b);
+    CHECK(r == 4 && b[0] == 10 && b[1] == 3 && b[2] == 'D');
     r = ctrl_in(0x80, 6, 0x0302, 0x0409, 255, b);
     {
         char prod[40]; int n = (r - 2) / 2;
@@ -141,6 +154,12 @@ int main(void)
         CHECK(r == 26 && digits && b[2] != '0');
     }
     CHECK(ctrl_in(0x80, 6, 0x0307, 0x0409, 255, b) == STALL);
+    /* An unknown descriptor TYPE stalls too, which is a different branch from
+     * an unknown string INDEX. DEVICE_QUALIFIER (6) is the one a real host
+     * actually asks for: a full-speed-only device must stall it rather than
+     * answer, or the host will go looking for a high-speed configuration that
+     * does not exist. */
+    CHECK(ctrl_in(0x80, 6, 0x0600, 0, 10, b) == STALL);
     /* EP0 recovers from that STALL at the next SETUP (RM0091 30.5.2). */
     r = ctrl_in(0x80, 0, 0, 0, 2, b);
     CHECK(r == 2 && b[0] == 0x01 && b[1] == 0x00);      /* self-powered */
@@ -156,6 +175,16 @@ int main(void)
     CHECK(g_resets == 1 && usb_is_configured());
     r = ctrl_in(0x80, 8, 0, 0, 1, b);
     CHECK(r == 1 && b[0] == 1);
+    /* GET_INTERFACE (USB 2.0 9.4.4). One interface with one alternate setting,
+     * so the answer is always the single byte 0. Implemented since the first
+     * commit and requested by no test until now. */
+    CHECK(ctrl_in(0x81, 10, 0, 0, 1, b) == 1 && b[0] == 0x00);
+    b[1] = 0xAA;
+    CHECK(ctrl_in(0x81, 10, 0, 0, 64, b) == 1 && b[0] == 0x00 && b[1] == 0xAA);
+    /* wIndex is NOT validated: any interface number answers 0, where USB 2.0
+     * 9.4.4 asks for a Request Error. Pinned deliberately, so that tightening
+     * it later is a visible edit rather than a silent behaviour change. */
+    CHECK(ctrl_in(0x81, 10, 0, 3, 1, b) == 1 && b[0] == 0x00);
 
     /* 7) Bulk OUT reaches the parser, and the endpoint re-arms at full
      *    capacity for a maximum-size packet. */

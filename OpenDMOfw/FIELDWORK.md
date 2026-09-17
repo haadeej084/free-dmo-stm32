@@ -651,6 +651,18 @@ firmware holds the pin low.
 **Symptom if wrong:** everything looks right on the logic lines and the head
 simply never marks the paper.
 
+> **Do this together with measurement 6b, in one sitting, before the first 24 V
+> test.** They are no longer two independent unknowns. The fault handler
+> (DECISIONS D31) drives PA8 to `!HEAD_VH_ON_LEVEL` on every fault, including a
+> fault before `SystemInit()`, where reset had left the pin a floating input.
+> If the gate polarity is inverted, that handler switches the rail **on** in a
+> window that used to be safe by default. Its only mitigation is that the heat
+> strobes are already at `!MODEL_STB_ACTIVE_LEVEL` by then, so the head draws
+> nothing — which assumes the strobe polarity is right. Either assumption alone
+> being wrong is survivable; **both wrong at once is the one case where the
+> safety handler becomes the hazard.** So confirm both, and report both, before
+> the head sees 24 V from anything other than a current-limited bench supply.
+
 ### 6. Half-2 dot order — *assumption, easiest to spot in print*
 `head.c` sends dot `i` to DI1 and dot `half + i` to DI2 on the same clock. Some
 two-half heads shift the second bank in the opposite direction. The split itself
@@ -677,6 +689,8 @@ and a brief current pulse only while printing, is the right one.
 **If in doubt, leave it as is and report the measurement** — this is exactly
 the kind of thing that is cheap to measure and expensive to guess.
 **Patch:** `MODEL_STB_ACTIVE_LEVEL` in `src/model.h`, one line.
+**Pair this with measurement 5** — see the note there. The fault-safe handler's
+guarantee rests on these two polarities together, not on either one alone.
 
 ### 7. Host acceptance — *the actual goal*
 With a plausible SKU configured, does **D.MO Connect** show a valid roll and

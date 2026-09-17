@@ -425,9 +425,28 @@ listed so a reader of an older build knows what moved.
 - **`ESC L 0` clears a raw length override.** 0 means die-cut and is what the
   stock driver sends for every die-cut job; it previously left a preceding raw
   `ESC L <dots>` in force. Regression test: scenario 34.
-- **The printed height does not leak between jobs.** `s_raster_dots` is cleared
+- **The printed length does not leak between jobs.** `s_raster_lines` is cleared
   on `ESC s` and `ESC Q`, so a feed issued before a job's first `ESC D` advances
   a full pitch. Regression test: scenario 35.
+- **The label is measured along the feed axis, in printed dot lines.** `ESC D`'s
+  two 32-bit fields are `W` then `H`, and `W` is the number of dot **lines**
+  while `H` is the width **across the head** — the opposite of what the letters
+  suggest. The genuine capture settles it: `1B 44 01 02 | 9C 00 00 00 |
+  10 01 00 00` is W=156, H=272, and the block that follows is
+  156 × (272/8) = 5304 bytes, matching the stream byte for byte. The LW450 tech
+  reference says the same thing about `ESC L` from the other side: "Print lines
+  and lines fed both count towards this total."
+
+  This entry used to say "the printed height", which is what licensed reading
+  `H` as the label's length: `begin_raster()` stored the width and
+  `feed_next_label()` subtracted it from the pitch, so the inter-label advance
+  shrank as the image got **wider**, and at the full head width it collapsed to
+  the bare 20-dot gap — 1.7 mm instead of 46 mm, every label printing on top of
+  the one before it. The whole suite passed either way, because nothing tied the
+  feed distance to the line count. Regression test: scenario 59, which asserts
+  the exact distance and then asserts that the same line count at a different
+  raster width feeds the same distance. That second assertion is the one that
+  pins the axis.
 
 ## D19 — Build identification (`GS D 0x05`)
 
@@ -1049,3 +1068,85 @@ the result with ROHM's rated operating point before any constant in `head.c`
 moves. Until then `head.c` keeps its conservative ceiling, and the parts of the
 model that are already confirmed — the density ladder, the dot-count term's
 existence, the active-low strobe and latch — are documented here.
+
+## D31 — A fault is not allowed to leave the head hot
+
+`Default_Handler` was `for(;;){}`. That is the right answer for a CPU and the
+wrong one for a thermal printer: a Cortex-M0 has no CFSR, no BFAR and no nested
+faults, so the handler is simply where execution ends — while the GPIO output
+latches keep whatever they were holding when the fault arrived.
+
+Proved on the real ARM image in Renode, not argued from the source: arm the
+printing state, force a HardFault, and the machine stops with `PIN_HEAD_VH` at
+`HEAD_VH_ON_LEVEL` (24 V rail enabled) and a heat strobe at
+`MODEL_STB_ACTIVE_LEVEL`, both pins still driven outputs. They stay that way
+until the independent watchdog reboots the part: **3.2 s** at the datasheet's
+maximum LSI and **5.3 s** at its minimum (`PR=5`, `RLR=1250`, f072 datasheet
+Table 45).
+
+What that costs, from the ROHM KF3002-GD31A characteristics table: 0.42 W per
+dot at the rated pulse width of 0.308 ms is 0.129 mJ per dot per pulse. Holding
+the strobe for 3.2 s is **1.34 J per dot — about 10,400× the rated pulse
+energy**, and the half as a whole is 141 W on OP57 (336 dots) or 262 W on OP104
+(624 dots) drawn continuously, against a supply DYMO size for "an average of
+37 % of the total dots per line". The print head is the one part of this
+printer that cannot be replaced.
+
+So every fault vector and every unused IRQ now lands on `Fault_Handler`, which
+safes the pins and then spins. Three things about it are load-bearing:
+
+**Level before direction.** Each pin gets its safe level written to `BSRR`
+*before* `MODER` makes it an output. After a reset the ODR latch reads 0, and 0
+is the *firing* level for both the strobes and the VH gate, so a handler that
+configured the direction first would drive a pulse before it drove the safe
+level. `test/renode/fault.py` asserts the write order, not just the final
+register state — the emulator cannot see the difference otherwise, and a
+mutation that swaps the two lines passes every other check.
+
+**Strobes before the rail.** With the head's own drivers already off, the rail
+transition cannot put current through a dot.
+
+**The port clocks first.** A fault before `SystemInit()` leaves the GPIO clocks
+gated, and a write to a gated port is silently discarded — the handler's pin
+writes would go nowhere. `RCC->AHBENR` is therefore the first thing it touches.
+
+The handler also **starts the IWDG**. If the fault predates `main()`'s
+`wdt_init()` — a hang in the clock-ready spin in `SystemInit()`, say — nothing
+was ever going to reset the part and the safe state would have been permanent
+instead of temporary. Three register writes turn every fault into a reboot, and
+the watchdog cannot be stopped again, which is exactly what is wanted here.
+
+### The residual risk, stated plainly
+
+In the cold case reset had left PA8 a floating input (RM0091 8.4.1) and the
+handler now actively drives it to `!HEAD_VH_ON_LEVEL`. **If the assumed gate
+polarity is inverted, the handler switches the rail on in a window that was
+previously safe by default.** The mitigation is the ordering above — the
+strobes are already at `!MODEL_STB_ACTIVE_LEVEL`, so the head draws nothing —
+and that mitigation in turn assumes the strobe polarity. Both polarities
+inverted is the single case where this handler creates the hazard instead of
+removing it. `FIELDWORK.md` measurement 5 therefore confirms the PA8 gate
+polarity and the STB polarity **together**, as one prerequisite, before the
+first 24 V test.
+
+### The test
+
+`test/renode/fault.py` runs on the real image, in the `renode` target, for both
+models. It forces the handler four ways — an undefined instruction (HardFault),
+`SCB ICSR.NMIPENDSET`, an unused vector via `NVIC ISER`+`ISPR`, and the same
+HardFault with no boot at all so the port clocks are still gated — and after
+each one asserts the rail off *and driven*, every fitted strobe not firing *and
+driven*, the latch at HOLD, all four motor phases de-energised, the
+`RCC_AHBENR` write, and the IWDG start key.
+
+It fails four ways on a firmware without the handler, and five separate
+mutations of the handler each get caught: removing the RCC write, safing only
+one strobe half, leaving the rail alone, swapping level and direction, and
+skipping the watchdog start.
+
+One honest note on scope. A spurious interrupt from a peripheral cannot occur
+today: on ARMv6-M an IRQ is taken only with its `NVIC_ISER` bit set, and
+`nvic_enable(USB_IRQn)` in `src/usb/usb_core.c` is the only `ISER` write in the
+tree. Those vectors are reachable only through a corrupted NVIC or a remapped
+table. Giving them the safe handler is free insurance rather than the closing
+of a live hole — but the fault vectors it shares are not hypothetical at all.

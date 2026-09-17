@@ -49,8 +49,21 @@ int sys_pin_toggle(unsigned char port, unsigned char pin, unsigned char n){
     g_toggle_port = port; g_toggle_pin = pin; g_toggle_n = n; return 1; }
 void thermal_init(void){}
 unsigned short thermal_read_raw(void){ return 0; }
-static int g_thermal_ok = 1;       /* flip to exercise the D7 thermal gate */
-int thermal_ok(void){ return g_thermal_ok; }
+/* The D7 thermal gate is the one safety interlock that is pure software, so
+ * the mock has to be able to express both shapes it can be in: over the limit
+ * for a while and then cool (the normal case, where the firmware waits and
+ * then prints), and over the limit indefinitely (where the two call sites take
+ * DELIBERATELY OPPOSITE decisions - see cases 61 and 62). A fixed flag can
+ * only ever express one of them, which is why the gate had no coverage.
+ *   g_hot_polls > 0: report not-ok for the next N polls, then ok.
+ *   g_hot_polls < 0: never ok. */
+static int g_hot_polls = 0;
+static int g_delays = 0;           /* delay_ms() calls, i.e. cool-down polls */
+int thermal_ok(void){
+    if (g_hot_polls < 0) return 0;
+    if (g_hot_polls > 0) { g_hot_polls--; return 0; }
+    return 1;
+}
 unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }
@@ -66,7 +79,7 @@ static int g_paper_present = 1;
 void usbp_set_paper_present(int p){ g_paper_present = p; }
 int  usbp_paper_present(void){ return g_paper_present; }
 int  gpio_get(pin_t p){ (void)p; return PAPER_PRESENT_LEVEL; }  /* paper present */
-void delay_ms(unsigned int ms){ (void)ms; }
+void delay_ms(unsigned int ms){ (void)ms; g_delays++; }
 #include <setjmp.h>
 static jmp_buf g_dfu_jmp;
 static int     g_dfu_calls;
@@ -79,7 +92,7 @@ static int fails;
                      else printf("ok   %s\n", #c); }while(0)
 
 static void reset_state(void){ g_lines=0; g_feed=0; g_density=-1; g_reply_len=-1;
-                               g_thermal_ok=1; g_paper_present=1; g_vh_on=0;
+                               g_hot_polls=0; g_delays=0; g_paper_present=1; g_vh_on=0;
                                g_toggle_port=-1; g_toggle_pin=-1; g_toggle_n=-1;
                                memset(&g_cfg,0,sizeof g_cfg); protocol_init(); }
 
@@ -362,7 +375,7 @@ int main(void){
 
     /* 27) DECISIONS D7: GS D 0x01 runs all dots on at maximum dwell, so it must
      *     refuse to fire while the head is over its limit and report 0 lines. */
-    reset_state(); g_thermal_ok = 0;
+    reset_state(); g_hot_polls = -1;
     unsigned char hot[] = { 0x1D, 'D', 0x01, 5 };
     protocol_feed(hot, sizeof hot); protocol_task();
     CHECK(g_reply_len == 4);
@@ -884,6 +897,178 @@ int main(void){
             }
         }
         CHECK(bad == 0);
+    }
+
+    /* 59) The inter-label feed is measured along the FEED axis. ESC D's two
+     *     32-bit fields are W then H, and W is the number of dot LINES while H
+     *     is the width across the head - the opposite of what the names
+     *     suggest. The genuine capture settles it: ESC D 01 02 | 9c 00 00 00 |
+     *     10 01 00 00 is W=156, H=272, and the raster that follows is
+     *     156 * (272/8) = 5304 bytes, matching the stream byte for byte.
+     *
+     *     emit_line() steps the motor once per printed line, so after a block
+     *     the paper has advanced exactly `lines` dots; that is what must be
+     *     subtracted from the label pitch. The property that pins the axis is
+     *     the second case: the SAME line count at a different raster WIDTH must
+     *     feed the same distance, because the image's width has no physical
+     *     bearing on how far paper moves.
+     *
+     *     Storing the width instead made the advance shrink as the image got
+     *     wider, and at the full head width it collapsed to the bare gap -
+     *     1.7 mm instead of 46 mm, so every label after the first printed on
+     *     top of the one before it. The whole rest of this suite passes either
+     *     way, which is why this case exists. */
+    {
+        static unsigned char fj[32 + 100 * (HEAD_DOTS / 8)];
+        /* 1111 dots as a RAW ESC L length: 0x0457 is in neither model's paper
+         * table, so both take the raw-length path and the arithmetic below is
+         * one number for both. (The table path is covered by cases 34-35.) */
+        const int pitch = 1111;
+        const int lines = 100;
+        static const unsigned widths[2] = { HEAD_DOTS, 272 };
+        int feed[2];
+        for (int w = 0; w < 2; w++) {
+            unsigned bpl = widths[w] / 8;
+            int k = 0;
+            reset_state();
+            fj[k++] = 0x1B; fj[k++] = 'L';
+            fj[k++] = (unsigned char)((pitch >> 8) & 0xFF);   /* ESC L is BE */
+            fj[k++] = (unsigned char)(pitch & 0xFF);
+            esc_d(&fj[k], (unsigned)lines, widths[w]); k += 12;
+            for (unsigned i = 0; i < lines * bpl; i++) fj[k++] = 0xFF;
+            fj[k++] = 0x1B; fj[k++] = 'G';
+            /* 8.4 kB does not fit the input ring, so deliver it the way the USB
+             * stack does: one 64-byte bulk packet at a time, draining between
+             * packets. A single oversized protocol_feed() would silently drop
+             * the tail and the raster would never finish. */
+            for (int off = 0; off < k; off += 64) {
+                int chunk = (k - off < 64) ? (k - off) : 64;
+                protocol_feed(&fj[off], (unsigned)chunk);
+                protocol_task();
+            }
+            feed[w] = g_feed;
+            CHECK(g_lines == lines);
+        }
+        /* printed lines + the rest of the pitch + the die-cut gap */
+        CHECK(feed[0] == lines + (pitch - lines) + 20);
+        CHECK(feed[1] == feed[0]);              /* width must not move the paper */
+    }
+
+    /* 60) ESC Z's declared payload length is host data and must be bounded by
+     *     the raster geometry in the same header. 0xFFFFFFFF once put the
+     *     parser in S_SKIP for 4 GiB, with no escape in the byte stream at all:
+     *     the device accepted everything and answered nothing, for this job and
+     *     every job behind it, until a SOFT_RESET or a power cycle. */
+    {
+        static const unsigned long bogus[] = { 0xFFFFFFFFul, 0x10000000ul, 0x00100000ul };
+        for (unsigned b = 0; b < sizeof bogus / sizeof bogus[0]; b++) {
+            unsigned char z[2 + 15 + 4];
+            int k = 0;
+            reset_state();
+            z[k++] = 0x1B; z[k++] = 'Z';
+            z[k++] = 0x03;                                  /* scheme */
+            z[k++] = (unsigned char)(bogus[b]        & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >>  8) & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >> 16) & 0xFF);
+            z[k++] = (unsigned char)((bogus[b] >> 24) & 0xFF);
+            z[k++] = 1; z[k++] = 2;                         /* BPP, Align */
+            z[k++] = 10; z[k++] = 0; z[k++] = 0; z[k++] = 0; /* W = 10 lines */
+            z[k++] = (unsigned char)(HEAD_DOTS & 0xFF);      /* H = head width */
+            z[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+            z[k++] = 0; z[k++] = 0;
+            /* A body of 10 * HEAD_BYTES could never compress to any of these,
+             * so the length is rejected and the parser stays live. */
+            z[k++] = 0x1B; z[k++] = 'n'; z[k++] = 29; z[k++] = 0;
+            protocol_feed(z, (unsigned)k); protocol_task();
+            protocol_feed(q, sizeof q); protocol_task();
+            CHECK(g_reply[5] == 29);
+        }
+        /* An honest length still skips exactly its own body (case 57 covers the
+         * in-range path; this asserts the bound did not break it). */
+        reset_state();
+        unsigned char zo[2 + 15 + 40 + 4];
+        int k = 0;
+        zo[k++] = 0x1B; zo[k++] = 'Z'; zo[k++] = 0x03;
+        zo[k++] = 40; zo[k++] = 0; zo[k++] = 0; zo[k++] = 0;
+        zo[k++] = 1; zo[k++] = 2;
+        zo[k++] = 10; zo[k++] = 0; zo[k++] = 0; zo[k++] = 0;
+        zo[k++] = (unsigned char)(HEAD_DOTS & 0xFF);
+        zo[k++] = (unsigned char)((HEAD_DOTS >> 8) & 0xFF);
+        zo[k++] = 0; zo[k++] = 0;
+        for (int i = 0; i < 40; i++) zo[k++] = (i & 1) ? 0x1B : 'A';
+        zo[k++] = 0x1B; zo[k++] = 'n'; zo[k++] = 30; zo[k++] = 0;
+        protocol_feed(zo, (unsigned)k); protocol_task();
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply[5] == 30);
+    }
+
+    /* 61) The cool-down wait in emit_line(): over the limit, then cool. The
+     *     firmware must WAIT and then print - dropping the line would leave a
+     *     white band in the middle of a label with no error anywhere. */
+    {
+        reset_state();
+        g_hot_polls = 3;
+        unsigned char j[64]; int n = 0;
+        j[n++] = 0x1B; j[n++] = 's'; j[n++] = 1; j[n++] = 0; j[n++] = 0; j[n++] = 0;
+        esc_d(&j[n], 3, 16); n += 12;
+        for (int i = 0; i < 6; i++) j[n++] = 0xFF;
+        protocol_feed(j, (unsigned)n); protocol_task();
+        CHECK(g_lines == 3);            /* waited, then printed all three */
+        CHECK(g_delays == 3);           /* three 10 ms polls, only on line 1 */
+    }
+
+    /* 62) The same gate, over the limit FOREVER, at both call sites - and the
+     *     two make opposite decisions on purpose:
+     *
+     *     emit_line() prints anyway after the bounded ~1 s wait. By then the
+     *     dwell has already been scaled down by thermal_dwell_scale(), so the
+     *     energy is reduced rather than nominal, and a host job that stalls
+     *     forever is worse than a slightly light label.
+     *
+     *     protocol_self_test() REFUSES. Nobody is waiting on its output, it is
+     *     the operator's own bring-up tool, and DECISIONS D7 is explicit that a
+     *     bring-up self-test must never be the thing that cooks the head.
+     *
+     *     Writing these two the same way round would be the natural mistake,
+     *     so both are pinned here. */
+    {
+        reset_state();
+        g_hot_polls = -1;
+        unsigned char j[64]; int n = 0;
+        j[n++] = 0x1B; j[n++] = 's'; j[n++] = 1; j[n++] = 0; j[n++] = 0; j[n++] = 0;
+        esc_d(&j[n], 3, 16); n += 12;
+        for (int i = 0; i < 6; i++) j[n++] = 0xFF;
+        protocol_feed(j, (unsigned)n); protocol_task();
+        CHECK(g_lines == 3);            /* prints anyway, at a reduced dwell */
+        CHECK(g_delays == 300);         /* 100 bounded polls per line */
+
+        reset_state();
+        g_hot_polls = -1;
+        protocol_self_test();
+        CHECK(g_lines == 0);            /* refuses: not one dot */
+        CHECK(g_delays == 100);         /* one bounded wait, then it gives up */
+    }
+
+    /* 63) GS with an unknown sub-command consumes exactly that one byte and
+     *     resyncs. PROTOCOL.md defines only GS C (1D 43) and GS D (1D 44);
+     *     every other 1D xx lands on the resync, which no test had ever
+     *     executed. The sweep is exhaustive because it is free. */
+    {
+        int bad = 0;
+        for (int x = 0; x < 256; x++) {
+            if (x == 'C' || x == 'D') continue;
+            reset_state();
+            unsigned char b[] = { 0x1D, (unsigned char)x, 0x1B, 'A', 0x00 };
+            protocol_feed(b, sizeof b); protocol_task();
+            if (g_reply_len != 32 || g_lines != 0 || g_feed != 0) bad++;
+        }
+        CHECK(bad == 0);
+        /* The corollary: the resync eats the byte itself, so an ESC that lands
+         * in that position is consumed and the command behind it is not. */
+        reset_state();
+        unsigned char b2[] = { 0x1D, 0x1B, 'A', 0x00 };
+        protocol_feed(b2, sizeof b2); protocol_task();
+        CHECK(g_reply_len == -1);
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

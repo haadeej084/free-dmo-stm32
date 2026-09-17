@@ -124,6 +124,10 @@ renode: $(BUILD)/$(TARGET).elf
 	RENODE=$(RENODE) python3 test/renode/head_shift.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/eeprom.py $(MODEL)
 	RENODE=$(RENODE) python3 test/renode/dfu.py $(MODEL)
+# fault.py costs about 15 s per model: four Renode launches, each with a
+# 1 s emulated boot. It is the only suite that asserts what the firmware
+# does to the print head when the CPU stops being trustworthy.
+	RENODE=$(RENODE) python3 test/renode/fault.py $(MODEL)
 
 clean:
 	rm -rf $(BUILD)

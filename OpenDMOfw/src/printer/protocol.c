@@ -380,7 +380,21 @@ static void send_status(void)
     r[5] = (uint8_t)(s_label_index & 0xFF);      /* LabelIndex u16 LE */
     r[6] = (uint8_t)((s_label_index >> 8) & 0xFF);
     r[7] = 0;                                    /* Reserved */
-    r[8] = 0;                                    /* PrintHeadStatus: ok */
+    /* PrintHeadStatus: 0 = ok, 1 = overheated, 2 = unknown (550 tech ref p.14).
+     * This was hardwired to 0. It is one of only five fields DYMO's own 550
+     * Linux driver reads - LabelWriterLanguageMonitorV2.cpp does
+     * `byte phStatus = (status[8] & 0x3); if (phStatus == 1) { ... jsHeadOverheat
+     * ... }` and then pauses the job and reprints the page. Reporting a constant
+     * 0 means a host can never see an overheat, while emit_line() may be waiting
+     * up to a second per dot line for the head to cool: on a 1050-line address
+     * label that is a job stalled for minutes with every status reply still
+     * saying "head ok", and the light label that eventually comes out is
+     * recorded as a success.
+     *
+     * D7 deliberately keeps printing after the bounded wait, at a thermally
+     * reduced dwell. Reporting the state does not change that - it lets the host
+     * apply its own documented policy on top of our bounded-energy fallback. */
+    r[8] = thermal_ok() ? 0u : 1u;
     r[9] = s_density_pct;                        /* PrintDensity % (0-200) */
     r[10] = usbp_paper_present() ? 8 : 2;        /* MainBayStatus: ok / no media */
     for (int i = 0; i < 12; i++) {               /* SKU info, NUL-padded */
@@ -736,6 +750,7 @@ void protocol_self_test(void)
     if (s_job_active) return;
     uint8_t line[HEAD_BYTES];
     int released = 0;
+    uint16_t printed = 0;
 
     for (uint16_t y = 0; y < SELFTEST_LINES; y++) {
         for (uint16_t b = 0; b < HEAD_BYTES; b++) line[b] = 0;
@@ -749,13 +764,29 @@ void protocol_self_test(void)
         if (!thermal_ok()) break;                    /* D7: never strobe over the limit */
         head_print_line(line, HEAD_BYTES);
         motor_step_line_after(head_last_strobe_us());
+        printed++;                 /* counted after the step, so both the D7
+                                    * thermal break above and the second-press
+                                    * break below leave an accurate total */
         wdt_kick();
         /* A second press stops it, as on the genuine printer. The button is
          * still held when we start, so wait for a release first. */
         if (gpio_get(PIN_BUTTON) != BUTTON_PRESSED_LEVEL) released = 1;
         else if (released) break;
     }
+    /* The pattern's own lines advanced the paper exactly as a raster does, and
+     * feed_next_label() subtracts the printed length from the label pitch - so
+     * it has to be told, the same way an ESC D block tells it. Without this the
+     * self test is charged a FULL pitch on top of the 400 lines it already
+     * moved: a 33.9 mm over-feed, once per press, cumulative. With no
+     * top-of-form sensing in the feed path there is nothing to take it back,
+     * so after a few presses every later label prints across a die cut.
+     *
+     * This is the same defect family as the cycle-2 feed-axis bug (DECISIONS
+     * D30's neighbour entry): the feed math is right, and the caller failed to
+     * tell it what had already moved. */
+    s_raster_lines = printed;
     feed_next_label(1);                              /* present it at the tear bar */
+    s_raster_lines = 0;                              /* as ESC Q: nothing carries */
 }
 
 /* Process as many bytes as are available; resume exactly where we stopped. */

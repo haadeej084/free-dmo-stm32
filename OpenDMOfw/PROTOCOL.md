@@ -91,7 +91,8 @@ test); no DYMO command is `ESC ESC`.
 
 **`ESC L` sentinels.** The value is a length, but two values are not: `7F 00`
 (custom size) and `FF FF` (continuous stock). Both clear the length override and
-take the label pitch from the raster height of the page just printed.
+take the label pitch from the number of dot lines the page just printed (the
+feed axis — see the `ESC D` note below, whose field names are inverted).
 
 **Label counter vs. eject (deliberate deviation).** On a genuine 550 the roll
 tag's counter advances on every label **eject**, including a feed with nothing
@@ -104,12 +105,25 @@ unverified. The parser is byte-driven and resumable: if the
 ring buffer runs dry mid-raster it continues on the next `protocol_task()`
 without losing the job.
 
-**Over-wide rasters.** `ESC D` may declare a height larger than the head
-(`H > 1248` / `672`). The surplus bytes of every line are consumed and discarded
-rather than clipped away, so the rest of the block stays aligned; only the first
-`HEAD_BYTES` are printed. A header whose width or derived bytes-per-line does
-not fit in 16 bits is dropped entirely (its length is unknowable) and the parser
-resyncs on the next `ESC`.
+**`ESC D`'s two 32-bit fields are `W` then `H`, and they do NOT mean what the
+letters suggest.** `W` is the number of dot **LINES** (the feed axis) and `H` is
+the width **ACROSS the head**. The genuine capture settles it: `1B 44 01 02 |
+9C 00 00 00 | 10 01 00 00` is W=156, H=272, and the raster that follows is
+156 × (272/8) = 5304 bytes, matching the stream byte for byte.
+
+This paragraph used to call `H` the "height", and that wording is exactly what
+licensed a real defect: the firmware stored `H` as the printed length and
+subtracted it from the label pitch, so the inter-label feed shrank as the image
+got *wider* and, at full head width, collapsed to the bare 20-dot gap — every
+label after the first printing on top of the previous one. Keep the axes in the
+names.
+
+**Over-wide rasters.** `ESC D` may declare an across-head width larger than the
+head itself (`H > 1248` / `672`). The surplus bytes of every line are consumed
+and discarded rather than clipped away, so the rest of the block stays aligned;
+only the first `HEAD_BYTES` are printed. A header whose line count or derived
+bytes-per-line does not fit in 16 bits is dropped entirely (its length is
+unknowable) and the parser resyncs on the next `ESC`.
 
 ### 32-byte status struct (ESC A reply)
 
@@ -233,7 +247,7 @@ The stock host never sends `GS D`, so this cannot collide with the genuine proto
 | `0x04` | – | Diagnostic snapshot | 24 B (below) |
 | `0x05` | – | Firmware build id (ASCII, from `git describe` at build time; `dev` outside a checkout) | 2–50 B: `'D' sub build[…]`, capped at 48 chars |
 | `0x06` | – | **Scan**: sample every ADC-capable pin and read the input level of every pin on ports A/B/C. Drops the 24 V rail first, because sampling briefly floats pins — including the strobes | 29 B (below) |
-| `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode. PA11/PA12 (USB) and PA13/PA14 (SWD) are refused | 3 B: `'D' sub done(1/0)` |
+| `0x07` | port pin n | **Toggle** port `p` (0=A, 1=B, 2=C) pin `n`, `n` times at ~1 ms per half period, then restore its mode **and its output level**. Refused: PA11/PA12 (USB) and PA13/PA14 (SWD), because toggling those ends the session instead of answering the question — **and every pin that can put heat into the head**: the VH gate `PA8` and each fitted strobe (`PB0`, `PB1`). The command cannot know a pin's polarity, so on the active-low VH gate it would switch the rail ON, and on a strobe it would fire an unmetered pulse outside the thermal gate. The spare strobes `PB2`/`PB3` stay toggleable — finding them is the point | 3 B: `'D' sub done(1/0)` |
 | `0x08` | 0 or 1 | Clear/set **`OP_FLAG_VH_INHIBIT`**, the hard interlock on the 24 V heat rail, and persist it. Setting it drops the rail immediately | 3 B: `'D' sub flags` |
 | `0x09` | `'D' 'F' 'U'` | **Reboot into ST's USB DFU boot loader** (appears as `0483:df11`). Only with exactly these three confirmation bytes and never during a job; drops the heat rail, replies, then resets | 3 B: `'D' sub accepted(1/0)` |
 

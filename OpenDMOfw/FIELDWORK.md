@@ -201,11 +201,25 @@ short list of things that are already pinned down, so you can skip them.
   see `PINMAP.md`. Use it to find each pad.
 - **Head interface** = ROHM KF3002-family module: built-in shift registers + latch
   + heat drivers; signals CLK, DI1/DI2, LAT (High=HOLD/Low=THROUGH), STB1/STB2
-  (active-low), VH (24 V), VDD (3.3 V), TM (built-in NTC 30 kΩ B=3950). No MISO.
+  (polarity per-variant, ASSUMED active-low — measurement 6b, not established),
+  VH (24 V), VDD (3.3 V), TM (built-in NTC 30 kΩ B=3950). No MISO.
   Sourced from the head datasheet — only the *board routing* is unknown.
-- **STB polarity = active-low.** From the KF3002 timing chart. You do not need a
-  separate experiment for this; one glance at the scope trace you are taking
-  anyway in step B confirms it.
+- **STB polarity is NOT established — do not skip it.** This entry used to say
+  "active-low, from the KF3002 timing chart, no separate experiment needed".
+  Re-reading that chart withdrew the claim (DECISIONS D28): the published
+  KF3002 charts draw the strobe idling LOW and pulsing HIGH, and other variants
+  of the same family name the pin `/STB1`. It is **measurement 6b**, it is
+  paired with **measurement 5** (the VH gate polarity), and both must be done
+  before the head sees 24 V from anything but a current-limited supply.
+
+  The old advice was worse than merely wrong. It sent the reader to confirm
+  polarity from the scope trace taken during `diag 1` — and that capture is
+  taken in bring-up step B4, the one row of the table whose "Head power" column
+  reads **on**. So it proposed confirming the polarity only *after* the event
+  the check exists to precede. If both this polarity and the VH gate polarity
+  are inverted, the fault handler added in D31 switches the rail on into a
+  firing head; that pair is the single case where the safety handler becomes
+  the hazard.
 - **Strobe segments = 2** on both heads (two shift-register halves, 2×624 and
   2×336). From the family architecture. Only revisit if a print shows a seam at
   the halfway point or the flex carries more than two STB lines.

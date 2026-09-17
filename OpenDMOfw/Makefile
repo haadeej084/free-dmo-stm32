@@ -46,8 +46,14 @@ OBJ := $(patsubst %.c,$(BUILD)/%.o,$(SRC))
 # exact image it was measured on. Outside a git checkout this becomes "dev".
 BUILD_ID ?= $(shell git describe --always --dirty --abbrev=8 2>/dev/null || echo dev)
 
-# -Os: this is a 128KB-flash / 16KB-RAM target, code size matters.
-CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding \
+# The warning-free rule was a convention no job checked: CI ran `make` with
+# -Wall -Wextra and no -Werror, so a new warning went green. Both models build
+# clean with it, so enforcing it is free. Override with `make WERROR=` while
+# exploring.
+WERROR ?= -Werror
+
+# -Os: this is a 64KB-flash / 16KB-RAM target, code size matters.
+CFLAGS := $(MCUFLAGS) -Os -g3 -std=c11 -ffreestanding $(WERROR) \
   -ffunction-sections -fdata-sections \
   -Wall -Wextra -Wno-unused-parameter \
   -fno-common $(MODELDEF) $(INC) -DOPENDMO_BUILD='"$(BUILD_ID)"' $(CFLAGS_EXTRA)
@@ -87,6 +93,10 @@ flash: $(BUILD)/$(TARGET).bin
 USB_TEST_SRC = test/test_usb.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c
 E2E_TEST_SRC = test/test_e2e.c src/usb/usb_core.c src/usb/usb_desc.c src/usb/usb_printer.c src/printer/protocol.c
 THERMAL_TEST_SRC = test/test_thermal.c src/printer/thermal.c src/printer/head.c
+# motor.c had no host harness at all. Its behaviour is a SEQUENCE of GPIO
+# writes, so the harness records their order and asserts on it - a
+# final-state test cannot see a coil that is shorted only between two writes.
+MOTOR_TEST_SRC = test/test_motor.c src/printer/motor.c
 
 test:
 	python3 test/test_protocol_wire.py
@@ -94,21 +104,21 @@ test:
 	HOSTCC=$$(command -v cc || command -v gcc || true); \
 	if [ -z "$$HOSTCC" ]; then echo "skip native C tests (no host C compiler)"; exit 0; fi; \
 	for m in OP57 OP104; do \
-	  $$HOSTCC -Wall -Wextra -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DMODEL_$$m -Isrc -o /tmp/opendmo-test-$$m \
 	    test/test_protocol.c src/printer/protocol.c; \
 	  /tmp/opendmo-test-$$m; \
-	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-usbtest-$$m $(USB_TEST_SRC); \
 	  /tmp/opendmo-usbtest-$$m; \
-	  $$HOSTCC -Wall -Wextra -Wno-uninitialized -Wno-maybe-uninitialized -std=c11 \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 \
 	    -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -o /tmp/opendmo-e2etest-$$m $(E2E_TEST_SRC); \
 	  /tmp/opendmo-e2etest-$$m; \
-	  $$HOSTCC -Wall -Wextra -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
 	    -o /tmp/opendmo-thermaltest-$$m $(THERMAL_TEST_SRC) -lm; \
 	  /tmp/opendmo-thermaltest-$$m; \
-	  $$HOSTCC -Wall -Wextra -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc \
 	    -DHEAD_SAG_FULL_US=47 -o /tmp/opendmo-sagtest-$$m $(THERMAL_TEST_SRC) -lm; \
-	  /tmp/opendmo-sagtest-$$m; \
+	  /tmp/opendmo-sagtest-$$m; 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest 	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); 	  /tmp/opendmo-motortest-$$m; \
 	done
 
 # Worst-case stack: call graph + frame sizes from GCC, checked against the

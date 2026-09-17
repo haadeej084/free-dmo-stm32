@@ -66,7 +66,13 @@ static void pma_read(uint16_t off, uint8_t *dst, uint16_t n)
  * when we are actually in thread context (PRIMASK==0). */
 static inline uint32_t ep_crit_enter(void)
 {
-    uint32_t pm;
+    /* Initialised because the host test build has no `mrs`: mcu.h stubs __asm
+     * to (void)0 under OPENDMO_HOST_TEST, so without this the function read and
+     * returned an indeterminate value on every host USB and e2e run - undefined
+     * behaviour that ASan and UBSan both miss and that -Wuninitialized was the
+     * only thing to catch. On Arm the mrs overwrites it immediately, so the
+     * store is dead and the images are byte-identical either way. */
+    uint32_t pm = 0u;
     __asm volatile("mrs %0, primask" : "=r"(pm));
     if (pm == 0u) __asm volatile("cpsid i" ::: "memory");
     return pm;

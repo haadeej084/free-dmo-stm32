@@ -34,13 +34,16 @@ make clean MODEL=OP104
 Equivalent without `make`:
 
 ```sh
-./build.sh           # OP104 (default)
+./build.sh           # OP57 (default) -> the LabelWriter 550
 ./build.sh OP57      # 57 mm variant
 ./build.sh all       # both
 ```
 
 The build uses `--specs=nano.specs` (newlib-nano) and `-Os`; the memory budget is
-128 KB flash / 16 KB SRAM. `make size` shows the usage.
+**64 KB** flash / 16 KB SRAM — the linker script declares 64 K deliberately, so
+that an image built here also fits an STM32F072C8 if that is what the board
+actually carries (the one legible 550 marking is ambiguous, see below).
+`make size` shows the usage.
 
 Both drivers stamp a build identifier from `git describe --always --dirty
 --abbrev=8` into the image; `GS D 0x05` (`opsend.py diag 5`) reports it, so a
@@ -56,14 +59,17 @@ Connect an ST-Link (or compatible) to the SWD header.
 ```sh
 make flash
 # or explicitly:
-st-flash write build/OP104/opendmo-OP104.bin 0x08000000
+st-flash write build/OP57/opendmo-OP57.bin 0x08000000   # the 550 image
+# NOTE: these commands used to name the OP104 image. Nothing can run it:
+# `make flash` never produces it, and a genuine 5XL carries an STM32F407,
+# not the F072 this image is linked for.
 ```
 
 Alternative with OpenOCD:
 
 ```sh
 openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
-  -c "program build/OP104/opendmo-OP104.bin 0x08000000 verify reset exit"
+  -c "program build/OP57/opendmo-OP57.bin 0x08000000 verify reset exit"
 ```
 
 > **RDP Level 2 on stock printers:** SWD and the system bootloader are off.
@@ -151,12 +157,12 @@ make test
 ```
 
 - `test/test_protocol.c` — the real parser with mocked hardware, both models
-  (139 checks / 60 scenarios). This is the regression test: it links and runs
+  (159 checks / 64 scenarios). This is the regression test: it links and runs
   `src/printer/protocol.c`. Needs a host `cc`/`gcc` on PATH.
 - `test/test_usb.c` — the real USB stack (`usb_core.c`, `usb_desc.c`,
   `usb_printer.c`) against a register-level model of the STM32F0 USB
   peripheral, with a scripted host: enumeration, descriptors, bulk transfers,
-  printer-class requests, HALT/STALL handling (102 checks per model).
+  printer-class requests, HALT/STALL handling (108 checks per model).
 - `test/test_e2e.c` — the USB stack, printer class and protocol parser together
   against the same peripheral model: a 120-line job pushed as 64-byte bulk
   packets with the main loop running only on NAK (the ring buffer fills and

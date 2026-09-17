@@ -40,7 +40,10 @@ Printhead 300DPI", via alldatasheet) documents the family architecture:
 - **Calibration curves:** Fig.3 maximum energy (SLT ms/line vs TON), Fig.4
   density vs energy (mJ/dot) — reference material for dwell/density tuning.
 
-**Confirmed:** `STB` is **active-low** (Low = heat on); VH = **24 V**.
+**Confirmed:** VH = **24 V**.
+**NOT confirmed:** `STB` polarity. `model.h` assumes active-low (Low = heat on),
+but the KF3002-chart reading that once justified it was withdrawn — see
+DECISIONS D28 and FIELDWORK measurement 6b. Treat it as an assumption.
 **Assumed:** DI1/DI2 clocked **in parallel**, each carrying half the dots
 (`MODEL_DI1_DOTS` / `MODEL_DI2_DOTS` in `model.h`). **Still verify on hardware:**
 the ROHM equivalence of the 550's 3C56-9638 marking (the marking itself is
@@ -99,7 +102,8 @@ thermistor divider R_p / direction (one 25 °C reading pins it).
   between labels, with the engine counting motor steps between holes (550
   reference p.7). So it is an emitter/detector pair, the detector may be analog,
   and the emitter may need its own drive pin — none of which `pins.h` models yet.
-- **Head interface:** STB **active-low**, DI1/DI2 assumed driven **in parallel**, NTC
+- **Head interface:** STB polarity **assumed** active-low (withdrawn as a fact,
+  DECISIONS D28 — FIELDWORK 6b), DI1/DI2 assumed driven **in parallel**, NTC
   **30 kΩ B3950** with sourced R(T) curve — in `head.c` / `thermal.c`.
 - **VH enable needs an external pull to OFF.** The MCU's GPIOs are floating
   inputs during and after reset, so whatever holds the load-switch gate in that
@@ -315,7 +319,7 @@ of those two pairs; `pins.h` currently assumes PB8/PB9.
 | Head DI1           | PA6           | GPIO out (shift data, half 1) | medium | same, DI1 line |
 | Head DI2           | PA7           | GPIO out (shift data, half 2) | medium | same, DI2 line. CLK/DI1/DI2 on one port is what the fast shift loop relies on — if you move one, set `HEAD_SHIFT_SAME_PORT` to 0 in `pins.h` |
 | Head LATCH         | PA4           | GPIO out, Low = THROUGH (sourced) | medium-high | Scope: pulse just before the heat pulses |
-| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; active-low) | medium     | Scope: wide pulse that sets the dwell |
+| Head STROBE 1      | PB0           | GPIO out (STB1, half 1; polarity ASSUMED active-low, FIELDWORK 6b) | medium | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
 | Head STROBE 3/4    | PB2 / PB3     | GPIO out (spare, wider heads) | low        | Only if the wide head has >2 heat lines |
 | Paper sensor       | PA0           | GPIO in / or ADC        | low        | Reflection/transmission sensor; may be analog rather than digital |

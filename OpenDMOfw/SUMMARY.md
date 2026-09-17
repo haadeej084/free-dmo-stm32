@@ -21,10 +21,10 @@ so stock D.MO Connect enumerates it unchanged and any physical roll prints. See
 | A4 | Head strobe for N segments via a pin array | OK |
 | A5 | Print-density command (genuine `ESC C` / `ESC e`) | OK |
 | A6 | IWDG watchdog (per-line kick) + LED fault patterns + unique serial from the MCU UID | OK |
-| A7 | Host unit test of the parser (mocked hardware) — compiled and run natively: 139 checks / 60 scenarios, both models | OK |
+| A7 | Host unit test of the parser (mocked hardware) — compiled and run natively: 159 checks / 64 scenarios, both models | OK |
 | B8 | Host sender `tools/opsend.py` (genuine D.mo protocol via libusb, PNG→raster) | OK |
-| C1 | USB stack host test against a register-level peripheral model — 102 checks per model | OK |
-| C2 | Real image in Renode: boot, SysTick, LED patterns, head bit stream + per-line cost, config EEPROM on both known parts | OK |
+| C1 | USB stack host test against a register-level peripheral model — 108 checks per model | OK |
+| C2 | Real image in Renode: boot, SysTick, LED patterns, head bit stream + per-line cost, config EEPROM on both known parts, and the fault safe state (four triggers: HardFault, NMI, an unused vector, and a fault before `SystemInit()`) | OK |
 | C3 | Worst-case stack (920 / 776 of 2048 bytes) and static analysis (GCC analyzer, cppcheck) | OK |
 | C4 | End-to-end host test: USB stack + parser, a full job through 64-byte packets with flow control — 29 checks per model | OK |
 | C5 | USB DFU entry (`GS D 0x09 'D' 'F' 'U'`): reflash over USB with `dfu-util` after the first SWD flash; request and hand-over checked in Renode | OK |
@@ -42,7 +42,13 @@ tag / DRM / authentication.
 - Identity: cloned genuine D.mo — VID `0x0922`, PID `0x002A` (5XL) / `0x0028` (550),
   `DYMO` manufacturer + per-model product strings.
 - Flash ~11.7 KB of the 64 KB the linker allows (fits the F072C8 and CB), RAM ~35 % of 16 KB.
-- Parser test: 139 checks pass for both models; sender byte-matched to the decompiled driver.
+- Parser test: 159 checks pass for both models; sender byte-matched to the decompiled driver.
+- Thermal/energy test: 28 checks per model, built TWICE — the second build arms
+  `HEAD_SAG_FULL_US` so the energy ceiling is exercised rather than asserted
+  against zero.
+- Motor test: 11 checks per model. It asserts the ORDER of the phase writes, not
+  the final pin state, because a coil shorted only between two writes is exactly
+  what a final-state test cannot see.
 - PC-side patcher: 27 offline checks on a synthetic assembly (no vendor DLL needed).
 
 ## Docs
@@ -53,7 +59,10 @@ tag / DRM / authentication.
 
 ## Remaining: hardware bring-up (cannot be done in software; needs a board)
 
-Narrowed to **seven** measurements — see `FIELDWORK.md` section 8. Everything
+Narrowed to **eight** measurements — see `FIELDWORK.md` section 8. The count was
+seven until DECISIONS D28 withdrew the strobe-polarity claim and put it back on
+the list as measurement 6b, paired with the VH gate polarity (measurement 5).
+Everything
 that could be settled from the datasheets has been: STB polarity, DI1/DI2
 topology, strobe-segment count and the EEPROM part are no longer open questions,
 the NTC curve and the divider lookup are tabulated so two readings finish the

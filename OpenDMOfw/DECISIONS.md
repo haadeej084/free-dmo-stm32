@@ -1297,3 +1297,65 @@ today: on ARMv6-M an IRQ is taken only with its `NVIC_ISER` bit set, and
 tree. Those vectors are reachable only through a corrupted NVIC or a remapped
 table. Giving them the safe handler is free insurance rather than the closing
 of a live hole — but the fault vectors it shares are not hypothetical at all.
+
+## D32 — The config record is checksummed, and an unverifiable one fails safe
+
+`try_magic()` accepted any record whose first four bytes read `ODM1`, then
+validated exactly one field (`density`). A four-byte magic is a **presence
+marker, not an integrity check** — and the record it was guarding holds
+`OP_FLAG_VH_INHIBIT`, which `store.h` describes as "the one thing in this
+firmware that protects an irreplaceable part".
+
+Two failure modes, both reproduced on the real image rather than argued:
+
+**A single flipped bit.** Flip bit 1 of the flags byte and the interlock is
+disarmed silently — accepted, no error, no diagnostic. Nothing in the record
+could have detected it.
+
+**A torn write.** `sizeof(op_config_t)` spans several page writes on the
+1-byte/8-byte-page part (Rev E). `magic` sits in the FIRST page and `flags` in
+the LAST. Lose power in between and the record reads back as a valid,
+half-old/half-new mixture. The mirror case is the one that matters: an operator
+arms the interlock with `GS D 0x08`, the reply confirms it, power is lost before
+the last page lands, and the printer reboots with a valid magic and the
+interlock **cleared**.
+
+So the record gains a byte:
+
+* an 8-bit sum over everything but itself. Deliberately not a CRC — this guards
+  against a flipped bit and a torn page write, not against an adversary, and the
+  whole image has to fit 64 KB. It catches every single-bit error and every torn
+  write that changes the byte total.
+* `CFG_MAGIC` bumps to `ODM2`. An `ODM1` record is one byte shorter and has no
+  sum, so reading it under the new layout would take whatever follows it in the
+  EEPROM as the checksum. A printer flashed with this firmware rewrites its
+  defaults once. Silently accepting the old layout is how a corrupt record gets
+  accepted a second time.
+* `try_magic()` now sanitises every field that carries **policy**, not just
+  density: the SKU is always NUL-terminated (it is handed to string code), the
+  label count is bounded, and `flags` is masked to the two bits that exist. A
+  record can verify and still hold values this firmware never writes — an older
+  layout, a bench tool, a partially erased part — and six undefined flag bits
+  going live is six behaviours nobody designed.
+
+### The part that is a policy decision rather than a bug fix
+
+An EEPROM that answers but holds a record we cannot verify is **not** the same
+as a bare board, and the old code could not tell them apart: both fell through
+to the compiled defaults. They now differ. A record that fails its checksum sets
+`OP_FLAG_VH_INHIBIT` in the defaults that replace it, so the printer comes up
+with the heat rail locked out and waits for the operator to clear it
+deliberately.
+
+That is deliberately inconvenient. The reasoning is asymmetric: we cannot
+distinguish a cosmic-ray bit flip from a write torn mid-`GS D 0x08`, one of
+those two means the operator believed the interlock was armed, and **a refusal
+to heat is recoverable while a print head is not**.
+
+### The test
+
+`test/renode/eeprom.py` gains a scenario that preloads a record with a valid
+magic and a deliberately wrong sum, on the real image. It asserts three things:
+the record is not accepted, the heat rail is locked out, and fresh defaults are
+re-persisted *with* a valid checksum. Removing the one `cfg_sum()` comparison in
+`try_magic()` fails all three.

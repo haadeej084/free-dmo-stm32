@@ -6,7 +6,7 @@
 > complete and verified** (both models build clean; every software-testable path is
 > tested), but the firmware **has not yet been run on a real board**. Before it prints,
 > someone with a genuine LabelWriter 550 must do the **hardware fieldwork** in
-> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **seven** items: GPIO routing,
+> [`FIELDWORK.md`](FIELDWORK.md) — which is down to **eight** items: GPIO routing,
 > the motor drive train, the thermistor divider resistor, the top-of-form sensor,
 > the VH enable pin, the half-2 dot order, and host acceptance.
 >
@@ -110,7 +110,10 @@ pc-patch/             PC-side DYMO.LabelAPI.dll patcher (.NET tray app, dmo.ico 
 test/test_protocol.c  host unit test of the parser (mocked hardware)
 test/test_usb.c       host unit test of the USB stack (register-level peripheral model)
 test/test_e2e.c       USB stack + parser end to end (a full job through 64-byte packets)
-test/renode/          the real image in the Renode emulator (boot, LED, head shift, EEPROM, DFU)
+test/test_thermal.c   thermistor curve, dwell law and the energy ceiling
+test/test_motor.c     the feed stepper: phase ORDER, break-before-make, idle release
+test/renode/          the real image in the Renode emulator (boot, LED, head shift,
+                      EEPROM, DFU, and the fault safe state)
 tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 ```
 

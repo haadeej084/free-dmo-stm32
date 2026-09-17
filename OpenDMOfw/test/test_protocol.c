@@ -544,6 +544,29 @@ int main(void){
     protocol_self_test();
     CHECK(g_lines == 400);                         /* SELFTEST_LINES */
     CHECK(g_feed >= 400);                          /* stepped per line + tear feed */
+    /* ...and exactly as far as a host job that printed the same number of
+     * lines. This used to be the loose bound above ONLY, which let a 400-line
+     * over-feed sail through: the self test moved the paper 400 lines with the
+     * pattern and was then charged a FULL label pitch on top, because it never
+     * told feed_next_label() what it had already printed. 33.9 mm too far, once
+     * per press, cumulative, with no top-of-form sensing to take it back. */
+    {
+        int selftest_feed = g_feed;
+        static unsigned char hj[32 + 400 * 2];
+        int k = 0;
+        reset_state();
+        hj[k++] = 0x1B; hj[k++] = 's'; hj[k++] = 1; hj[k++] = 0; hj[k++] = 0; hj[k++] = 0;
+        esc_d(&hj[k], 400, 16); k += 12;               /* 400 lines x 2 bytes */
+        for (int i = 0; i < 400 * 2; i++) hj[k++] = 0x00;
+        hj[k++] = 0x1B; hj[k++] = 'E';                 /* same tear feed */
+        for (int off = 0; off < k; off += 64) {
+            int chunk = (k - off < 64) ? (k - off) : 64;
+            protocol_feed(&hj[off], (unsigned)chunk);
+            protocol_task();
+        }
+        CHECK(g_lines == 400);
+        CHECK(g_feed == selftest_feed);
+    }
 
     /* 41) Neither button action may interrupt a running host job. */
     reset_state();
@@ -1069,6 +1092,22 @@ int main(void){
         unsigned char b2[] = { 0x1D, 0x1B, 'A', 0x00 };
         protocol_feed(b2, sizeof b2); protocol_task();
         CHECK(g_reply_len == -1);
+    }
+
+    /* 64) Status byte 8 is PrintHeadStatus, and it must follow the thermal
+     *     gate. DYMO's own 550 Linux driver reads exactly this byte -
+     *     `phStatus = status[8] & 3; if (phStatus == 1) -> jsHeadOverheat` -
+     *     and then pauses the job and reprints the page. It was hardwired to 0,
+     *     so a host could never see an overheat while emit_line() was waiting
+     *     up to a second per dot line for the head to cool. */
+    {
+        reset_state();
+        g_hot_polls = -1;                       /* over the limit, indefinitely */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 1);   /* overheated */
+        reset_state();                          /* g_hot_polls back to 0 = cool */
+        protocol_feed(q, sizeof q); protocol_task();
+        CHECK(g_reply_len == 32 && (g_reply[8] & 3) == 0);   /* ok */
     }
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL TESTS PASSED\n", fails);

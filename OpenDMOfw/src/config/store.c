@@ -24,7 +24,13 @@
 #include "../system.h"
 #include "../pins.h"
 
-#define CFG_MAGIC   0x4F444D31u      /* "ODM1" — shared by OP57 and OP104 */
+/* "ODM2". Bumped from "ODM1" when the record gained its checksum byte: an
+ * ODM1 record is one byte shorter and has no sum, so reading it as an ODM2
+ * record would take whatever follows it in the EEPROM as the checksum. A
+ * printer flashed with this firmware re-writes its defaults once and carries
+ * on; the alternative, silently accepting the old layout, is how a "corrupt"
+ * record gets accepted for the second time. */
+#define CFG_MAGIC   0x4F444D32u      /* "ODM2" — shared by OP57 and OP104 */
 #define I2C_TIMINGR 0x10420F13u      /* ~100 kHz at PCLK 48 MHz (calibrate) */
 /* 2-byte (16 KB) config sits past the first 256 B so a stock image's low
  * EEPROM is left alone; 1-byte parts only have 256 B so they use offset 0. */
@@ -41,6 +47,25 @@ static uint16_t cfg_off(void)     { return (s_addrw == 2) ? EEPROM_OFF_2B  : EEP
 static uint16_t scratch_off(void) { return (s_addrw == 2) ? SCRATCH_OFF_2B : SCRATCH_OFF_1B; }
 
 static op_config_t s_cfg;
+
+/* Plain 8-bit sum over everything but the sum byte itself. Deliberately not a
+ * CRC: this guards against a flipped bit and a torn page write, not against an
+ * adversary, and a sum costs a handful of bytes of flash on a part where the
+ * whole image has to fit in 64 KB. It catches every single-bit error and every
+ * torn write that changes the byte total, which is every torn write that
+ * changes anything except a byte swap. */
+static uint8_t cfg_sum(const op_config_t *c)
+{
+    const uint8_t *p = (const uint8_t *)c;
+    uint8_t s = 0;
+    for (unsigned i = 0; i < sizeof(op_config_t) - 1u; i++) s = (uint8_t)(s + p[i]);
+    return s;
+}
+
+/* Set when a record was found whose magic matched but whose sum did not - i.e.
+ * an EEPROM that answers and holds something corrupt, as opposed to no EEPROM
+ * at all. The two call for different defaults; see store_load(). */
+static int s_saw_corrupt;
 
 static void defaults(void)
 {
@@ -165,11 +190,28 @@ static int try_magic(uint8_t addrw, uint16_t off)
     uint8_t old = s_addrw;
     s_addrw = addrw;
     op_config_t tmp;
-    int ok = (eeprom_read(off, (uint8_t*)&tmp, sizeof(tmp)) == 0 &&
-              tmp.magic == CFG_MAGIC);
-    if (ok) {
-        s_cfg = tmp;
-        if (s_cfg.density > 16) s_cfg.density = 8;
+    int ok = 0;
+    if (eeprom_read(off, (uint8_t*)&tmp, sizeof(tmp)) == 0 &&
+        tmp.magic == CFG_MAGIC) {
+        if (cfg_sum(&tmp) != tmp.sum) {
+            /* There IS a record here and it does not verify. Remember that:
+             * store_load() must not treat this the same as a blank part. */
+            s_saw_corrupt = 1;
+        } else {
+            /* Sanitise every field that carries policy, not just density. A
+             * record can verify and still hold values this firmware never
+             * writes - an older layout, a bench tool, a partially erased part.
+             * The sku terminator matters because s_cfg.sku is handed to string
+             * code; the flags mask matters because six undefined bits going
+             * live is six behaviours nobody designed. */
+            tmp.sku[OP_SKU_MAX - 1] = 0;
+            if (tmp.density > 16) tmp.density = 8;
+            if (tmp.label_count > (uint16_t)(MODEL_DEFAULT_COUNT * 10u))
+                tmp.label_count = MODEL_DEFAULT_COUNT;
+            tmp.flags &= (uint8_t)(OP_FLAG_PAPER_FORCE | OP_FLAG_VH_INHIBIT);
+            s_cfg = tmp;
+            ok = 1;
+        }
     }
     s_addrw = old;
     return ok;
@@ -177,12 +219,16 @@ static int try_magic(uint8_t addrw, uint16_t off)
 
 static int persist_and_verify(void)
 {
+    s_cfg.sum = cfg_sum(&s_cfg);
     if (eeprom_write(cfg_off(), (const uint8_t*)&s_cfg, sizeof(op_config_t)) != 0)
         return 0;
     op_config_t tmp;
     if (eeprom_read(cfg_off(), (uint8_t*)&tmp, sizeof(tmp)) != 0)
         return 0;
-    return tmp.magic == CFG_MAGIC;
+    /* Verify the whole record, not just its first four bytes: the read-back is
+     * the only chance to notice a part that acknowledged a write it did not
+     * complete. */
+    return tmp.magic == CFG_MAGIC && cfg_sum(&tmp) == tmp.sum;
 }
 
 void store_load(void)
@@ -194,6 +240,14 @@ void store_load(void)
     if (try_magic(1, EEPROM_OFF_1B)) { s_addrw = 1; return; }
 
     defaults();
+    /* An EEPROM that answers but holds a record we cannot verify is NOT the same
+     * as a bare board. We cannot tell a flipped bit from a write torn by a power
+     * loss, and the byte that decides whether the head may be heated is inside
+     * that record - so this is the one place where the compiled defaults are not
+     * good enough. Lock the heat rail out and let the operator clear it
+     * deliberately (GS D 0x08) once they know what happened. A refusal to heat
+     * is recoverable; a head is not. */
+    if (s_saw_corrupt) s_cfg.flags |= OP_FLAG_VH_INHIBIT;
     s_addrw = 2;
     if (persist_and_verify()) return;
     s_addrw = 1;
@@ -204,6 +258,7 @@ void store_load(void)
 
 int store_save(void)
 {
+    s_cfg.sum = cfg_sum(&s_cfg);
     if (eeprom_write(cfg_off(), (const uint8_t*)&s_cfg, sizeof(op_config_t)) != 0)
         return -1;
     return 0;

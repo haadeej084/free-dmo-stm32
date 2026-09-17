@@ -84,10 +84,27 @@ static uint8_t s_ph;
 static void step_pulse(void)
 {
     s_ph = (s_ph + 1) & 3;
-    gpio_set(PIN_MOTOR_A1, k_phase[s_ph][0]);
-    gpio_set(PIN_MOTOR_A2, k_phase[s_ph][1]);
-    gpio_set(PIN_MOTOR_B1, k_phase[s_ph][2]);
-    gpio_set(PIN_MOTOR_B2, k_phase[s_ph][3]);
+    const uint8_t *p = k_phase[s_ph];
+    /* Break before make. The four pins used to be written unconditionally in
+     * A1, A2, B1, B2 order, and two of the four transitions in the sequence put
+     * a coil's RISING pin before its FALLING one - so both ends of that winding
+     * were driven high for the gap between two gpio_set() calls. Measured on the
+     * -Os Cortex-M0 build that gap is about 0.7 us (gpio_set does not inline),
+     * and it happened on every second step.
+     *
+     * On an integrated dual H-bridge that is a brake pulse; on the discrete
+     * four-transistor bridge D17 also allows, it is rail-to-rail
+     * cross-conduction; on a unipolar winding it is both halves fighting.
+     * Dropping first costs four predicated writes inside an 800 us step and
+     * removes the question entirely. */
+    if (!p[0]) gpio_set(PIN_MOTOR_A1, 0);
+    if (!p[1]) gpio_set(PIN_MOTOR_A2, 0);
+    if (!p[2]) gpio_set(PIN_MOTOR_B1, 0);
+    if (!p[3]) gpio_set(PIN_MOTOR_B2, 0);
+    if (p[0])  gpio_set(PIN_MOTOR_A1, 1);
+    if (p[1])  gpio_set(PIN_MOTOR_A2, 1);
+    if (p[2])  gpio_set(PIN_MOTOR_B1, 1);
+    if (p[3])  gpio_set(PIN_MOTOR_B2, 1);
 }
 #else
 static void step_pulse(void)

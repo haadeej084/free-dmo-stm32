@@ -173,7 +173,7 @@ make test
   **not** execute the C; keep it in sync when `protocol.c` changes.
 - `test/test_thermal.c` — `thermal.c` + `head.c`: the NTC curve, the dwell law
   and the energy ceiling, built twice (the second build arms `HEAD_SAG_FULL_US`;
-  44 and 46 checks per model).
+  51 and 53 checks per model).
 - `test/test_motor.c` — `motor.c`: phase ORDER, break-before-make, exactly one
   step per line, idle release (12 checks per model).
 - `test/test_system.c` — the real `sys_pin_toggle()` and its hot-pin guard

@@ -25,10 +25,11 @@ the per-line time budget. Section 4 lists what is settled so you do not measure
 >
 > What is left below is the bench visit, and nothing more.
 
-it again. What is left is **ten measurements** — seven, plus the strobe
+it again. What is left is **nine measurements** — six, plus the strobe
 polarity (6b), which DECISIONS D28 put back on the list when it withdrew the
-datasheet reading, plus the flex pin count (5b) and the head's Po (8) that
-DECISIONS D35/D36 added. Section 8 opens with the **one capture** of the 450
+datasheet reading, plus the flex pin count (5b) and the head's Po (7) that
+DECISIONS D35/D36 added. Host acceptance is not a measurement and has moved
+to bring-up step C. Section 8 opens with the **one capture** of the 450
 board that answers six of them at once. Plus a five-minute contribution
 in section 1b that needs no screwdriver at all.
 
@@ -288,14 +289,31 @@ out. What the 450 gives you is the list above: which nets exist, which way they 
 idle at, and what fires when. That turns "sweep 48 pads against everything" into "find these
 seventeen, and you already know what each one should look like on a scope".
 
-### 3.5 Do this FIRST: eight of the nineteen need no meter
+### 3.5 Do this FIRST: the nets that need no meter
 
-*(keep the existing text — `tools/discover_pins.py`, `GS D 0x06` diffing for the inputs,
-`GS D 0x07` for the outputs, `store.c`'s boot ladder for the I2C pair — with one correction.
-With the STEP/DIR reading above, "the four motor phases announce themselves by twitching" is
-wrong: a single `GS D 0x07` toggle of STEP is one microstep, which you will not see or hear.
-Toggle the motion gate or the boost line instead and listen for holding torque appearing, or
-pulse the candidate STEP pin a few hundred times.)*
+Once a blank F072 with this image sits on the 550 board, the printer can find part of its own
+pin map, and `tools/discover_pins.py` drives it:
+
+* **Inputs, by diffing `GS D 0x06`.** One reply carries all ten ADC channels and the input
+  register of ports A, B and C. Take a scan, change one thing in the world, scan again; the
+  value that moved is the pin. Block and unblock the photocell (analog now, D42 - look at the
+  ADC columns, not the port bits), press the button, warm the head with a hand. That is the
+  **paper sensor, the button and the thermistor**, and with the thermistor pad known,
+  `tools/calib_thermistor.py` finishes measurement 3 from two readings.
+* **Outputs, by toggling `GS D 0x07`.** It drives a candidate pin for a millisecond at a time
+  and restores it, and it refuses the VH gate, every fitted strobe and the USB/SWD pins, so a
+  sweep cannot cost a head or the session. The **LED** announces itself. The **motor lines**
+  do too, with one correction now that the interface is known to be STEP/DIR (3.2): a single
+  toggle of STEP is one microstep, which you will neither see nor hear. Toggle the gate/enable
+  line and listen for holding torque appearing, or pulse the STEP candidate a few hundred
+  times and watch the platen creep.
+* **The EEPROM pair** is fixed at PB8/PB9 in `pins.h` (AF1, D38); `GS D 0x03` says whether the
+  part answers there. If it does not, PB6/PB7 is the only other pair the F072 offers.
+
+What this cannot find, and why: the head's logic lines (CLK, DATA, LATCH, STROBE) and the VH
+gate. The head has no serial output to read back, and the only observable effect of those
+pins involves heat. **Those stay on the meter - or fall out of the 450 capture in section 8,
+item 0.** Everything else above is a keyboard job.
 
 ## 4. What is ALREADY established (don't redo these)
 
@@ -366,7 +384,7 @@ short list of things that are already pinned down, so you can skip them.
 > comes from the `ESC A` status only — bay status byte 10 (8 = OK, 10 =
 > counterfeit), the 12-byte SKU and the label count — and the SKU must be in
 > Connect's catalog for the install's region, or the roll shows as empty. The
-> `ESC V` version strings remain our own values (D12). See measurement 7.
+> `ESC V` version strings remain our own values (D12). See bring-up step C.
 
 ### What the silicon already rules out
 
@@ -499,6 +517,18 @@ The test pattern is designed to expose exactly the failures you are hunting: a
 border that is cut off on one side means the dot offset is wrong, a mirrored
 right half means measurement 6, and diagonals that come out as stairsteps of
 uneven height mean measurement 2.
+
+### Host acceptance — *the actual goal, once the head prints*
+With a plausible SKU configured, does **D.MO Connect** show a valid roll and
+print end to end?
+**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
+(550), then drive it from D.MO Connect.
+**If the roll shows as empty/JOKER:** Connect decides that from the status
+struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
+`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
+Connect's catalog for your region (an EU install hides US-only SKUs as
+"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
+**Report:** what Connect displayed, before and after the patch.
 
 ---
 
@@ -653,7 +683,7 @@ no command sequence in the protocol can heat the head at all.
 
 ## 8. Measurements, in the order they pay off
 
-Ten items (1–8, with 5b and 6b), preceded by the one capture that replaces most
+Nine items (1–7, with 5b and 6b), preceded by the one capture that replaces most
 of them. Everything else has been resolved in section 4 — this is the
 irreducible list that genuinely needs the board in front of you.
 
@@ -681,7 +711,7 @@ measurement on this list:**
 | **5b, strobe pins** | Count the strobe pins that ever move. If one, `HEAD_STROBE_SEGMENTS` must become 1 and the energy ceiling be re-derived. |
 | **6b, strobe polarity** | Read the idle level and the pulse direction directly. No current-limited creeping up on it. |
 | **5, VH gate** | Watch VH come up and go down, and when relative to the strobe. |
-| **8, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
+| **7, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
 | **Head signal order** | Which flex pin is CLK, which is DI, which is LAT — by watching, not by buzzing. |
 | **The real dwell** | The strobe pulse width at a known head temperature, to compare against D30's 374–448 µs. |
 
@@ -802,8 +832,9 @@ board's divider.
 **Step 1 — two readings.** `diag 4` at room temperature, then again after warming
 the head gently (hairdryer on low, ~20 s). Note the room temperature.
 
-**Step 2 — direction.** Raw went **up** when warm ⇒ `THERMAL_HOTTER_IS_HIGHER 1`
-(NTC to VDD, `R_p` to GND). Raw went **down** ⇒ set it to `0`.
+**Step 2 — direction.** Raw went **down** when warm ⇒ `THERMAL_HOTTER_IS_HIGHER 0`
+(`R_p` to VDD, NTC to GND) - the 450 board's topology and the shipped default
+(D41). Raw went **up** ⇒ set it to `1`.
 
 **Step 3 — pick the column your 25 °C reading matches and copy the two
 thresholds.** 12-bit ADC, rounded. Enter the pull-down numbers either way —
@@ -811,26 +842,29 @@ thresholds.** 12-bit ADC, rounded. Enter the pull-down numbers either way —
 
 *Pull-down (`THERMAL_HOTTER_IS_HIGHER 1`)*
 
-| | R_p = 10 k | 20 k | 30 k | 47 k | 100 k |
-|---|---|---|---|---|---|
-| raw @ 25 °C (match this) | 1024 | **1638** | 2047 | 2500 | 3150 |
-| **`THERMAL_COLD_RAW`** (25 °C) | 1024 | **1638** | 2047 | 2500 | 3150 |
-| **`THERMAL_RESUME_RAW`** (56 °C) | 2200 | **2862** | 3181 | 3461 | 3770 |
-| **`THERMAL_LIMIT_RAW`** (70 °C) | 2680 | **3240** | 3482 | 3681 | 3890 |
+| | R_p = 10 k | 20 k | **25.75 k (450)** | 30 k | 47 k | 100 k |
+|---|---|---|---|---|---|---|
+| raw @ 25 °C (match this) | 1024 | 1638 | **1891** | 2047 | 2500 | 3150 |
+| **`THERMAL_COLD_RAW`** (25 °C) | 1024 | 1638 | **1891** | 2047 | 2500 | 3150 |
+| **`THERMAL_RESUME_RAW`** (56 °C) | 2200 | 2862 | **3068** | 3181 | 3461 | 3770 |
+| **`THERMAL_LIMIT_RAW`** (70 °C) | 2680 | 3240 | **3398** | 3482 | 3681 | 3890 |
 
 *Pull-up (`THERMAL_HOTTER_IS_HIGHER 0`) — for matching your 25 °C reading only*
 
-| | R_p = 10 k | 20 k | 30 k | 47 k | 100 k |
-|---|---|---|---|---|---|
-| raw @ 25 °C | 3071 | 2457 | 2048 | 1595 | 945 |
+| | R_p = 10 k | 20 k | **25.75 k (450)** | 30 k | 47 k | 100 k |
+|---|---|---|---|---|---|---|
+| raw @ 25 °C | 3071 | 2457 | **2204** | 2048 | 1595 | 945 |
 
-The shipped defaults are the **20 k pull-down** column (bold). If your reading
-matches a different column, change three numbers in `thermal.c` and you are done.
+The shipped defaults are the **25.75 k pull-up** column (bold): the single
+pull-up that reproduces the 450 firmware's own 176 / 255 thresholds at 70 / 56 °C
+(D30, D41). If your reading matches a different column, change three numbers in
+`thermal.c` and you are done; `tools/gen_thermal_table.py` regenerates the dwell
+table for any other `R_p`.
 
 **Report:** room temperature and both raw readings. That alone lets someone else
 finish this without the board.
 
-### 4. Top-of-form photocell — *what it is, is known; the wiring is not*
+### 4. Top-of-form photocell — *analog, as the 450 reads it; the pad and the direction are not known*
 Not a plain "paper present" switch. The 550 manual (p.7) says: "An infrared LED
 photocell detects the top-of-form sense hole that is located between labels. The
 absolute positions of the label and the tear bar are calculated based upon the
@@ -838,18 +872,22 @@ reading of an infrared LED photocell sensor." So it is an **emitter + detector
 pair** reading the gap hole, and the genuine firmware counts motor steps between
 holes to track position.
 
-Two consequences for us:
-- The detector may be **analog**, not a logic level. If so it belongs on an ADC
-  pin (PA0–PA7, PB0, PB1 are the only candidates) with a threshold, not on a
-  GPIO read.
-- The **emitter may need driving**. `pins.h` has no pin for it. If the LED is not
-  simply tied to 3V3 through a resistor, find the pin that gates it and add it.
+The genuine 450 firmware settles what kind of signal it is: **analog**, squared
+up in software with a Schmitt trigger at 294 / 320 counts of 1023 (section 3.1,
+row 7). The firmware now reads it the same way (D42): ADC on PA0 with those two
+thresholds scaled to 12 bits. What is left to find:
+- **The pad.** PA0 is assumed; the ADC candidates are PA0–PA7, PB0, PB1. `GS D
+  0x06` with and without stock over the sensor shows which channel moves.
+- **The direction.** `PAPER_ADC_HIGH_IS_ABSENT` assumes more light (the gap
+  hole, or no stock) reads HIGHER. If the channel goes the other way, flip it.
+- **The emitter.** It may need a drive pin; `pins.h` has none. If the IR LED is
+  not simply tied to 3V3 through a resistor, find the pin that gates it.
 
-**How:** `diag 4` with and without stock in the path, and again with a label gap
-over the sensor; watch `paper_present`. If it never changes, measure the pin
-voltage in each state.
-**Patch:** `PIN_PAPER_SENSE` / `PAPER_PRESENT_LEVEL` in `pins.h`, or move it to
-the ADC. By default this does **not** gate printing (`OP_FLAG_PAPER_FORCE`,
+**How:** `diag 6` (the scan) with stock, without, and with a label gap over the
+sensor; the channel that moves, and which way, answers pad and direction in one
+go. `diag 4` shows the squared-up result.
+**Patch:** `PAPER_ADC_CH` / `PAPER_ADC_HIGH_IS_ABSENT` in `pins.h`; the two
+thresholds only if the 550's photocell sits at a very different level. By default this does **not** gate printing (`OP_FLAG_PAPER_FORCE`,
 DECISIONS D14) — it only drives the LED — so a wrong result here cannot stop you
 printing.
 
@@ -920,7 +958,13 @@ register split, change those two numbers; `head.c` handles unequal halves.
 **How:** print `opsend.py testpattern`. If the right half of the pattern is
 mirrored, reverse the DI2 index in `head_print_line()`.
 
-### 6b. Strobe polarity — *do this before the first 24 V test*
+### 6b. Strobe polarity — *falls out of the 450 capture; bench it only without one*
+The 450 firmware drives its strobe active-LOW, idle high (3.1, row 4), on a
+mechanism a 450 board prints on correctly, so `MODEL_STB_ACTIVE_LEVEL 0` is
+corroborated rather than guessed. If you have the capture from item 0 the idle
+level and pulse direction are in it and this section is done. The procedure
+below is the fallback for a bench with no logic analyser.
+
 `model.h`'s `MODEL_STB_ACTIVE_LEVEL` says a LOW level fires the heat drivers.
 That is an assumption: the published KF3002 timing charts draw the strobe
 idling low and pulsing high, and other variants of the same family name the pin
@@ -939,19 +983,7 @@ the kind of thing that is cheap to measure and expensive to guess.
 **Pair this with measurement 5** — see the note there. The fault-safe handler's
 guarantee rests on these two polarities together, not on either one alone.
 
-### 7. Host acceptance — *the actual goal*
-With a plausible SKU configured, does **D.MO Connect** show a valid roll and
-print end to end?
-**How:** `opsend.py config --count 220 --sku S0904980` (5XL) or `--sku 30387`
-(550), then drive it from D.MO Connect.
-**If the roll shows as empty/JOKER:** Connect decides that from the status
-struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
-`opsend.py status` shows `bay: 8` and the SKU you configured; the SKU exists in
-Connect's catalog for your region (an EU install hides US-only SKUs as
-"empty"); then try the `pc-patch/` tool, which fixes the catalog side.
-**Report:** what Connect displayed, before and after the patch.
-
-### 8. Po at the fitted head — *the one number that unlocks the energy model*
+### 7. Po at the fitted head — *the one number that unlocks the energy model*
 **This was missing from this list**, although `DECISIONS.md` D30 closes by naming
 it as the single measurement that unblocks everything about the head's energy:
 `HEAD_BASE_DWELL_US` (270) and `HEAD_MAX_DWELL_US` (410) are both derived from an
@@ -1046,7 +1078,7 @@ port becomes a decision rather than a guess.
 | Right half of the image mirrored | DI2 dot order | measurement 6 |
 | Print too light / too dark | dwell and density | `HEAD_BASE_DWELL_US`, `opsend.py density` |
 | Label starts in the wrong place | die-cut gap / tear offset | `LABEL_GAP_DOTS`, `TEAR_EXTRA_DOTS` in `protocol.c` |
-| Connect shows "empty"/JOKER roll | host-side validation | measurement 7, `pc-patch/` |
+| Connect shows "empty"/JOKER roll | host-side validation | bring-up step C, `pc-patch/` |
 
 ---
 
@@ -1091,8 +1123,7 @@ MEASUREMENTS (section 8)
   5b Flex: data pins brought out __ (1/2)   strobe pins brought out __ (1/2)
   6 Half-2 dot order (only if 5b = 2 data pins; mirrored in test print? yes/no):
   6b STB polarity: idle level __ ; fires on low / high
-  7 D.MO Connect: roll shown as ____ ; printed? ____ ; pc-patch needed? ____
-  8 Po: VH return current __ mA during a strobe of __ dots at VH __ V
+  7 Po: VH return current __ mA during a strobe of __ dots at VH __ V
       -> __ mA per dot (850 ohm grade = 28.2 mA, 1250 ohm = 19.2 mA; D35)
 
 CONFIRMATIONS (free, while you are already scoping - section 4)

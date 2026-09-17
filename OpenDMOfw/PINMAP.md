@@ -328,7 +328,7 @@ must still be traced to one of the two pairs; `pins.h` assumes PB8/PB9.
 | Head STROBE 1      | PB0           | GPIO out (STB1, half 1; polarity ASSUMED active-low, FIELDWORK 6b) | medium | Scope: wide pulse that sets the dwell |
 | Head STROBE 2      | PB1           | GPIO out (STB2, half 2) | medium-low | same |
 | Head STROBE 3/4    | PB2 / PB3     | GPIO out (spare, wider heads) | low        | Only if the wide head has >2 heat lines |
-| Paper sensor       | PA0           | GPIO in / or ADC        | low        | Reflection/transmission sensor; may be analog rather than digital |
+| Paper sensor       | PA0           | ADC_IN0, software Schmitt trigger (D42) | low | Analog, as the 450 firmware reads it; pad and direction assumed - `GS D 0x06` with/without stock shows both |
 | Head thermistor    | PA1           | ADC_IN1                 | medium     | Built into the head (TM pin, 30 kOhm B3950 NTC — sourced); measure the board's divider topology |
 | Motor STEP         | PB4           | GPIO / TIM3_CH1 (AF1)   | low        | Driver IC unidentified but must be 24 V-capable (MP6500-class chopper or a discrete bridge; not TB6612/DRV8834/DRV8846/A3906); count µsteps/line by scoping the phase pins during one ESC D line |
 | Motor DIR          | PB5           | GPIO                    | low        | same |

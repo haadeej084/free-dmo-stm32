@@ -91,8 +91,20 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
 #define PIN_MOTOR_B2        ((pin_t){GPIOB, 7})
 
 /* ---- Sensors ------------------------------------------------------------ */
-#define PIN_PAPER_SENSE     ((pin_t){GPIOA, 0})   /* digital: paper present */
-#define PAPER_PRESENT_LEVEL 0                       /* active-low               */
+/* Top-of-form photocell. The genuine 450 firmware reads it as an ANALOG
+ * channel with a software Schmitt trigger at 294 / 320 of 1023 (FIELDWORK 3.1
+ * row 7), so that is the default here too (D42): PA0 = ADC_IN0, thresholds
+ * scaled to 12 bits. ASSUMED: the pad, and that a HIGHER code means the gap
+ * hole / no stock (more light on the detector). Set PAPER_ADC_HIGH_IS_ABSENT
+ * to 0 if diag 4 / GS D 0x06 show it the other way round; set
+ * PAPER_SENSE_ANALOG to 0 for a board with a true logic-level sensor. */
+#define PAPER_SENSE_ANALOG        1
+#define PAPER_ADC_CH              0                 /* PA0 = ADC_IN0             */
+#define PAPER_ADC_ABSENT_ABOVE    1280              /* 450: 320/1023, 12-bit     */
+#define PAPER_ADC_PRESENT_BELOW   1176              /* 450: 294/1023, 12-bit     */
+#define PAPER_ADC_HIGH_IS_ABSENT  1                 /* assumption, see above     */
+#define PIN_PAPER_SENSE     ((pin_t){GPIOA, 0})   /* digital fallback: same pad */
+#define PAPER_PRESENT_LEVEL 0                       /* active-low (fallback)     */
 #define ADC_HEAD_TEMP_CH    1                       /* PA1 = ADC_IN1 (thermistor)*/
 
 /* Head heat supply enable (P-MOS / load switch on the 24 V VH rail).

@@ -79,12 +79,14 @@ const op_config_t *store_get(void) { return &g_cfg; }
 /* ---- the NTC model, mirroring tools/gen_thermal_table.py ----------------- */
 #define R25 30000.0
 #define BETA 3950.0
-#define R_P 20000.0
+#define R_P 25750.0                        /* the 450's pull-up, D41 */
 
+/* The RAW code as the pin reads it on the default (pull-up) board: R_P to
+ * VDD, NTC to GND, so a hotter head reads LOWER. thermal.c inverts it. */
 static uint16_t code_of(double t_c)
 {
     double r = R25 * exp(BETA * (1.0 / (t_c + 273.15) - 1.0 / 298.15));
-    double frac = R_P / (r + R_P);            /* NTC to VDD, R_P to GND */
+    double frac = r / (r + R_P);              /* R_P to VDD, NTC to GND */
     long c = lround(frac * 4095.0);
     if (c < 0) c = 0;
     if (c > 4095) c = 4095;
@@ -341,25 +343,28 @@ int main(void)
 
     /* An unbelievable reading is a THIRD state, not a cold head.
      *
-     * With the NTC to VDD and R_p to GND, an open circuit - a disconnected head
-     * flex, or a divider that was never populated, which is the default state of
-     * a bring-up board - parks the ADC node at 0 V. Code 0 sits at the far cold
-     * end of the curve, so the firmware used to answer "very cold": the D7 gate
-     * permanently satisfied AND the longest strobe it will ever ask for, at
-     * exactly the moment it knows least about the head. That is the dangerous
-     * failure direction getting the maximum energy.
+     * An open circuit - a disconnected head flex, or a divider that was never
+     * populated, which is the default state of a bring-up board - parks the
+     * ADC node at the pull resistor's rail. On the pull-up board that is the
+     * default since D41 the raw pin reads 4095, which normalises to 0: the far
+     * COLD end of the curve. So the firmware used to answer "very cold": the D7
+     * gate permanently satisfied AND the longest strobe it will ever ask for,
+     * at exactly the moment it knows least about the head. That is the
+     * dangerous failure direction getting the maximum energy.
      *
-     * The benign direction already worked: a short normalises to 4095, which the
-     * existing latch reads as over-temperature and refuses. Both are asserted
-     * here so the asymmetry is on the record. */
+     * The benign direction already worked: a shorted NTC pulls the pin to 0,
+     * which normalises to 4095, and the existing latch reads that as
+     * over-temperature and refuses. Both are asserted here so the asymmetry is
+     * on the record. */
     {
-        adc_constant(0); g_ms += 1000;
+        const uint16_t OPEN_RAW = 4095, SHORT_RAW = 0;   /* pull-up board */
+        adc_constant(OPEN_RAW); g_ms += 1000;
         CHECK(thermal_sensor_fault());
         CHECK(thermal_dwell_scale() == 160);      /* least energy, not 320 */
         CHECK(head_dwell_us(8, thermal_dwell_scale()) <
               head_dwell_us(8, 320));
 
-        adc_constant(4095); g_ms += 1000;
+        adc_constant(SHORT_RAW); g_ms += 1000;
         CHECK(thermal_sensor_fault());
         CHECK(!thermal_ok());                     /* short: already refused */
         CHECK(thermal_dwell_scale() == 160);
@@ -375,6 +380,33 @@ int main(void)
         adc_constant(code_of(-20.0)); g_ms += 1000;
         CHECK(!thermal_sensor_fault());           /* cold store, still believable */
     }
+
+    /* The 450's own thresholds, on its own divider, land where DYMO's manual
+     * says they do. This is the evidence D41 rests on, so it is pinned: the
+     * pull-up that gives 176 / 255 counts on 10 bits at 70 / 56 C is the one
+     * this test models, and the firmware's 12-bit codes for the same points
+     * follow from it. A retune of R_P that breaks this is a retune away from
+     * the vendor. */
+    CHECK(code_of(70.0) / 4 >= 172 && code_of(70.0) / 4 <= 180);   /* 450: 176 */
+    CHECK(code_of(56.0) / 4 >= 251 && code_of(56.0) / 4 <= 259);   /* 450: 255 */
+
+#if PAPER_SENSE_ANALOG
+    /* The top-of-form photocell is a Schmitt trigger, not a comparator: the
+     * state changes only past the FAR threshold, so a reading that sits between
+     * the two keeps whatever it was. Thresholds are the 450's (D42). */
+    {
+        adc_constant(0); g_ms += 1000;
+        CHECK(paper_present());                             /* dark: stock */
+        adc_constant(PAPER_ADC_ABSENT_ABOVE); g_ms += 1000;
+        CHECK(!paper_present());                            /* light: gap  */
+        adc_constant((PAPER_ADC_ABSENT_ABOVE + PAPER_ADC_PRESENT_BELOW) / 2); g_ms += 1000;
+        CHECK(!paper_present());                            /* in between: holds */
+        adc_constant(PAPER_ADC_PRESENT_BELOW); g_ms += 1000;
+        CHECK(paper_present());                             /* back below: stock */
+        adc_constant((PAPER_ADC_ABSENT_ABOVE + PAPER_ADC_PRESENT_BELOW) / 2); g_ms += 1000;
+        CHECK(paper_present());                             /* in between: holds */
+    }
+#endif
 
     printf(fails ? "\n%d of %d THERMAL check(s) FAILED\n" : "\nALL %d THERMAL CHECKS PASSED\n",
            fails ? fails : checks, checks);

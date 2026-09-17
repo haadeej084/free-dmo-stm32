@@ -713,7 +713,7 @@ static void diagnose(uint8_t sub)
         r[2] = (uint8_t)(MODEL_PID & 0xFF);   /* model id (PID low byte) */
         r[3] = (uint8_t)(traw >> 8); r[4] = (uint8_t)(traw & 0xFF);      /* thermistor raw (BE) */
         r[5] = thermal_ok() ? 1 : 0;
-        r[6] = (gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL) ? 1 : 0;
+        r[6] = paper_present() ? 1 : 0;
         if (gpio_get(PIN_BUTTON) == BUTTON_PRESSED_LEVEL) r[6] |= 2;
         r[7] = s_density_pct;
         r[8] = c->flags;
@@ -837,7 +837,7 @@ void protocol_task(void)
      * do we track the real paper sensor for the status byte. The LED still reads
      * the sensor directly (main.c) either way. */
     if (!(store_get()->flags & OP_FLAG_PAPER_FORCE))
-        usbp_set_paper_present(gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
+        usbp_set_paper_present(paper_present());
 
     int ci;
     protocol_reset_poll();

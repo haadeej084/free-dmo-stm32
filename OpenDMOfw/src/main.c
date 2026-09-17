@@ -24,8 +24,10 @@ static void io_init(void)
     gpio_set(PIN_LED, 0);
     gpio_mode(PIN_BUTTON, GPIO_IN);
     gpio_pull(PIN_BUTTON, 1);            /* pull-up: button pulls to ground */
+#if !PAPER_SENSE_ANALOG
     gpio_mode(PIN_PAPER_SENSE, GPIO_IN);
     gpio_pull(PIN_PAPER_SENSE, 1);
+#endif                                   /* analog: thermal_init() owns the pad */
 }
 
 /* LED status: on = configured/ready; slow blink = unconfigured;
@@ -53,7 +55,7 @@ static void io_init(void)
 static void led_update(void)
 {
     uint32_t now = millis();
-    int paper = (gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL);
+    int paper = paper_present();
     int locked = (store_get()->flags & OP_FLAG_VH_INHIBIT) != 0;
     if (!thermal_ok() || locked) {       /* cannot print: 5 Hz */
         gpio_set(PIN_LED, (int)((now / 100) & 1));

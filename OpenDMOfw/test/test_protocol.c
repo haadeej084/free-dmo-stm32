@@ -104,6 +104,7 @@ int thermal_ok(void){
  * a separate axis from "too hot": see thermal.c. */
 static int g_sensor_fault;
 int thermal_sensor_fault(void){ return g_sensor_fault; }
+int paper_present(void){ return 1; }
 unsigned short thermal_dwell_scale(void){ return 256; }
 void store_init(void){}
 const op_config_t *store_get(void){ return &g_cfg; }

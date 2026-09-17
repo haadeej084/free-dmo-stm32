@@ -57,6 +57,7 @@ void thermal_init(void) {}
 uint16_t thermal_read_raw(void) { return 1638; }
 int thermal_ok(void) { return 1; }
 int thermal_sensor_fault(void){ return 0; }   /* a believable sensor */
+int paper_present(void) { return 1; }
 uint16_t thermal_dwell_scale(void) { return 256; }
 void thermal_scan_adc(uint16_t *out) { for (int i = 0; i < 10; i++) out[i] = 0; }
 void store_init(void) {}

@@ -16,4 +16,9 @@ uint16_t thermal_dwell_scale(void);
  * put straight back. This is how the GS D scan lets an operator FIND the
  * thermistor (warm the head, diff two scans) instead of tracing it. */
 void thermal_scan_adc(uint16_t out[10]);
+/* Top-of-form photocell, 1 = stock in front of the sensor. Analog with a
+ * software Schmitt trigger by default (as the genuine firmware reads it, D42);
+ * a plain GPIO read with PAPER_SENSE_ANALOG 0. Lives here because it owns the
+ * ADC together with the thermistor. */
+int paper_present(void);
 #endif

@@ -18,7 +18,16 @@ paste the table. Inputs are all declared, so the assumption is visible:
     R25, B         the head thermistor (ROHM KF3002 family and SII both publish
                    30 kOhm / B = 3950 for this class; SII also publish the
                    resistance table, which this script reproduces to 0.2 %)
-    R_P, TO_VDD    the board divider - ASSUMED until measured (FIELDWORK 3)
+    R_P            the board divider resistor. 25.75 k is FITTED, not guessed:
+                   it is the single pull-up that reproduces the LabelWriter 450
+                   firmware's own thresholds (halt 176, resume 255 on 10 bits)
+                   at 70 C and 56 C to about 1 % (DECISIONS D30, D41). Still an
+                   assumption for the 550 board - FIELDWORK 3 checks it.
+    TO_VDD         the ORIENTATION OF THE TABLE, which is the firmware's
+                   normalised one (higher code = hotter). thermal.c inverts a
+                   pull-up board's reading before indexing, and the inverted
+                   pull-up code equals the pull-down code for the same R_P, so
+                   this stays True whatever the board does.
     SCALE_25/70    the endpoints of our dwell scale, unchanged by this script
 
 Usage:  python3 tools/gen_thermal_table.py [--check]
@@ -29,8 +38,8 @@ import sys
 
 R25 = 30000.0          # ohm at 25 C   (ROHM KF3002 family, SII LTPD245C 3.5.8)
 B = 3950.0             # K             (same two sources)
-R_P = 20000.0          # ohm divider resistor - ASSUMED, see FIELDWORK 3
-TO_VDD = True          # True: NTC to VDD, R_P to GND -> hotter reads higher
+R_P = 25750.0          # ohm, fitted from the 450 firmware's thresholds (D41)
+TO_VDD = True          # table orientation = normalised (hotter reads higher)
 ADC_MAX = 4095
 
 T_COLD, T_HOT = 25.0, 70.0      # the two ends of the energy law we implement

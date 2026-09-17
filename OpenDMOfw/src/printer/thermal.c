@@ -32,11 +32,14 @@
  * 21 V) rather than entering the pulse width - and it needs a divider on the
  * 24 V rail that is not in pins.h yet (see PINMAP.md "head voltage sense").
  *
- * ASSUMPTION (the only one left here): the divider topology on the D.mo board,
+ * ASSUMPTION (the only one left here): the divider topology on the 550 board,
  * i.e. the pull resistor R_p and whether the NTC pulls the ADC pin up or down.
- * The defaults below are the R_p = 20 k pull-down column. FIELDWORK.md
- * measurement 3 carries the full table - two ADC readings pick the right column
- * and both thresholds off it, with no arithmetic.
+ * The defaults below are the 450 BOARD'S: a single ~25.75 k pull-UP with the
+ * NTC to ground, so a hotter head reads LOWER - that is the divider which
+ * reproduces the 450 firmware's own 176/255 thresholds at 70/56 C (D30, D41),
+ * and the owner's rule is to start from the 450. The 550 board is its own
+ * design, so FIELDWORK measurement 3 still checks it: two ADC readings pick the
+ * column and both thresholds off it, with no arithmetic.
  *
  * NTC curve (30 kOhm at 25 degC, B=3950): R(T) = 30000*exp(3950*(1/T - 1/298.15)),
  * T in kelvin. At the temperatures that matter here:
@@ -52,37 +55,41 @@
 #include "../pins.h"
 
 /* 1 = NTC to VDD and R_p to GND, so a hotter head reads HIGHER.
- * 0 = R_p to VDD and NTC to GND, so a hotter head reads LOWER. */
-#define THERMAL_HOTTER_IS_HIGHER 1
+ * 0 = R_p to VDD and NTC to GND, so a hotter head reads LOWER - the 450's
+ *     topology ("higher count = colder", D30) and the default since D41. */
+#define THERMAL_HOTTER_IS_HIGHER 0
 
-/* Raw 12-bit ADC codes for the three temperatures above, R_p = 20 k pull-down.
- * Enter the pull-down column for your R_p even when THERMAL_HOTTER_IS_HIGHER
- * is 0 - the code inverts the reading first. See FIELDWORK.md measurement 3. */
-#define THERMAL_LIMIT_RAW   3240   /* 70 degC: halt printing (TRM)            */
-#define THERMAL_RESUME_RAW  2862   /* 56 degC: printing may resume (TRM)      */
-#define THERMAL_COLD_RAW    1638   /* 25 degC: at/below this, full dwell      */
+/* NORMALISED 12-bit codes (higher = hotter) for the three temperatures above,
+ * R_p = 25.75 k. The code inverts a pull-up board's reading before comparing,
+ * and the inverted pull-up code equals the pull-down code for the same R_p -
+ * so these are the "pull-down column" numbers whatever the board does. See
+ * FIELDWORK.md measurement 3; tools/gen_thermal_table.py --check prints them. */
+#define THERMAL_LIMIT_RAW   3398   /* 70 degC: halt printing (TRM)            */
+#define THERMAL_RESUME_RAW  3068   /* 56 degC: printing may resume (TRM)      */
+#define THERMAL_COLD_RAW    1891   /* 25 degC: at/below this, full dwell      */
 
 /* Plausibility band on the NORMALISED reading (higher = hotter, whichever way
  * the divider is wired). Outside it, the sensor is not telling us about a
  * temperature at all.
  *
  * THE FAILURE THAT MATTERS IS THE OPEN CIRCUIT, and it used to be invisible.
- * With the NTC to VDD and R_p to GND, a disconnected head flex - or a divider
+ * With the NTC to VDD and R_p to GND (the topology shipped before D41), a
+ * disconnected head flex - or a divider
  * that was never populated, which is the DEFAULT STATE OF A BRING-UP BOARD -
  * parks the ADC node at 0 V. That reads as code 0, which the curve calls "very
  * cold", so thermal_ok() stayed true and thermal_dwell_scale() returned 320:
  * the gate permanently satisfied AND the longest strobe this firmware will ever
- * ask for, at exactly the moment it knows least about the head. The other
- * topology fails the same way mirrored (open pulls the node to VDD, which
- * normalises to 0), so the check belongs here, after normalisation, where one
- * band covers both.
+ * ask for, at exactly the moment it knows least about the head. The pull-up
+ * topology that is the default now (D41) fails the same way mirrored (open
+ * pulls the node to VDD, which normalises to 0), so the check belongs here,
+ * after normalisation, where one band covers both.
  *
  * The SHORT is the benign direction: it normalises to 4095, which the existing
  * latch already reads as over-temperature and refuses.
  *
  * Bounds, from the same NTC curve as the table above (30 k at 25 C, B = 3950,
- * R_p = 20 k): code 64 is about -40 C and code 4032 about +155 C. Both are far
- * outside anything a printer can be in - the operating band is 1638..3240 - so
+ * R_p = 25.75 k): code 64 is about -44 C and code 4032 about +169 C. Both are
+ * far outside anything a printer can be in - the operating band is 1891..3398 - so
  * a working divider cannot trip this, and a disconnected one always does. */
 #define THERMAL_OPEN_RAW      64   /* at/below: open circuit or no divider     */
 #define THERMAL_SHORT_RAW   4032   /* at/above: shorted sensor                 */
@@ -111,6 +118,10 @@ void thermal_init(void)
      * pins.h is also the pad - one constant, not two that can drift apart. */
     _Static_assert(ADC_HEAD_TEMP_CH <= 7, "ADC_INn == PAn only holds for n <= 7");
     gpio_mode(((pin_t){GPIOA, ADC_HEAD_TEMP_CH}), GPIO_ANALOG);
+#if PAPER_SENSE_ANALOG
+    _Static_assert(PAPER_ADC_CH <= 7, "ADC_INn == PAn only holds for n <= 7");
+    gpio_mode(((pin_t){GPIOA, PAPER_ADC_CH}), GPIO_ANALOG);
+#endif
 
     if (!s_inited) {
         /* F0 ADC: calibrate while ADEN=0, then enable (RM0091). Every wait is
@@ -293,9 +304,9 @@ void thermal_scan_adc(uint16_t out[10])
  * not in a constant here. */
 static const uint16_t k_dwell_scale[32] = {
     320, 320, 320, 320, 320, 320, 320, 320,
-    320, 320, 320, 320, 320, 313, 302, 292,
-    281, 270, 259, 247, 235, 222, 208, 192,
-    175, 160, 160, 160, 160, 160, 160, 160,
+    320, 320, 320, 320, 320, 320, 320, 313,
+    302, 292, 281, 270, 258, 246, 232, 217,
+    201, 183, 161, 160, 160, 160, 160, 160,
 };
 
 uint16_t thermal_dwell_scale(void)
@@ -309,3 +320,41 @@ uint16_t thermal_dwell_scale(void)
     if (v >= THERMAL_LIMIT_RAW) return 160;        /* 70 C: 0.625x dwell          */
     return k_dwell_scale[(v >> 7) & 31u];
 }
+
+/* ---- Top-of-form photocell -------------------------------------------------
+ *
+ * The genuine 450 firmware reads its label-gap sensor as an ANALOG channel and
+ * squares it up with a software Schmitt trigger at 294 / 320 counts on 10 bits
+ * (FIELDWORK 3.1 row 7). A digital read of an analog node is a coin toss near
+ * the threshold, so the firmware does the same as the vendor: sample, and only
+ * change state past the far threshold (D42). Thresholds are the 450's scaled to
+ * 12 bits; the DIRECTION (which side is "no paper") is an assumption, see
+ * pins.h. Cached like the thermistor. Nothing depends on this for printing -
+ * OP_FLAG_PAPER_FORCE is the default - so a wrong answer costs the panel light,
+ * not a label. */
+#if PAPER_SENSE_ANALOG
+static int      s_paper_present = 1;      /* until the first sample says otherwise */
+static uint32_t s_paper_ms;
+static int      s_paper_have;
+
+int paper_present(void)
+{
+    uint32_t now = millis();
+    if (!s_paper_have || (now - s_paper_ms) >= THERMAL_CACHE_MS) {
+        uint16_t v = adc_sample_ch(PAPER_ADC_CH);
+#if !PAPER_ADC_HIGH_IS_ABSENT
+        v = (uint16_t)(4095u - v);
+#endif
+        if (s_paper_present) { if (v >= PAPER_ADC_ABSENT_ABOVE)  s_paper_present = 0; }
+        else                 { if (v <= PAPER_ADC_PRESENT_BELOW) s_paper_present = 1; }
+        s_paper_ms = now;
+        s_paper_have = 1;
+    }
+    return s_paper_present;
+}
+#else
+int paper_present(void)
+{
+    return gpio_get(PIN_PAPER_SENSE) == PAPER_PRESENT_LEVEL;
+}
+#endif

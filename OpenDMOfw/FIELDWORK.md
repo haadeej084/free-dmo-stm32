@@ -769,16 +769,34 @@ at 0.906 of ROHM's maximum-energy envelope and the 450-transposed 405 µs at
 ported value is at **1.19**. Today's number absorbs a 20 % error in an unmeasured
 constant. That is the whole reason D30 declined to port the genuine dwell.
 
-**How.** Two readings, both with the head connected and the rail from a
-current-limited bench supply, never the brick:
-1. **VH at the head connector under load**, during a printed line. The rail is an
-   unregulated wall brick, so the figure that matters is the loaded one, not 24 V
-   nominal.
-2. **Four-wire resistance across one dot**, head cold and disconnected. A
-   two-wire meter reading is dominated by the lead and connector resistance at
-   these values and will read high.
+**How — and a correction, because the obvious method does not work.** An
+earlier draft of this entry asked for a four-wire resistance across one dot.
+**You cannot measure a single dot externally.** In a KF3002-class head the
+heating elements sit between the common VH rail and the outputs of drivers that
+are *inside the head module*; the only pins the flex brings out are VH, VDD,
+GND, CLK, DI1, DI2, LAT, STB and TM. There is no per-dot terminal to probe, and
+with the drivers off there is no path at all.
 
-Then `Po = V_loaded² / R_dot`, and `HEAD_MAX_DWELL_US = 0.177 mJ / Po`.
+So measure the current instead, with a known number of dots energised:
+
+1. **Put a shunt in the VH return** — a few tens of milliohms, non-inductive —
+   and watch it on a scope. A DMM will not do: the strobe is a ~340 µs pulse.
+2. **Print a line with a known dot count.** Our own firmware controls the raster
+   exactly, so print all-black (`HEAD_DOTS` dots, but note the halves fire
+   *sequentially*, so the current you see is one half at a time) and then a line
+   with a small known count for a cross-check.
+3. **Read VH at the head connector during that pulse**, on the same scope. The
+   rail is an unregulated brick and it sags under the pulse; the loaded figure
+   is the one that matters, not 24 V nominal.
+
+Then `I_dot = I_measured / dots_energised`, `Po = V_loaded × I_dot`, and
+`HEAD_MAX_DWELL_US = 0.177 mJ / Po`.
+
+**Without a scope** there is still a usable approximation: print continuously at
+a known coverage, measure the *average* VH current with a DMM, and divide by the
+duty cycle (strobe time ÷ line period, both of which `GS D 0x04` and the line
+rate give you). Cruder, but it brackets Po, and bracketing it is already better
+than the analogue the firmware assumes today.
 
 **Report both raw numbers**, not the computed Po — the 0.177 mJ comes off a
 curve that itself depends on line time (see below), and a later reader needs to

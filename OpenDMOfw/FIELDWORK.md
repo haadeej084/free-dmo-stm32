@@ -870,6 +870,51 @@ the kind of thing that is cheap to measure and expensive to guess.
 **Pair this with measurement 5** — see the note there. The fault-safe handler's
 guarantee rests on these two polarities together, not on either one alone.
 
+### 0. THE ONE CAPTURE THAT REPLACES MOST OF THIS LIST
+*If you have a logic analyser and a current probe, do this before anything else.*
+
+The owner has a **LabelWriter 450 mainboard that prints correctly in the 550
+mechanism**. That is a *known-good system driving the exact hardware this
+firmware targets* — and everything below is an attempt to find out what a
+known-good system does.
+
+So instrument the head flex and let it print.
+
+**Rig:** a logic analyser on the head flex (CLK, both candidate DI pins, LAT,
+both candidate STB pins — six channels is enough), a current probe or a shunt
+plus a differential probe in the VH return, and a scope channel on VH at the
+connector. Then print one ordinary label from the 450 board.
+
+**What that single capture settles, and each of these is otherwise a separate
+measurement on this list:**
+
+| Settles | How it falls out of the capture |
+|---|---|
+| **5b, data pins** | Count the pins that carry data. One or two. The vendor drives one (D36) — this confirms it on *our* flex. |
+| **5b, strobe pins** | Count the strobe pins that ever move. If one, `HEAD_STROBE_SEGMENTS` must become 1 and the energy ceiling be re-derived. |
+| **6b, strobe polarity** | Read the idle level and the pulse direction directly. No current-limited creeping up on it. |
+| **5, VH gate** | Watch VH come up and go down, and when relative to the strobe. |
+| **8, Po** | Current during the strobe ÷ the dots in that line, at the loaded rail. This also separates the **850 Ω from the 1250 Ω** grade (28.2 mA vs 19.2 mA per dot — D35), which is the biggest open question in the whole energy model. |
+| **Head signal order** | Which flex pin is CLK, which is DI, which is LAT — by watching, not by buzzing. |
+| **The real dwell** | The strobe pulse width at a known head temperature, to compare against D30's 374–448 µs. |
+
+**Why this beats measuring our own firmware.** Everything on this list below is
+"find out what the board expects, then check that we do it". A capture of the
+450 board *is* what the board expects, measured rather than inferred, on a
+system that demonstrably works. Our firmware's behaviour can then be compared
+against it directly — `test/renode/head_shift.py` already records our bit stream
+and `head_shift` reports our strobe width.
+
+**What it does NOT settle:** the routing of the **550's own MCU pads** to that
+flex (measurement 1) — the 450 board has a different MCU and its own layout.
+That stays a continuity job. And the motor drive mode still wants the **U2
+marking** read off the 550 board (measurement 2).
+
+> ⚠ The head is the irreplaceable part. Probing a live flex means sharp probes
+> near 24 V and a head that is being driven. Use proper flex clips rather than
+> hand-held needles, and do not let a probe slip between two adjacent pins while
+> a strobe is firing.
+
 ### 8. Po at the fitted head — *the one number that unlocks the energy model*
 **This was missing from this list**, although `DECISIONS.md` D30 closes by naming
 it as the single measurement that unblocks everything about the head's energy:

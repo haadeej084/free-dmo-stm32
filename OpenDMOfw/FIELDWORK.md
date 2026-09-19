@@ -239,12 +239,15 @@ pulses per line). The map is then short of a **/RESET** line and the **mode stra
 STEP, DIR and ENABLE and the driver may sit in reset with the wrong microstep setting, and the
 motor will not turn at all.
 
-**Why the firmware still ships 4-phase (DECISIONS D40).** The 550 board's U2 is not the 450's
-driver and its marking is unread, and the two wrong guesses are not equal. Four phase lines into
-a STEP/DIR driver toggle STEP and DIR - a shuddering motor, no damage. STEP/DIR into an
-IN1-IN4 bridge holds DIR high permanently: one 6.5 ohm winding across 24 V DC, which cooks the
-motor or the driver in seconds. So the default is the harmless mistake until measurement 2 has
-read U2. Do not switch it on the strength of this section alone.
+**U2 has been read, and the firmware now ships STEP/DIR (DECISIONS D43).** D40 held the
+default at 4-phase because the two wrong guesses were not equal (STEP/DIR into a bare bridge
+cooks a winding). On 19 Sep 2026 the owner read U2 on the 550 board: **SGM42630**, an SGMICRO
+STEP/DIR stepper driver (DRV8811-style indexer, 1 / 1/2 / 1/4 / 1/8 microstep on USM1/USM0).
+The destructive guess is off the table. What the map is still short of, per the paragraph
+above, is exactly what the SGM42630 makes explicit: **nSLEEP** (pin 27, pulls *down* — asleep
+until driven high), **nENABLE** (pin 26, pulls *up*), **nRESET** (pin 17, pulls up) and the
+two **USM** straps (pins 12/13). Trace those four besides STEP (19) and DIR (3); `pins.h` has
+an optional `PIN_MOTOR_SLEEP` for the day nSLEEP turns out to reach the MCU.
 
 ### 3.3 What to look for, per connector
 
@@ -359,6 +362,11 @@ short list of things that are already pinned down, so you can skip them.
   answers that functionally.
 - **Feed contract**: one raster line = 1/300 inch = 0.08467 mm, so 300 lines must
   advance exactly 25.4 mm. That is the acceptance test for measurement 2.
+- **The motor driver**: U2 = **SGM42630**, STEP/DIR (D43). The motor: LEILI
+  35BY412-339, 48 steps/rev (D24). The VH switch: Q6 = **Si4459ADY** with Q3 =
+  AOD4130 beside it (D44). The head on the owner's unit: SHEC 3C56-9638 (label
+  `3056-9638 2604 09530558`). Read off the board on 19 Sep 2026; none of these
+  need identifying again — only their pads and straps.
 - **NTC curve and the limits themselves**: 30 kΩ at 25 °C, B = 3950, and DYMO's
   own policy of halting at 70 °C and resuming at 56 °C (LW450 manual p.7). Only
   the board's divider resistor is unknown, and two readings pick it from a table.
@@ -732,10 +740,38 @@ marking** read off the 550 board (measurement 2).
 > hand-held needles, and do not let a probe slip between two adjacent pins while
 > a strobe is firing.
 
+### 0b. THE SAME TRICK ON THE 550 BOARD ITSELF, while its stock MCU is still in it
+*A logic analyser or scope, the printer open, printing one label. No meter on the QFN.*
+
+Item 0 uses the 450 board as the known-good system for the *head*. The 550 board is
+the known-good system for *its own routing*, as long as the stock (RDP2) MCU is
+still fitted and driving it. Power it, print one label, and only **listen** — probe
+tips on the far ends of the traces, never on the MCU pads:
+
+| Probe here | Settles |
+|---|---|
+| **U2 pin 19** (STEP) | pulses per dot line = `MOTOR_STEPS_PER_LINE`, directly (measurement 2, no feed test) |
+| U2 pin 3 (DIR) | the level the firmware must hold for forward feed |
+| **U2 pins 27 / 26 / 17** (nSLEEP / nENABLE / nRESET) | which of them *move* — those reach the MCU and must be driven (`PIN_MOTOR_SLEEP`, `PIN_MOTOR_ENABLE`); the ones that sit at a rail are straps |
+| U2 pins 12 / 13 (USM1 / USM0) | the microstep mode, hence the factor on measurement 2 |
+| **Q3 gate**, Q6 gate, VH at J6 | VH-enable polarity and its timing against the strobe (measurement 5) |
+| The 22 Ω resistors toward J6 | CLK count per line (672 on one line, or 336 on two — 5b / D36), strobe idle level and pulse direction (6b), LAT, and which resistor pad carries which signal |
+| U5 pins 5 / 6 | SCL/SDA activity — and by following the trace, PB6/7 vs PB8/9 |
+| J4 / J5 / J7 | which harness carries the motor, the photocell, the buttons |
+
+Then, with the board unpowered, one continuity check per resistor pad to the MCU
+side settles measurement 1 — knowing already *which* signal you are looking for.
+What this does **not** give: C8 vs CB, and the head's Po (7), which still wants the
+current probe of item 0.
+
+> ⚠ Same caution as item 0: 24 V is present, and a slipped probe across two U2 pins
+> or two flex contacts while a strobe fires can take the driver or the head. Clips,
+> not hand-held needles.
+
 ### 1. GPIO routing — *the whole job*
 Section 3. Nothing below can be interpreted before this is done.
 
-### 2. Motor µsteps per line — *the motor is now identified; the gearing is not*
+### 2. Motor µsteps per line — *motor and driver are identified; the strapping and gearing are not*
 The motor is a **LEILI 35BY412-339**: two-phase bipolar PM stepper, 4 leads,
 ~35 mm can, ~6.5 Ω/phase (the marking "35BY412-339 6.5Ω" is legible in the FCC
 photos of both the 550 and the 5XL), 7.5° per step = 48 steps/rev. One full
@@ -768,19 +804,22 @@ question is whether the MCU sequences them or a driver IC does.
 > the strap signature is visible in the image: two pins driven high and one low
 > once at boot and never touched again.
 >
-> If U2 is a STEP/DIR driver, `MOTOR_DRIVE` must become `MOTOR_DRIVE_STEPDIR`
-> and the microstep ratio comes off its datasheet rather than off a feed test. What remains
-is the drive train between motor and platen.
-Assumed a 24 V-capable driver (MP6500-class chopper or a discrete bridge),
-driven **IN1–IN4 directly** (`MOTOR_DRIVE_4PHASE`), `MOTOR_STEPS_PER_LINE = 1`.
+> **Done (D43): U2 = SGM42630**, and `MOTOR_DRIVE` is `MOTOR_DRIVE_STEPDIR`. The
+> indexer does 1, 1/2, 1/4 or 1/8 (USM1/USM0, pins 12/13), so `MOTOR_STEPS_PER_LINE`
+> on this board is **(1 | 2 | 4 | 8) × full steps per line** — the 450's twelve are not
+> reproducible here. Read the two USM pins (to GND, to VCC, or to an MCU pad); then
+> either count STEP pulses on U2 pin 19 while the *stock* 550 prints (item 0b, no feed
+> test at all) or run the feed test below. What remains after that is only the drive
+> train between motor and platen.
+Driver: SGM42630 chopper, current set by its VREF/sense resistors (the firmware cannot
+over-drive the winding on this path). `MOTOR_STEPS_PER_LINE = 1` until measured.
 
-> ⚠ **Measure the winding before the first `diag 2`.** Put an ohmmeter across
-> each phase pair of the motor lead. `k_phase[]` is two-phase-on full-step, so
-> both windings carry current for the whole feed. At a few ohms on 24 V behind a
-> plain bridge that is several amps — a thermal failure within seconds, not a
-> shoot-through. A chopper driver limits it; a high-resistance winding needs no
-> limiting. Report the reading and the driver marking, keep bursts short until
-> both are known, and feel the motor and driver IC after each burst.
+> ⚠ **Only for the 4-phase fallback** (`-DMOTOR_DRIVE=1`, a board with a plain
+> bridge): measure the winding before the first `diag 2`. `k_phase[]` is
+> two-phase-on full-step, so both windings carry current for the whole feed; at
+> a few ohms on 24 V behind a plain bridge that is several amps — a thermal
+> failure within seconds. On the SGM42630 path the chopper limits the current
+> and this warning does not apply.
 **How:** identify the IC first (report the marking). Then scope the phase pins
 during `diag 2 300` and measure how far the paper actually moved.
 One raster line must equal 1/300 inch = **0.08467 mm**, so:
@@ -898,9 +937,15 @@ while the MCU is unpowered, in reset, or being flashed. If there is no such
 pull, that is a finding worth reporting on its own — it means the rail's state
 at power-on is undefined.
 Assumed PA8, active-low P-MOS gate.
-**How:** find the 24 V load switch near the head connector, trace its gate to an
-F072 pad. Confirm polarity by measuring VH at the head connector while the
-firmware holds the pin low.
+**The switch is named (D44): Q6 = Si4459ADY**, a P-channel 30 V MOSFET in SO-8, and
+the likely level-shifter beside it is **Q3 = AOD4130** (N-channel DPAK). If the MCU
+drives Q3's gate, the polarity is the *opposite* of the assumption: MCU high → Q3 on
+→ Q6 gate pulled low → VH on, i.e. `HEAD_VH_ON_LEVEL 1`. Which is why this one is
+measured, not assumed.
+**How:** trace Q3's gate (and Q6's gate network) to an F072 pad — via the resistor
+pads, not the QFN. Confirm polarity by measuring VH at the head connector while the
+firmware holds the pin low, or by watching Q3's gate while the stock board prints
+(item 0b).
 **Patch:** `PIN_HEAD_VH` / `HEAD_VH_ON_LEVEL` in `pins.h`.
 **Symptom if wrong:** everything looks right on the logic lines and the head
 simply never marks the paper.

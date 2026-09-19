@@ -136,6 +136,12 @@ test:
 	    -o /tmp/opendmo-motortest-$$m $(MOTOR_TEST_SRC); \
 	  /tmp/opendmo-motortest-$$m; \
 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    '-DPIN_MOTOR_SLEEP=((pin_t){GPIOB,11})' -o /tmp/opendmo-motortest-sleep-$$m $(MOTOR_TEST_SRC); \
+	  /tmp/opendmo-motortest-sleep-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
+	    -DMOTOR_DRIVE=1 -o /tmp/opendmo-motortest-4ph-$$m $(MOTOR_TEST_SRC); \
+	  /tmp/opendmo-motortest-4ph-$$m; \
+	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \
 	    -o /tmp/opendmo-systest-$$m $(SYSTEM_TEST_SRC); \
 	  /tmp/opendmo-systest-$$m; \
 	  $$HOSTCC -Wall -Wextra -Werror -std=c11 -DOPENDMO_HOST_TEST -DMODEL_$$m -Isrc -Itest \

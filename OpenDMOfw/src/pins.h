@@ -70,20 +70,36 @@ typedef struct { GPIO_Type *port; uint8_t pin; } pin_t;
  * 4-phase drive of a dual H-bridge. Selected HERE, not in motor.c, because the
  * fault handler in startup.c has to know which pins to make safe.
  *
- * WHY 4-PHASE STAYS THE DEFAULT although the vendor's 450 board is STEP/DIR
- * (DECISIONS D37, FIELDWORK 3.2): the 550 board has its own driver at U2 whose
- * marking is not yet read, and the two wrong guesses are not symmetric. Four
- * phase lines into a STEP/DIR driver toggle its STEP and DIR inputs - a
- * shuddering motor and nothing else. STEP/DIR into an IN1-IN4 bridge holds
- * DIR high permanently, i.e. one 6.5-ohm winding across 24 V DC, which cooks
- * the motor or the driver in seconds. So until U2 is identified the firmware
- * makes the harmless mistake, not the destructive one (DECISIONS D40). */
+ * STEP/DIR IS NOW THE DEFAULT. D40 held the firmware at 4-phase until U2's
+ * marking was read, because STEP/DIR into a bare H-bridge cooks a winding
+ * while 4-phase into a STEP/DIR driver only shudders. U2 has been read on the
+ * owner's 550 board (19 Sep 2026): **SGM42630**, an SGMICRO bipolar stepper
+ * driver with a DRV8811-style STEP/DIR indexer (DECISIONS D43). The
+ * destructive wrong guess is off the table, so the switch D40 promised is made.
+ *
+ * SGM42630 logic pins and their power-on state (datasheet, Dec 2024 Rev B.1):
+ *   pin 19 STEP     rising edge = one indexer step; internal pull-down
+ *   pin 3  DIR      internal pull-down
+ *   pin 26 nENABLE  LOW = outputs on;  internal pull-UP   (disabled by default)
+ *   pin 27 nSLEEP   HIGH = awake;      internal pull-DOWN (asleep by default)
+ *   pin 17 nRESET   LOW = reset;       internal pull-UP
+ *   pin 12/13 USM1/USM0  microstep 00=full 01=1/2 10=1/4 11=1/8; pull-downs
+ * The pads below are still ASSUMED routing (FIELDWORK measurement 1). */
 #define MOTOR_DRIVE_STEPDIR 0
 #define MOTOR_DRIVE_4PHASE  1
-#define MOTOR_DRIVE         MOTOR_DRIVE_4PHASE
-#define PIN_MOTOR_STEP      ((pin_t){GPIOB, 4})
-#define PIN_MOTOR_DIR       ((pin_t){GPIOB, 5})
-#define PIN_MOTOR_ENABLE    ((pin_t){GPIOB, 10})  /* active-low enable (STEPDIR mode only; PB8 is I2C SCL) */
+#ifndef MOTOR_DRIVE               /* overridable from the command line for the host tests */
+#define MOTOR_DRIVE         MOTOR_DRIVE_STEPDIR
+#endif
+#define PIN_MOTOR_STEP      ((pin_t){GPIOB, 4})   /* -> SGM42630 pin 19 STEP    */
+#define PIN_MOTOR_DIR       ((pin_t){GPIOB, 5})   /* -> SGM42630 pin 3  DIR     */
+#define PIN_MOTOR_ENABLE    ((pin_t){GPIOB, 10})  /* -> SGM42630 pin 26 nENABLE, active-low (PB8 is I2C SCL) */
+/* nSLEEP (pin 27) pulls DOWN inside the driver, so if DYMO routed it to the
+ * MCU the motor never moves until we raise it. Define PIN_MOTOR_SLEEP once the
+ * board shows that pad; motor.c then drives it and waits tWAKE (1 ms) before
+ * the first STEP, and the fault handler drops it. If nSLEEP is strapped to
+ * VCC on the board, leave this undefined. nRESET has a pull-UP and needs no
+ * driving unless it too reaches an MCU pad.
+ * #define PIN_MOTOR_SLEEP  ((pin_t){GPIOB, 11}) */
 /* 4-phase fallback (only used when MOTOR_DRIVE == MOTOR_DRIVE_4PHASE): */
 #define PIN_MOTOR_A1        ((pin_t){GPIOB, 4})
 #define PIN_MOTOR_A2        ((pin_t){GPIOB, 5})

@@ -122,6 +122,9 @@ void Fault_Handler(void)
     safe_out(PIN_MOTOR_B2.port, PIN_MOTOR_B2.pin, 0);
 #if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
     safe_out(PIN_MOTOR_ENABLE.port, PIN_MOTOR_ENABLE.pin, 1);   /* active-low: driver off */
+#ifdef PIN_MOTOR_SLEEP
+    safe_out(PIN_MOTOR_SLEEP.port,  PIN_MOTOR_SLEEP.pin,  0);   /* SGM42630 nSLEEP low: outputs off */
+#endif
 #endif
 
     /* 5. Guarantee the reboot even if the fault predates wdt_init(). */

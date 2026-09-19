@@ -59,7 +59,9 @@ tag / DRM / authentication.
 
 `README.md` (DRM framing), `PROTOCOL.md` (wire protocol + ESC U/V records + GS D),
 `FIELDWORK.md` (what a board owner measures, with a fill-in report template),
-`BUILD.md`, `PINMAP.md`, `DECISIONS.md`, `pc-patch/README.md`.
+`BUILD.md`, `PINMAP.md`, `DECISIONS.md`, `pc-patch/README.md`,
+`BOARD-FQ-D-E533076.md` (the owner's 550 board: U2 = SGM42630, Q6 = Si4459, J2, the
+stock-board probe plan).
 
 ## Remaining: hardware bring-up (cannot be done in software; needs a board)
 
@@ -82,8 +84,9 @@ VH enable pin (5), the flex pin count (5b), the strobe polarity (6b, corroborate
 by the 450 and answered by the capture), the half-2 dot order (6, only if 5b
 finds two data pins) and Po at the head (7) — nine, matching the count above.
 
-GPIO pin routing (including VH enable), LATCH/STROBE polarity/timing, heat-segment
-count, dwell/density calibration, motor steps/line, I2C TIMINGR + EEPROM WP,
+GPIO pin routing (the VH switch is now named: Q6 = Si4459, D44), LATCH/STROBE
+polarity/timing, heat-segment count, dwell/density calibration, motor µsteps/line
+(driver now known: SGM42630, STEP/DIR, D43), I2C TIMINGR + EEPROM WP,
 thermistor direction/curve, and USB PMA/EP verification on silicon — per point in
 `PINMAP.md` / `DECISIONS.md`. The image goes onto a blank F072CB fitted in place
 of the stock part: the stock MCU is RDP2, which is permanent, so the genuine

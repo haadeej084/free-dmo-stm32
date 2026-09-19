@@ -15,16 +15,21 @@
  * (DECISIONS D24).
  *
  * Two wiring variants (MOTOR_DRIVE, selected in pins.h):
+ *   MOTOR_DRIVE_STEPDIR : STEP/DIR/nENABLE (+ optional nSLEEP) to the driver IC
+ *                         - the DEFAULT since U2 on the owner's 550 board was
+ *                         read as an SGM42630 (D43), which is a DRV8811-style
+ *                         indexer: STEP rising edge, 1 us min high/low,
+ *                         250 ns DIR setup, 500 kHz max. Its nSLEEP pulls
+ *                         DOWN and nENABLE pulls UP inside the part, so both
+ *                         must be driven if the board routes them to the MCU.
  *   MOTOR_DRIVE_4PHASE  : direct 4-phase drive (A1/A2/B1/B2) into a dual
- *                         H-bridge - the DEFAULT, not because it is the more
- *                         likely wiring (the vendor's 450 board is STEP/DIR,
- *                         D37) but because it is the harmless wrong guess:
- *                         see the note at MOTOR_DRIVE in pins.h and D40.
- *   MOTOR_DRIVE_STEPDIR : STEP/DIR/ENABLE to a driver IC - what U2 on the 550
- *                         board most likely is; switch once its marking is
- *                         read (FIELDWORK measurement 2), and set
- *                         MOTOR_STEPS_PER_LINE to the driver's microsteps per
- *                         full step (the 450 issues 12 pulses per line).
+ *                         H-bridge - kept for a board with a plain bridge.
+ *
+ * MOTOR_STEPS_PER_LINE with the SGM42630: its indexer does 1, 1/2, 1/4 or 1/8
+ * (USM1/USM0), so the value is (1|2|4|8) x full steps per line. The 450's
+ * twelve pulses per line (D30) are therefore NOT reproducible 1:1 on this
+ * driver; count STEP pulses on U2 pin 19 while the stock 550 prints, or use
+ * the 25.4 mm / 300 lines acceptance test (FIELDWORK measurement 2).
  *
  * TIME BUDGET (sourced). DYMO rates the 550 at 62 labels/min and the 5XL at 53,
  * on a 4-line address label = 89 mm = 1050 dot lines. That is 0.92 ms and
@@ -50,6 +55,25 @@
  * head - stays put. */
 #define MOTOR_STEP_US        (MODEL_LINE_PERIOD_US / MOTOR_STEPS_PER_LINE)
 
+#if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR && defined(PIN_MOTOR_SLEEP)
+static uint8_t s_awake;
+/* SGM42630 nSLEEP: High = awake. After the rising edge the indexer ignores
+ * STEP for up to tWAKE = 1 ms (datasheet, Timing Parameters). */
+static void driver_wake(int on)
+{
+    if (on && !s_awake) {
+        gpio_set(PIN_MOTOR_SLEEP, 1);
+        delay_ms(1);
+        s_awake = 1;
+    } else if (!on && s_awake) {
+        gpio_set(PIN_MOTOR_SLEEP, 0);
+        s_awake = 0;
+    }
+}
+#else
+#define driver_wake(on) ((void)0)
+#endif
+
 void motor_init(void)
 {
 #if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
@@ -59,6 +83,10 @@ void motor_init(void)
     gpio_set(PIN_MOTOR_DIR, 1);          /* forward feed direction */
     gpio_set(PIN_MOTOR_ENABLE, 1);       /* active-low: off until we print */
     gpio_set(PIN_MOTOR_STEP, 0);
+#ifdef PIN_MOTOR_SLEEP
+    gpio_set(PIN_MOTOR_SLEEP, 0);        /* level first, then output (as D31 does for VH) */
+    gpio_mode(PIN_MOTOR_SLEEP, GPIO_OUT);
+#endif
 #else
     gpio_mode(PIN_MOTOR_A1, GPIO_OUT); gpio_mode(PIN_MOTOR_A2, GPIO_OUT);
     gpio_mode(PIN_MOTOR_B1, GPIO_OUT); gpio_mode(PIN_MOTOR_B2, GPIO_OUT);
@@ -68,7 +96,9 @@ void motor_init(void)
 void motor_enable(int on)
 {
 #if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
-    gpio_set(PIN_MOTOR_ENABLE, on ? 0 : 1);   /* active-low */
+    if (on) driver_wake(1);                   /* nSLEEP high + tWAKE before STEP */
+    gpio_set(PIN_MOTOR_ENABLE, on ? 0 : 1);   /* active-low; tnENABLE 20 us */
+    if (!on) driver_wake(0);
 #else
     if (!on) { gpio_set(PIN_MOTOR_A1,0); gpio_set(PIN_MOTOR_A2,0);
                gpio_set(PIN_MOTOR_B1,0); gpio_set(PIN_MOTOR_B2,0); }

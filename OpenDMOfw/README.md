@@ -124,6 +124,7 @@ test/renode/          the real image in the Renode emulator (boot, LED, head shi
 tools/stack_depth.py  worst-case stack from GCC call-graph info (make stack)
 FIELDWORK.md          what has to be MEASURED on an open printer, and nothing else
 LIVETEST.md           what a genuine printer answers over USB, no screwdriver
+BOARD-FQ-D-E533076.md the owner's 550 board: parts read off it, what they changed, the probe plan
 ```
 
 ## Build

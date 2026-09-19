@@ -1871,3 +1871,77 @@ paper-out are the obvious candidates) and a **VH rail divider** it suspends
 printing on (row 6). Neither is in `pins.h`. They are not needed to print, the
 owner's brief is a working firmware rather than a complete one, and their pads
 are unknown - so they are recorded here, not implemented.
+
+## D43 — U2 is read: SGM42630, and the motor goes STEP/DIR
+
+D40 held `MOTOR_DRIVE` at 4-phase until the 550's own driver was identified,
+because the two wrong guesses were not symmetric. On 19 Sep 2026 the owner read
+U2 on the 550 mainboard (silkscreen `FQ-D E533076`, the board PINMAP's "Board
+component map" photographs): **`SOM42630`**, which resolves to the SGMICRO
+**SGM42630** — a bipolar stepper driver "for printers, scanners and robotic
+mechanisms", 8–35 V, 2.6 A per winding, TSSOP-28 EP, with a DRV8811-style
+**STEP/DIR indexer** (datasheet Dec 2024 Rev B.1). The 47 kΩ (`473`) and 10 kΩ
+(`01C`) parts beside J4/J5 are the values its reference schematic puts on the
+logic inputs and VREF. The destructive wrong guess (STEP/DIR into a bare bridge)
+is therefore ruled out, and the switch D40 promised is made: `MOTOR_DRIVE` is
+`MOTOR_DRIVE_STEPDIR`, the 4-phase path stays as the fallback and is still
+built and tested (`make test` runs the motor harness in both modes).
+
+What the datasheet adds that the firmware has to respect:
+
+* **Power-on state.** nENABLE (pin 26) has an internal pull-**up** and nSLEEP
+  (pin 27) an internal pull-**down**: out of reset the part is *disabled and
+  asleep*. nENABLE is `PIN_MOTOR_ENABLE`, already driven. nSLEEP is new: if the
+  board routes it to the MCU, the motor never moves until we raise it. So
+  `pins.h` gains an optional `PIN_MOTOR_SLEEP`; when defined, `motor_enable(1)`
+  raises it and waits **tWAKE = 1 ms** before the first STEP, `motor_enable(0)`
+  drops it, and `Fault_Handler` drops it with ENABLE. Undefined (strapped high
+  on the board) it compiles away. nRESET (pin 17) pulls up and needs nothing.
+* **Timing.** STEP is a rising edge, ≥ 1 µs high and low, 250 ns DIR set-up,
+  ≤ 500 kHz; tnENABLE ≤ 20 µs. `step_pulse()` already holds STEP high for half
+  the step period, and DIR is static — all met, and `test_motor.c` now asserts
+  the order (ENABLE, then SLEEP + 1 ms, then the first edge) and the widths.
+* **Microstepping is 1, ½, ¼ or ⅛** (USM1/USM0, pins 12/13, internal
+  pull-downs). So on this board `MOTOR_STEPS_PER_LINE` is (1 | 2 | 4 | 8) × the
+  full steps per line. The 450's twelve pulses per line (D30/D37) are **not**
+  reproducible 1:1 on an SGM42630 — the 550 either issues a different count or
+  has different gearing. D24's estimate of one full step per line stands; with
+  ⅛ strapping that would be 8 pulses per line, ~8.7 kHz at rated speed. Counting
+  STEP pulses on U2 pin 19 while the *stock* 550 prints one label settles it
+  without any feed test (FIELDWORK 8, item 0b).
+* **Current** is set by VREF and the sense resistors on the board; the firmware
+  cannot over-drive the motor. The winding-resistance warning in FIELDWORK
+  measurement 2 no longer applies to the STEP/DIR path.
+
+Reversal: `-DMOTOR_DRIVE=1` on the command line, or the define in `pins.h`.
+
+## D44 — Other parts read on the same board, and the stock board as a probe
+
+Read by the owner on the `FQ-D E533076` 550 board, 19 Sep 2026, with the
+resolutions and what each changes:
+
+| Ref | Read as | Part | Consequence |
+|-----|---------|------|-------------|
+| U1 | `STM32F072C8?? … U6` (fifth character faint; `CB` possible) | STM32F072C8U6 or CBU6, UFQFPN48 | Nothing new: the linker already declares 64 K for exactly this reason. Replacement part stays `STM32F072CBU6` (superset, pin-identical). |
+| Q6 | `4459` | **Si4459ADY** (Vishay), P-channel 30 V, SO-8 | This is the **VH 24 V load switch** FIELDWORK measurement 5 asks the fieldworker to "find near the head connector". Named now; its gate network still has to be traced to a pad. |
+| Q3 | `D4130 BL6B1A` | **AOD4130** (AOS), N-channel 60 V, DPAK | Low-side switch. The natural level-shifter for Q6 (MCU high → Q3 on → Q6 gate low → VH on ⇒ `HEAD_VH_ON_LEVEL 1`), or a second 24 V switch. If it is Q6's driver, the polarity assumed in `pins.h` (active-low) is inverted — measurement 5 decides, and D31's warning about the fault handler applies. |
+| D4 | `SMCJ4A` (one digit lost) | SMCJ24A (SMCJ33A possible) | TVS on the 24 V input. No firmware consequence. |
+| D5 | `K51QQA 533LJ` | not identified | — |
+| U5 | (not legible; PINMAP's Rev K table calls the same SOIC-8 "U6") | BL24C128A per the Rev H/I/K model | Unchanged. |
+| J2 | 6-pin 0.1" header, unpopulated, pin 1 square, beside SW2 near the USB-B | **SWD header** (candidate) | The place to flash the replacement MCU instead of pads 34/37 on a leadless QFN. Confirm continuity to pads 34/37/7 (SWDIO/SWCLK/NRST). |
+| motor | `LEILI 35BY412-339`, `IBN 60417-5041`, `No.: 20227` | as D24 | Confirms the part on this unit; adds the D.mo part number and lot. |
+| head | `3056-9638 2604 09530558` | SHEC **3C56-9638** (`0` ↔ `C`), date 2604, serial 09530558 | Confirms the 57 mm KF3002-GK11C head on this unit; the build is `make` (550). |
+
+**The stock board is a probe.** FIELDWORK 8 item 0 uses the owner's *450* board
+as a known-good system to capture the head flex. The same applies to the 550
+board itself while its stock MCU is still in it: power it, let it print one
+label, and *listen* on the far ends of the traces — U2 pins 19/3/26/27/12/13,
+Q3's gate, the 22 Ω resistors toward J6, U5's SCL/SDA. That is high-impedance
+observation of a system that demonstrably works, and it answers, in one print:
+STEP pulses per line (measurement 2, directly), whether nSLEEP/nENABLE are
+MCU-driven or strapped (whether `PIN_MOTOR_SLEEP` is needed at all), the USM
+levels, VH-enable polarity and timing (5), strobe polarity (6b), CLK count per
+line and the data-pin count (5b/D36), and — by watching which resistor pad moves
+with which signal — most of the routing (1) without a single continuity check
+on a QFN pad. What it cannot answer: C8 vs CB, and the head's resistance grade
+(7), which needs the current probe. Added to FIELDWORK 8 as item 0b.

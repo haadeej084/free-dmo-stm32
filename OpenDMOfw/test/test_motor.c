@@ -14,8 +14,16 @@
  * rail-to-rail cross-conduction on the discrete four-transistor bridge that
  * DECISIONS D17 also allows.
  *
+ * Since D43 the default MOTOR_DRIVE is STEP/DIR (U2 = SGM42630). The same
+ * harness then asserts the driver-IC contract instead of the coil one: nENABLE
+ * goes low BEFORE the first STEP rising edge, nSLEEP (when routed) goes high
+ * at least tWAKE = 1 ms before it, every STEP pulse is >= 1 us high and low,
+ * the feed is exactly one rising edge per line, and enable/idle drop the
+ * driver. The 4-phase branch is kept for a board with a plain H-bridge.
+ *
  * Build (see the Makefile `test` target):
  *   cc -DOPENDMO_HOST_TEST -DMODEL_OP57 -Isrc test/test_motor.c src/printer/motor.c
+ *   ... and once more with -DPIN_MOTOR_SLEEP='((pin_t){GPIOB,11})'
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -37,8 +45,9 @@ static long g_writes;
 
 /* A write log, so order can be asserted rather than inferred. */
 #define LOGMAX 4096
-static struct { int port, pin, high; } g_log[LOGMAX];
+static struct { int port, pin, high; uint32_t us; } g_log[LOGMAX];
 static int g_logn;
+static uint32_t g_us, g_ms;
 
 static int port_idx(GPIO_Type *g) { return (g == GPIOB) ? 1 : 0; }
 
@@ -47,7 +56,8 @@ void gpio_set(pin_t p, int high)
     int po = port_idx(p.port);
     if (p.pin < 16) g_level[po][p.pin] = high ? 1 : 0;
     if (g_logn < LOGMAX) { g_log[g_logn].port = po; g_log[g_logn].pin = p.pin;
-                           g_log[g_logn].high = high ? 1 : 0; g_logn++; }
+                           g_log[g_logn].high = high ? 1 : 0; g_log[g_logn].us = g_us;
+                           g_logn++; }
     g_writes++;
 }
 
@@ -63,7 +73,6 @@ void gpio_pull(pin_t p, int pull)      { (void)p; (void)pull; }
 void gpio_od(pin_t p, int od)          { (void)p; (void)od; }
 void gpio_af(pin_t p, uint8_t af)      { (void)p; (void)af; }
 
-static uint32_t g_us, g_ms;
 void delay_us(uint32_t us) { g_us += us; g_ms = g_us / 1000u; }
 void delay_ms(uint32_t ms) { g_us += ms * 1000u; g_ms = g_us / 1000u; }
 uint32_t millis(void)      { return g_ms; }
@@ -78,6 +87,7 @@ static void reset_log(void) { g_logn = 0; g_writes = 0; }
  * vector - not a pin write, because break-before-make spends two writes on some
  * pins and none on others. Counting the vector makes the measure independent of
  * how the driver chooses to get there. */
+#if MOTOR_DRIVE == MOTOR_DRIVE_4PHASE
 static int step_events(void)
 {
     /* The four-phase sequence, as motor.c drives it. A STEP is the vector
@@ -121,12 +131,157 @@ static int both_ends_driven(int pin_lo, int pin_hi)
     }
     return hits;
 }
+#endif /* MOTOR_DRIVE_4PHASE */
+
+
+#if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
+static int is_pin(int i, pin_t p)
+{
+    return g_log[i].port == port_idx(p.port) && g_log[i].pin == p.pin;
+}
+
+/* STEP rising edges in the log: what the SGM42630 indexer actually counts. */
+static int step_rises(void)
+{
+    int lvl = 0, n = 0;
+    for (int i = 0; i < g_logn; i++) {
+        if (!is_pin(i, PIN_MOTOR_STEP)) continue;
+        if (g_log[i].high && !lvl) n++;
+        lvl = g_log[i].high;
+    }
+    return n;
+}
+
+/* Shortest STEP high time and low time seen, in us (datasheet min 1 us each). */
+static void step_widths(uint32_t *min_high, uint32_t *min_low)
+{
+    int lvl = 0, seen = 0; uint32_t t_edge = 0;
+    *min_high = *min_low = 0xFFFFFFFFu;
+    for (int i = 0; i < g_logn; i++) {
+        if (!is_pin(i, PIN_MOTOR_STEP)) continue;
+        if (g_log[i].high == lvl) continue;
+        if (seen) {
+            uint32_t w = g_log[i].us - t_edge;
+            if (lvl && w < *min_high) *min_high = w;
+            if (!lvl && w < *min_low) *min_low = w;
+        }
+        lvl = g_log[i].high; t_edge = g_log[i].us; seen = 1;
+    }
+}
+
+/* Index of the first STEP rising edge, or -1. */
+static int first_step_rise(void)
+{
+    int lvl = 0;
+    for (int i = 0; i < g_logn; i++) {
+        if (!is_pin(i, PIN_MOTOR_STEP)) continue;
+        if (g_log[i].high && !lvl) return i;
+        lvl = g_log[i].high;
+    }
+    return -1;
+}
+
+/* Level of the last write to `p` BEFORE log index `before` (-1 = none), and
+ * when it happened. */
+static int level_before(pin_t p, int before, uint32_t *at_us)
+{
+    int lv = -1;
+    for (int i = 0; i < before && i < g_logn; i++)
+        if (is_pin(i, p)) { lv = g_log[i].high; if (at_us) *at_us = g_log[i].us; }
+    return lv;
+}
+#define LVL(p)  g_level[port_idx((p).port)][(p).pin]
+#define MODE(p) g_mode [port_idx((p).port)][(p).pin]
+#endif
 
 int main(void)
 {
     for (int p = 0; p < 2; p++)
         for (int i = 0; i < 16; i++) g_level[p][i] = -1;
 
+#if MOTOR_DRIVE == MOTOR_DRIVE_STEPDIR
+    /* 1) motor_init(): STEP, DIR and nENABLE become outputs; the driver is left
+     *    DISABLED (nENABLE high) and STEP low, so nothing moves before a job.
+     *    With nSLEEP routed, it is written LOW before the pin becomes an output
+     *    (level first, then mode - the D31 rule for the VH gate). */
+    for (int p = 0; p < 2; p++)
+        for (int i = 0; i < 16; i++) g_mode[p][i] = -1;
+    reset_log();
+    motor_init();
+    CHECK(MODE(PIN_MOTOR_STEP) == GPIO_OUT);
+    CHECK(MODE(PIN_MOTOR_DIR) == GPIO_OUT);
+    CHECK(MODE(PIN_MOTOR_ENABLE) == GPIO_OUT);
+    CHECK(LVL(PIN_MOTOR_ENABLE) == 1);            /* active-low: driver off */
+    CHECK(LVL(PIN_MOTOR_STEP) == 0);
+    CHECK(LVL(PIN_MOTOR_DIR) == 1);               /* forward */
+#ifdef PIN_MOTOR_SLEEP
+    CHECK(MODE(PIN_MOTOR_SLEEP) == GPIO_OUT);
+    CHECK(LVL(PIN_MOTOR_SLEEP) == 0);             /* asleep until the first feed */
+#endif
+
+    /* 2) THE DRIVER CONTRACT. Over a feed: nENABLE is low before the first STEP
+     *    rising edge (tnENABLE = 20 us is covered by the step period), nSLEEP -
+     *    when routed - is high at least tWAKE = 1 ms before it, and no STEP
+     *    pulse is narrower than the 1 us the SGM42630 needs high or low. */
+    reset_log();
+    motor_step_lines(100);
+    {
+        int fr = first_step_rise();
+        CHECK(fr > 0);
+        uint32_t t_en = 0, t_sl = 0;
+        CHECK(level_before(PIN_MOTOR_ENABLE, fr, &t_en) == 0);
+        (void)t_en;
+#ifdef PIN_MOTOR_SLEEP
+        CHECK(level_before(PIN_MOTOR_SLEEP, fr, &t_sl) == 1);
+        CHECK(fr > 0 && g_log[fr].us - t_sl >= 1000u);   /* tWAKE */
+#else
+        (void)t_sl;
+#endif
+        uint32_t mh, ml;
+        step_widths(&mh, &ml);
+        CHECK(mh >= 1u && ml >= 1u);
+    }
+
+    /* 3) THE FEED DISTANCE, exactly: one rising edge per line. The literal 100
+     *    is deliberate (D34) - MOTOR_STEPS_PER_LINE is the constant under test.
+     *    With the SGM42630 it can only be 1, 2, 4 or 8 times the full steps
+     *    per line; FIELDWORK measurement 2 settles which. */
+    CHECK(step_rises() == 100);
+    CHECK(g_writes >= 200);          /* each pulse is two writes */
+
+    /* 4) A single line advances once, and crediting elapsed time does not skip
+     *    the pulse itself - only its settle delay. */
+    reset_log();
+    motor_step_line_after(0);
+    {
+        int n0 = g_writes;
+        reset_log();
+        motor_step_line_after(100000);
+        CHECK(g_writes == n0);
+        CHECK(step_rises() == 1);
+    }
+
+    /* 5) motor_enable(0) disables the driver (and sleeps it, if routed). */
+    reset_log();
+    motor_enable(0);
+    CHECK(LVL(PIN_MOTOR_ENABLE) == 1);
+#ifdef PIN_MOTOR_SLEEP
+    CHECK(LVL(PIN_MOTOR_SLEEP) == 0);
+#endif
+
+    /* 6) motor_idle_tick() holds the driver enabled during a job and drops it
+     *    afterwards. */
+    motor_step_lines(1);
+    CHECK(LVL(PIN_MOTOR_ENABLE) == 0);
+    motor_idle_tick(1000000u);
+    CHECK(LVL(PIN_MOTOR_ENABLE) == 0);            /* still on */
+    delay_ms(2000);
+    motor_idle_tick(1000u);
+    CHECK(LVL(PIN_MOTOR_ENABLE) == 1);            /* dropped */
+#ifdef PIN_MOTOR_SLEEP
+    CHECK(LVL(PIN_MOTOR_SLEEP) == 0);
+#endif
+#else /* MOTOR_DRIVE_4PHASE */
     /* 1) motor_init() drives every phase pin, and leaves no coil energised.
      *
      *    It sets the four pins to output and does NOT write their levels. That
@@ -203,6 +358,8 @@ int main(void)
         CHECK(g_level[1][PIN_MOTOR_A1.pin] == 0 && g_level[1][PIN_MOTOR_A2.pin] == 0
            && g_level[1][PIN_MOTOR_B1.pin] == 0 && g_level[1][PIN_MOTOR_B2.pin] == 0);
     }
+
+#endif
 
     printf(fails ? "\n%d test(s) FAILED\n" : "\nALL MOTOR CHECKS PASSED\n", fails);
     return fails ? 1 : 0;

@@ -196,6 +196,27 @@ photo. `store.c` still auto-detects, but this board's default path is the
 | Small chip, mid-board | `A8` / `1611` (week-11-2016 date code), swoosh logo | Unidentified — likely a power switch / MOSFET or small driver. Verify on hardware. | low |
 | Small chip, lower-left | `310` / `1735` (week-35-2017 date code), same swoosh logo | Unidentified — likely a power switch / MOSFET or the motor driver. Verify on hardware. | low |
 
+**Markings read by the owner under magnification, 19 Sep 2026** (the board carries
+the silkscreen `FQ-D E533076`, `94V-0`, date code `2614`; see DECISIONS D43/D44 and
+[`BOARD-FQ-D-E533076.md`](BOARD-FQ-D-E533076.md)):
+
+| Component | Read as | Resolved | Role | Confidence |
+|-----------|---------|----------|------|------------|
+| **U1** | `STM32F072C8?? … U6` — fifth character faint, `CB` possible | STM32F072**C8U6** or **CBU6**, UFQFPN48 | MCU; linker already 64 K, replacement `STM32F072CBU6` | high (family + package), C8/CB open |
+| **U2** | `SOM42630`, TSSOP-28 EP | **SGM42630** (SGMICRO) | **Stepper driver, STEP/DIR indexer**, 1–1/8 µstep on USM1/USM0, nENABLE/nSLEEP/nRESET — `MOTOR_DRIVE_STEPDIR` since D43. Pinout in `BOARD-FQ-D-E533076.md` §4 | high |
+| **Q6** | `4459`, SO-8 | **Si4459ADY** (Vishay), P-ch 30 V | **VH 24 V load switch** to the head (measurement 5) | high |
+| **Q3** | `D4130 BL6B1A`, DPAK | **AOD4130** (AOS), N-ch 60 V | Low-side switch — likely Q6's gate driver (then `HEAD_VH_ON_LEVEL` is 1) | medium |
+| **D4** | `SMCJ4A`, SMC (one digit lost) | SMCJ24A (SMCJ33A possible) | TVS on the 24 V input | medium |
+| **D5** | `K51QQA 533LJ` | — | not identified | — |
+| **U5** | not legible (the row above calls the same SOIC-8 "U6") | BL24C128A per the Rev H/I/K model | config EEPROM | medium-high |
+| **J2** | 6-pin 0.1" header, unpopulated, pin 1 square, beside SW2 near the USB-B | — | **SWD header candidate** — the place to flash the replacement QFN; confirm continuity to pads 34 / 37 / 7 | medium-high |
+| **J4, J5** | two 2×5 shrouded headers, bottom edge | — | motor + sensor harnesses | medium |
+| **J7** | 6-pin JST beside SW2 | — | sensor / button-LED board | low |
+| R51, R53 | `473` | 47 kΩ | the value the SGM42630 reference schematic puts on its logic inputs | high |
+| R109 | `01C` | 10 kΩ | VREF-divider class (SGM42630 reference: 10 k / 10 k) | medium |
+| motor label | `LEILI 35BY412-339`, `IBN 60417-5041`, `No.: 20227` | 35BY412, 7.5° = 48 steps/rev | see D24 | high |
+| head label | `3056-9638 2604 09530558` | SHEC **3C56-9638** (`0` ↔ `C`) | the 57 mm KF3002-GK11C head; this unit is a 550 | high |
+
 **Correction.** Earlier revisions of this table listed a large "DYMO"-marked BGA
 network coprocessor. Neither these photos nor any of the sharper board photos
 found since (550 Rev E; 550 Turbo Rev I; 5XL Rev D and Rev I) show one. The

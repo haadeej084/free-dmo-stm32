@@ -208,7 +208,7 @@ int main(void){
     reset_state(); strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 220;
     unsigned char u[] = { 0x1B, 'U' };
     protocol_feed(u, sizeof u); protocol_task();
-    CHECK(g_reply_len == 63);
+    CHECK(g_reply_len == 64);   /* genuine ESC U length, D45 */
     CHECK(g_reply[0] == 0xB6 && g_reply[1] == 0xCA);
 
     /* 9) Backdoor GS C: count=500, SKU="ABC". */
@@ -284,7 +284,11 @@ int main(void){
     unsigned char v[] = { 0x1B, 'V' };
     protocol_feed(v, sizeof v); protocol_task();
     CHECK(g_reply_len == 34);
-    CHECK(g_reply[32] == (MODEL_PID & 0xFF) && g_reply[33] == ((MODEL_PID >> 8) & 0xFF));
+    /* Bytes 32-33: the PID as two ASCII hex digits, as a genuine 550 answers
+     * ("28" = 32 38; 19 Sep 2026, D45) - not the binary u16 this used to pin. */
+    CHECK(g_reply[32] == (uint8_t)MODEL_PID_ASCII[0] && g_reply[33] == (uint8_t)MODEL_PID_ASCII[1]);
+    CHECK(MODEL_PID_ASCII[0] == "0123456789ABCDEF"[(MODEL_PID >> 4) & 0xF]
+       && MODEL_PID_ASCII[1] == "0123456789ABCDEF"[MODEL_PID & 0xF]);   /* the two cannot drift */
 
     /* 18) ESC o takes ONE count byte (tech ref p.20: 'ESC' 'o' Count). A host
      *     that sends a u16 instead leaves a 0x00 high byte behind, which S_CMD
@@ -435,7 +439,7 @@ int main(void){
     {
         unsigned liner = ((unsigned)HEAD_DOTS * 254u + MODEL_DPI / 2u) / MODEL_DPI;
         protocol_feed(u, sizeof u); protocol_task();
-        CHECK(g_reply_len == 63);
+        CHECK(g_reply_len == 64);   /* genuine ESC U length, D45 */
         CHECK((unsigned)(g_reply[48] | (g_reply[49] << 8)) == liner);
     }
 
@@ -580,7 +584,7 @@ int main(void){
     reset_state();
     strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 3;   /* nearly empty */
     protocol_feed(u, sizeof u); protocol_task();
-    CHECK(g_reply_len == 63);
+    CHECK(g_reply_len == 64);   /* genuine ESC U length, D45 */
     CHECK((g_reply[50] | (g_reply[51] << 8)) == MODEL_DEFAULT_COUNT);
     protocol_feed(q, sizeof q); protocol_task();
     CHECK((g_reply[27] | (g_reply[28] << 8)) == 3);   /* status still says 3 left */
@@ -698,7 +702,7 @@ int main(void){
      *     over bytes 0..59 with 4..7 zeroed, stored little-endian. */
     reset_state(); strcpy(g_cfg.sku, "S0904980"); g_cfg.label_count = 220;
     protocol_feed(u, sizeof u); protocol_task();
-    CHECK(g_reply_len == 63);
+    CHECK(g_reply_len == 64);   /* genuine ESC U length, D45 */
     CHECK(g_reply[3] == 0x3C);                     /* record length, not strlen */
     {
         unsigned char tmp[60];

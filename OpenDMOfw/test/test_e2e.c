@@ -209,11 +209,11 @@ int main(void)
     {
         const uint8_t u[] = { 0x1B, 'U' };
         send_stream(u, sizeof u);
-        CHECK(read_reply(r) == 63 && r[0] == 0xB6 && r[1] == 0xCA && r[3] == 0x3C);
+        CHECK(read_reply(r) == 64 && r[0] == 0xB6 && r[1] == 0xCA && r[3] == 0x3C   /* 64: genuine length, D45 */);
         const uint8_t v[] = { 0x1B, 'V' };
         send_stream(v, sizeof v);
         CHECK(read_reply(r) == 34 && memcmp(r + 16, "FWAP", 4) == 0);
-        CHECK((r[32] | (r[33] << 8)) == MODEL_PID);
+        CHECK(r[32] == (uint8_t)MODEL_PID_ASCII[0] && r[33] == (uint8_t)MODEL_PID_ASCII[1]   /* ASCII hex PID, D45 */);
     }
 
     /* 4) SOFT_RESET in the middle of a raster: the pipeline drops the rest of

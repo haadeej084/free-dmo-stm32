@@ -148,10 +148,12 @@ int main(void)
     }
     r = ctrl_in(0x80, 6, 0x0303, 0x0409, 255, b);
     {
+        /* 14 decimal digits, UTF-16LE: a genuine 550's serial is 14 digits
+         * and may start with '0' (0416xxxxxx4527 - 19 Sep 2026, D45). */
         int digits = 1;
-        for (int i = 0; i < 12; i++)
+        for (int i = 0; i < 14; i++)
             if (b[2 + 2 * i] < '0' || b[2 + 2 * i] > '9' || b[3 + 2 * i] != 0) digits = 0;
-        CHECK(r == 26 && digits && b[2] != '0');
+        CHECK(r == 30 && digits);
     }
     CHECK(ctrl_in(0x80, 6, 0x0307, 0x0409, 255, b) == STALL);
     /* An unknown descriptor TYPE stalls too, which is a different branch from
@@ -244,11 +246,12 @@ int main(void)
     r = ctrl_in(0xA1, 0, 0, 0, 1023, b);
     {
         /* 450-family layout: the model string, then SERN:<USB serial>; */
-        char want[200], serial[13];
+        char want[200], serial[15];
         uint8_t sd[64];
         ctrl_in(0x80, 6, 0x0303, 0x0409, 255, sd);
-        for (int i = 0; i < 12; i++) serial[i] = (char)sd[2 + 2 * i];
-        serial[12] = 0;
+        CHECK(sd[0] == 30);                          /* 14-digit serial, as genuine (D45) */
+        for (int i = 0; i < 14; i++) serial[i] = (char)sd[2 + 2 * i];
+        serial[14] = 0;
         snprintf(want, sizeof want, "%sSERN:%s;", MODEL_IEEE_ID, serial);
         r = ctrl_in(0xA1, 0, 0, 0, 1023, b);
         int len = (b[0] << 8) | b[1];

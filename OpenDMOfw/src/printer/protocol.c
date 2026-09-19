@@ -23,7 +23,7 @@
  *                         Medium 87.5 %, Normal 100 % (the default), Dark 112.5 %
  *   ESC y / ESC z        400-series step-resolution commands, no argument,
  *                         accepted and ignored (this family is 300x300 only)
- *   ESC U                get SKU info -> 63-byte consumable record
+ *   ESC U                get SKU info -> 64-byte consumable record
  *   ESC V                get version -> 34-byte reply
  *   ESC *                restore factory settings (config back to defaults).
  *                         0x2A is the genuine opcode: the stock Windows port
@@ -398,7 +398,10 @@ static void send_status(void)
     uint8_t r[32];
     for (int i = 0; i < 32; i++) r[i] = 0;
 
-    r[0] = s_job_active ? 1 : 0;                 /* PrintStatus: Printing/Idle */
+    /* PrintStatus. A genuine 550 answers 2 (error) whenever the bay is empty,
+     * 0 idle, and 4 (busy) while its media detection has not completed yet
+     * (19 Sep 2026 probes, D45). We have no detection phase, so 0/1/2. */
+    r[0] = s_job_active ? 1 : (usbp_paper_present() ? 0 : 2);
     r[1] = (uint8_t)(s_job_id & 0xFF);           /* PrintJobID u32 LE */
     r[2] = (uint8_t)((s_job_id >> 8) & 0xFF);
     r[3] = (uint8_t)((s_job_id >> 16) & 0xFF);
@@ -429,13 +432,16 @@ static void send_status(void)
     /* bytes 23..26 ErrorID = 0 */
     r[27] = (uint8_t)(c->label_count & 0xFF);    /* LabelCount u16 LE */
     r[28] = (uint8_t)((c->label_count >> 8) & 0xFF);
-    r[29] = 0x01;                                /* EPS status: present */
-    r[30] = 0x01;                                /* PrintHeadVoltage: ok */
-    r[31] = 0xFF;                                /* Reserved (default -1) */
+    /* Bytes 29-31 were 1 / 1 / 0xFF from the tech ref's defaults. A genuine
+     * 550 answers 0 / 0 / 0 in every state probed (idle, no media, after a job,
+     * during detection - D45), so that is what we send. */
+    r[29] = 0x00;                                /* EPS status: as genuine */
+    r[30] = 0x00;                                /* PrintHeadVoltage: unknown, as genuine */
+    r[31] = 0x00;                                /* Reserved: 0, as genuine */
     usbp_send_reply(r, sizeof(r));
 }
 
-/* ---- ESC U: 63-byte consumable record (tech ref p.16-19) --------
+/* ---- ESC U: 64-byte consumable record (tech ref p.16-19; genuine length D45) --------
  *
  * This layout is no longer read off the manual alone. The repository root of
  * this very project (free-dmo-stm32, Src/main.c) embeds 37 dumps of GENUINE
@@ -489,8 +495,13 @@ static void send_sku_record(void)
 {
     const op_config_t *c = store_get();
     const paper_t *p = s_paper ? s_paper : paper_lookup(PAPER_DEFAULT_CODE);
-    uint8_t r[63];
-    for (int i = 0; i < 63; i++) r[i] = 0;
+    /* SIXTY-FOUR bytes: a genuine 550 answers ESC U with exactly 64 (19 Sep
+     * 2026, both with and without a roll fitted - D45). The tech ref's "63" was
+     * one short. Bytes 60-63 on the genuine reply were 26 72 28 02 with the
+     * CRC (bytes 0-59) still verifying, so they are outside the record proper
+     * and their meaning is unknown; we send zeros. */
+    uint8_t r[64];
+    for (int i = 0; i < 64; i++) r[i] = 0;
 
     /* 0.1 mm values from the configured paper's dot dimensions at MODEL_DPI */
     uint16_t w_tmm = dots_to_tenth_mm(p->width_dots);
@@ -567,8 +578,13 @@ static void send_version(void)
     static const char fw[] = MODEL_FW_VERSION;
     for (int i = 0; i < 16 && i < (int)sizeof(hw) - 1; i++) r[i]      = (uint8_t)hw[i];
     for (int i = 0; i < 16 && i < (int)sizeof(fw) - 1; i++) r[16 + i] = (uint8_t)fw[i];
-    r[32] = (uint8_t)(MODEL_PID & 0xFF);         /* USB PID LE */
-    r[33] = (uint8_t)(MODEL_PID >> 8);
+    /* Bytes 32-33: the PID as TWO ASCII HEX DIGITS. PROTOCOL.md used to say
+     * "u16 LE" and this code sent 28 00; a genuine 550 sends 32 38 = "28"
+     * (19 Sep 2026, D45). MODEL_PID_ASCII is kept next to MODEL_PID in model.h
+     * so the two cannot drift apart. */
+    static const char pid_ascii[] = MODEL_PID_ASCII;
+    r[32] = (uint8_t)pid_ascii[0];
+    r[33] = (uint8_t)pid_ascii[1];
     usbp_send_reply(r, sizeof(r));
 }
 

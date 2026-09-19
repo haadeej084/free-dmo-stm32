@@ -19,21 +19,35 @@ itself.
 Each line says what to bring back. Anything you cannot get, leave unticked and
 say so; a step that fails costs only itself.
 
+> **Session of 19 Sep 2026 (genuine 550, `FQ-D E533076` unit):** items 1–4
+> done with `tools/probe_genuine_win.py` — no Zadig, no pyusb, the Windows
+> `usbprint` interface only. Results in DECISIONS D45 and `livetest/550_probe.txt`.
+>
+> ⚠ **Never change the port of a DYMO print queue** (e.g. to a file port to
+> catch the driver's bytes). It breaks DYMO Connect's link to the printer for
+> good — only deleting the queue and letting PnP recreate it recovers. See D45.
+> The full-job capture (item 7) therefore needs USBPcap; there is no software
+> shortcut through the spooler with this driver.
+>
+> ⚠ Run the probe only while the printer is idle in DYMO Connect, never in the
+> seconds after a replug: both talk on the same bulk-IN pipe (D45).
+
 - [ ] **0. Capture running** before the printer is plugged in.
       → `550_enum.pcapng`
-- [ ] **1. Device ID** — `python3 tools/probe_genuine.py --out 550_devid.txt`
+- [x] **1. Device ID** — `python3 tools/probe_genuine.py --out 550_devid.txt`
+      (Windows, no Zadig: `py -3 tools/probe_genuine_win.py --id-only`)
       → the IEEE-1284 string verbatim *(closes a Hardware-only item)*
-- [ ] **2. ESC V** — same run
+- [x] **2. ESC V** — same run
       → the version reply, byte for byte
-- [ ] **3. Status struct, six states** — `ESC A` once per state, each labelled
-  - [ ] 3a idle, roll fitted, cover closed
-  - [ ] 3b **out of paper**
-  - [ ] 3c **cover open**
-  - [ ] 3d mid-job (poll during a long print)
-  - [ ] 3e immediately after the last label ejects
+- [x] **3. Status struct, six states** — `ESC A` once per state, each labelled
+  - [x] 3a idle, roll fitted, cover closed — plus the *detection-pending* state (byte 0 = 4)
+  - [x] 3b **out of paper** — byte 0 = 2, byte 10 = 2, SKU/count kept
+  - [ ] 3c **cover open** — the 550 has no cover switch; nothing to measure
+  - [ ] 3d mid-job — not polled: the probe would compete with DYMO's own polling during the job
+  - [x] 3e immediately after the last label ejects — count −1, job ID / index back to 0
   - [ ] 3f third-party roll, if one is to hand *(also the DRM question)*
       → six 32-byte dumps, each labelled with its state
-- [ ] **4. ESC U** — the roll record
+- [x] **4. ESC U** — the roll record (S0722400, 64 bytes, CRC verified)
       → the reply **plus the SKU on the box** (e.g. `S0722370` / `30252`)
 - [ ] **5. Print two labels, measure with a ruler**
       → (a) printed length of one label, (b) gap between the two prints, in mm
@@ -84,8 +98,12 @@ that matters, that is a printer which enumerates and never prints.
 
 **How:**
 ```
-python3 tools/probe_genuine.py --out 550_devid.txt
+python3 tools/probe_genuine.py --out 550_devid.txt          # Linux / pyusb
+py -3 tools/probe_genuine_win.py --out 550_devid.txt        # Windows, stock DYMO driver, no Zadig
 ```
+The Windows variant goes through Microsoft's `usbprint.sys` (the class driver
+DYMO's stack sits on): `IOCTL_USBPRINT_GET_1284_ID` for the device ID, plain
+`WriteFile`/`ReadFile` for the probes, same read-only command list.
 It asks the printer directly and is **read-only by construction** — the send path
 refuses any byte sequence not on its own safe list, so it cannot print, feed,
 write configuration or touch the update path.

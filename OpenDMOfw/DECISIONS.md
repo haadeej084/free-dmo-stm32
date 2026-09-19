@@ -19,8 +19,9 @@ D.mo on the wire.)
 `src/model.h` / `usb_desc.c` present VID `0x0922`, PID `0x002A` (5XL) /
 `0x0028` (550), `DYMO` / `LabelWriter 5XL|550` strings, and an IEEE-1284 device
 ID whose `MFG`+`MDL` makes Windows derive the exact hardware ID D.mo's
-own driver package expects. The serial number is 12 decimal digits from the MCU
-UID (unique per chip). To target a different identity, edit `model.h`.
+own driver package expects. The serial number is **14** decimal digits from the
+MCU UID (unique per chip) — a genuine 550's is 14 digits (D45). To target a
+different identity, edit `model.h`.
 
 ## D3 — Clock: HSI48 + CRS instead of an external crystal
 
@@ -1945,3 +1946,45 @@ line and the data-pin count (5b/D36), and — by watching which resistor pad mov
 with which signal — most of the routing (1) without a single continuity check
 on a QFN pad. What it cannot answer: C8 vs CB, and the head's resistance grade
 (7), which needs the current probe. Added to FIELDWORK 8 as item 0b.
+
+## D45 — What a genuine 550 actually answers (live probe, 19 Sep 2026)
+
+The owner's LabelWriter 550 (the `FQ-D E533076` unit, D44) was interrogated over
+its USB cable with `tools/probe_genuine_win.py` — the Windows variant of the
+read-only probe, which needs no Zadig: it opens Microsoft's own `usbprint`
+device interface, asks the IEEE-1284 ID through `IOCTL_USBPRINT_GET_1284_ID`,
+and passes `ESC A` / `ESC V` / `ESC U` through `WriteFile`/`ReadFile`. Every
+answer below is from that unit; the firmware now reproduces them.
+
+| Item | Genuine answer | Was | Now |
+|------|----------------|-----|-----|
+| IEEE-1284 ID | `MFG:DYMO;CID:DYMOLabelWriter_550B;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;SERN:0416xxxxxx4527;` — length prefix `81 81` | no `CID`; 12-digit serial | `CID` key restored (sourced this time); 14-digit serial; we keep the spec-conformant big-endian length |
+| `ESC V` | `LW550B_PPB_00002` + `FWAP0002` `0042` `0725` + **`"28"` ASCII** | `LW550-REV.K`, `FWAP000100010921`, PID as binary u16 LE | byte-identical to the genuine reply for the 550 |
+| `ESC A` bytes 29–31 | `00 00 00` in every state | `01 01 FF` (tech ref defaults) | `00 00 00` |
+| `ESC A` byte 0 | `0` idle; **`2` with the bay empty**; **`4` during media detection** (SKU/count empty) | `0`/`1` only | `0`/`1`/`2` (no detection phase here) |
+| `ESC A` byte 10 | `8` with a roll, `2` without | same | same |
+| `ESC A` SKU/count | `S0722400`, 42 → 41 → 40 per label; kept while the roll is out | — | unchanged (per-label RAM decrement matches) |
+| `ESC U` | **64 bytes**; all zero before a detection, the cached last record after the roll is removed; CRC-32 over 0–59 reproduces; bytes 60–63 = `26 72 28 02` | 63 bytes | 64 bytes, 60–63 zero |
+| `ESC U` byte 38 | `15` (vertical offset 1.5 mm) on S0722400 | 16 | unchanged (16 is the tag-fleet mode; per-paper value if ever needed) |
+
+Two observations about the *host*, recorded because they cost an evening:
+
+* **Do not touch a DYMO queue's port.** Moving "DYMO LabelWriter 550 (Kopie 1)"
+  to a file port and back — to capture the driver's byte stream without USBPcap
+  — broke DYMO Connect's link to the printer permanently ("Verbroken" on every
+  queue) even though Windows printed test pages and the probe answered. The
+  driver's language monitor `LW5XXMON.DLL` failed the despool with error 122 on
+  the file port, and after the switch back neither a spooler restart, a PnP
+  service restart, a WebApi-host restart (`/auto`), a USB replug nor a power
+  cycle restored it. What did: **deleting the queue** and letting PnP recreate
+  it (new USBPRINT instance). The file-port route is closed for this driver;
+  item 7 of LIVETEST needs USBPcap.
+* **The probe can steal a reply from DYMO's poller.** `usbprint` hands a read
+  whatever sits on bulk-IN, and DYMO Connect polls `ESC A` on the same pipe: a
+  128-byte `ESC U` read once returned the 64-byte record *followed by DYMO's
+  32-byte status*. The tool now requests exactly 32 / 34 / 64 bytes. Run it
+  only when the printer is idle in DYMO Connect, never in the seconds after a
+  replug when DYMO's own handshake is running.
+
+The raw log is `livetest/550_probe.txt` (serial redacted). Still open from
+LIVETEST: item 5 (ruler), 6 (density ladder), 7 (full job capture — USBPcap).

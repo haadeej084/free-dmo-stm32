@@ -74,21 +74,27 @@ def firmware_status(job_active=0, job_id=0, label_index=0, density_pct=100,
             r[11 + i] = sku[i]
     # r[23..26] ErrorID = 0
     r[27:29] = (label_count & 0xFFFF).to_bytes(2, "little")
-    r[29] = 0x01   # EPS present
-    r[30] = 0x01   # head voltage ok
-    r[31] = 0xFF   # reserved
+    r[29] = 0x00   # EPS: 0 on a genuine 550 in every probed state (D45)
+    r[30] = 0x00   # head voltage: 0 = unknown, as genuine
+    r[31] = 0x00   # reserved: 0, as genuine (the tech ref's 0xFF is not what ships)
     return bytes(r)
 
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: send_version()
 # ---------------------------------------------------------------------------
-def firmware_version(pid, hw=b"LW5XL-REV.K", fw=b"FWAP000100010921"):
+def firmware_version(pid, hw=b"LW5XL-REV.K", fw=b"FWAP000200420725"):
     r = bytearray(34)
     for i in range(16):
         r[i] = hw[i] if i < len(hw) else 0
         r[16 + i] = fw[i] if i < len(fw) else 0
-    r[32:34] = (pid & 0xFFFF).to_bytes(2, "little")
+    # Bytes 32-33: the PID as two ASCII hex digits, as a genuine 550 sends
+    # them ("28" = 32 38), not a binary u16 (D45).
+    r[32:34] = b"%02X" % (pid & 0xFF)
     return bytes(r)
+
+# The reply a genuine LabelWriter 550 gave on 19 Sep 2026 (probe_genuine_win.py):
+GENUINE_550_VERSION = b"LW550B_PPB_00002FWAP00020042072528"
+
 
 # ---------------------------------------------------------------------------
 # Transcription of src/printer/protocol.c :: send_sku_record()
@@ -108,7 +114,7 @@ def firmware_sku_record(sku, label_count, w_tmm=None, h_tmm=None,
         w_tmm = dots_to_tenth_mm(1233, dpi)
     if h_tmm is None:
         h_tmm = dots_to_tenth_mm(1883, dpi)
-    r = bytearray(63)
+    r = bytearray(64)                 # genuine ESC U reply is 64 bytes (D45)
     r[0] = 0xB6; r[1] = 0xCA          # magic 0xCAB6 LE
     r[2] = 0                          # version
     r[3] = 0x3C                       # payload length, constant on 37/37 tags
@@ -149,7 +155,7 @@ check(fw[10] == cap[10], "[10] MainBayStatus = 0x08 (OK, not counterfeit/no-medi
 check(fw[23:27] == cap[23:27], "[23-26] ErrorID = 0")
 # Field positions must line up with the capture even where the value is state-dependent:
 check(cap[9] == 0x64 and cap[10] == 0x08, "capture sanity: density@9=0x64, bay@10=0x08")
-check(fw[29] == 1 and fw[30] == 1 and fw[31] == 0xFF, "[29-31] EPS/voltage/reserved = 1/1/0xFF (tech ref)")
+check(fw[29] == 0 and fw[30] == 0 and fw[31] == 0, "[29-31] EPS/voltage/reserved = 0/0/0 (genuine 550, D45)")
 
 print("\n== STATUS: full-field layout sanity (positions) ==")
 # A synthetic 'printing' status with known fields must place them at the right offsets.
@@ -164,16 +170,18 @@ check(st[27:29] == (220).to_bytes(2, "little"), "LabelCount u16 LE at [27-28]")
 
 print("\n== VERSION (ESC V) vs LW550_VERSION [Size=34] ==")
 # Per-model hardware string, mirroring model.h (MODEL_HW_VERSION):
-for pid, name, hw in [(0x002A, "5XL", b"LW5XL-REV.K"), (0x0028, "550", b"LW550-REV.K")]:
+for pid, name, hw in [(0x002A, "5XL", b"LW5XL-REV.K"), (0x0028, "550", b"LW550B_PPB_00002")]:
     v = firmware_version(pid, hw=hw)
     check(len(v) == 34, f"{name}: version is exactly 34 bytes")
-    check(v[32:34] == (pid).to_bytes(2, "little"), f"{name}: ProdID u16 LE at [32-33]")
+    check(v[32:34] == b"%02X" % pid, f"{name}: ProdID as two ASCII hex digits at [32-33] (genuine)")
+    if name == "550":
+        check(v == GENUINE_550_VERSION, "550: byte-for-byte the genuine unit's ESC V reply (19 Sep 2026)")
     check(v[0:len(hw)] == hw and len(v[0:16]) == 16, f"{name}: HwVer field is the per-model string")
     check(len(v[16:32]) == 16, f"{name}: FwVer field is 16 bytes")
 
 print("\n== SKU RECORD (ESC U) vs 37 genuine roll-tag dumps ==")
 u = firmware_sku_record(b"S0904980", 220)
-check(len(u) == 63, "SKU record is exactly 63 bytes")
+check(len(u) == 64, "SKU record is exactly 64 bytes (genuine 550 reply length, D45)")
 check(u[0] == 0xB6 and u[1] == 0xCA, "magic 0xCAB6 (LE) at [0-1]")
 check(u[3] == 0x3C, "byte 3 is the constant payload length 0x3C, not the SKU length")
 check(u[8:8+8] == b"S0904980", "SKU bytes at [8..]")

@@ -48,7 +48,12 @@
  * four-character groups, no separators - so the old "FWAP01.02.2112" was not a
  * well-formed reply, dots and all. The VALUES are still ours to choose
  * (DECISIONS D12); the host treats them as informational. */
-#define MODEL_FW_VERSION_COMMON  "FWAP000100010921"
+/* Read off a genuine 550 on 19 Sep 2026 (DECISIONS D45): the unit answered
+ * ESC V with "LW550B_PPB_00002" + "FWAP" "0002" "0042" "0725" + the PID as TWO
+ * ASCII HEX CHARACTERS ("28"), not a binary u16. So: application firmware
+ * 2.42 of July 2025. We report the same, so a host that compares versions
+ * sees a current genuine unit. */
+#define MODEL_FW_VERSION_COMMON  "FWAP000200420725"
 
 /* Build identifier, stamped by the Makefile / build.sh from `git describe`.
  * Reported verbatim by GS D 0x05 so a fieldwork report says which image was
@@ -78,9 +83,13 @@
    * USBPRINT\DYMOLabelWriter_550C80D from MFG+MDL only (NameModel(20) + OS
    * checksum), so those two are the load-bearing fields. Key names and order
    * follow the published device ID of the genuine LabelWriter 450 family
-   * (MFG/CMD/MDL/CLASS/DESCRIPTION); the 550's own string is unverified. No
-   * CID field: the previous one had no source. */
-  #define MODEL_IEEE_ID         "MFG:DYMO;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;"
+   * (MFG/CMD/MDL/CLASS/DESCRIPTION). VERIFIED on a genuine 550 through
+   * usbprint's GET_1284_ID on 19 Sep 2026 (D45): the unit reports
+   *   MFG:DYMO;CID:DYMOLabelWriter_550B;CMD: ;MDL:LabelWriter 550;
+   *   CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;SERN:<14 digits>;
+   * so the CID key is back, sourced this time, and SERN is appended by
+   * usb_desc.c from the 14-digit USB serial. */
+  #define MODEL_IEEE_ID         "MFG:DYMO;CID:DYMOLabelWriter_550B;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;"
   #define MODEL_HEAD_DOTS       672      /* 57 mm @ 300 dpi (official spec) */
   #define MODEL_DPI             300
   /* Two shift-register halves (2x336 dots), each with its own heat strobe —
@@ -96,11 +105,13 @@
   #define MODEL_DI2_DOTS        336
   #define MODEL_DEFAULT_SKU     "30387"  /* Internet Postage, biggest 550 roll */
   #define MODEL_DEFAULT_COUNT   100
-  /* ESC V version strings (16 chars each, zero-padded). Format per tech ref p.20;
-   * the exact values are an assumption (DECISIONS D12) — kept consistent with the
-   * model's PID/MDL so a 550 reports a 550 hardware string. */
-  #define MODEL_HW_VERSION      "LW550-REV.K"
+  /* ESC V version strings (16 chars each, zero-padded). The hardware string is
+   * the one a genuine 550 answers (19 Sep 2026, D45): exactly 16 characters,
+   * "LW550B" matching the CID above. MODEL_PID_ASCII is what the genuine unit
+   * puts in bytes 32-33: the PID as two ASCII hex digits. */
+  #define MODEL_HW_VERSION      "LW550B_PPB_00002"
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
+  #define MODEL_PID_ASCII       "28"
 #else /* OP104 (4", 300 dpi - shipping-label class). NOT the default: model.h
        * selects MODEL_OP57 above when neither is defined, because OP57 is the
        * LabelWriter 550, the only model with a board this firmware runs on. */
@@ -130,8 +141,9 @@
   /* ESC V version strings (16 chars each, zero-padded). Format per tech ref p.20;
    * the exact values are an assumption (DECISIONS D12) — kept consistent with the
    * model's PID/MDL so a 5XL reports a 5XL hardware string. */
-  #define MODEL_HW_VERSION      "LW5XL-REV.K"
+  #define MODEL_HW_VERSION      "LW5XL-REV.K"   /* unverified; the 550's is "LW550B_PPB_00002" */
   #define MODEL_FW_VERSION      MODEL_FW_VERSION_COMMON
+  #define MODEL_PID_ASCII       "2A"           /* by analogy with the 550's "28" */
 #endif
 
 /* Strobe polarity: which level FIRES the heat drivers.

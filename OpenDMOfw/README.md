@@ -108,6 +108,7 @@ src/                  firmware (C, hand-rolled USB FS device stack)
   config/store.c      I2C EEPROM config store (SKU + count), with compiled defaults
 tools/opsend.py       driver-less host sender (libusb) that speaks the real protocol
 tools/probe_genuine.py  read-only interrogation of a GENUINE printer (LIVETEST.md)
+tools/probe_genuine_win.py  the same on Windows through usbprint.sys - no Zadig, DYMO driver untouched
 tools/discover_pins.py  self-discovering pin map via GS D on a flashed board (FIELDWORK 3.5)
 tools/calib_thermistor.py  solves the thermistor divider from ADC codes, no meter
 tools/gen_thermal_table.py  regenerates the NTC lookup table in thermal.c

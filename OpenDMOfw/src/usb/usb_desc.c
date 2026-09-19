@@ -65,8 +65,11 @@ USTR(str_prod, 'D',0,'Y',0,'M',0,'O',0,' ',0,
 
 /* Serial: 12 decimal digits derived from the MCU-UID (unique per chip),
  * matching the numeric format of the genuine device-instance suffix.
- * Length = 2 (header) + 12*2 = 26 bytes. Filled by usb_desc_init_serial(). */
-static uint8_t str_serial[26];
+ * Length = 2 (header) + 14*2 = 30 bytes. Filled by usb_desc_init_serial().
+ * FOURTEEN digits: a genuine 550 reports SERN:0416xxxxxx4527 (19 Sep 2026,
+ * D45) and the 450 example in the comment below is 14 digits too; the old
+ * 12-digit serial was one of ours. */
+static uint8_t str_serial[30];
 
 /* IEEE-1284 device ID (printer-class GET_DEVICE_ID). MFG+MDL are chosen so the
  * OS derives the genuine hardware ID; see model.h. The published strings of
@@ -75,7 +78,7 @@ static uint8_t str_serial[26];
  * 01010112345600 next to SERN:01010112345600), so the serial is appended here
  * once it is known. */
 #define SERN_KEY "SERN:"
-static char     s_devid[sizeof(MODEL_IEEE_ID) - 1 + sizeof(SERN_KEY) - 1 + 12 + 1 + 1];
+static char     s_devid[sizeof(MODEL_IEEE_ID) - 1 + sizeof(SERN_KEY) - 1 + 14 + 1 + 1];
 static uint16_t s_devid_len;
 
 const char *usb_desc_device_id(uint16_t *len)
@@ -89,13 +92,13 @@ void usb_desc_init_serial(void)
     volatile uint32_t *uid = (volatile uint32_t*)UID_BASE;
     /* 96-bit UID is three words at 0x1FFFF7AC; do not read uid[3]. */
     uint32_t x = uid[0] ^ uid[1] ^ uid[2];
-    /* 12 digits from the 96-bit UID, biased away from a leading zero. */
+    /* 14 digits from the 96-bit UID. A leading zero is fine: the genuine
+     * serial 0416xxxxxx4527 has one. */
     uint64_t v = ((uint64_t)(x ^ 0xA5A5A5A5u) << 16) |
                  (uint64_t)((uid[2] >> 16) & 0xFFFFu);
-    v %= 900000000000ULL;              /* keep to 12 digits, no leading zero */
-    v += 100000000000ULL;
-    str_serial[0] = 26; str_serial[1] = 3;
-    for (int i = 11; i >= 0; i--) {
+    v %= 100000000000000ULL;           /* keep to 14 digits */
+    str_serial[0] = 30; str_serial[1] = 3;
+    for (int i = 13; i >= 0; i--) {
         str_serial[2 + i*2]     = (uint8_t)('0' + (int)(v % 10));
         str_serial[2 + i*2 + 1] = 0;
         v /= 10;
@@ -104,7 +107,7 @@ void usb_desc_init_serial(void)
     uint16_t n = 0;
     for (const char *p = MODEL_IEEE_ID; *p; p++) s_devid[n++] = *p;
     for (const char *p = SERN_KEY; *p; p++)      s_devid[n++] = *p;
-    for (int i = 0; i < 12; i++)                  s_devid[n++] = (char)str_serial[2 + i*2];
+    for (int i = 0; i < 14; i++)                  s_devid[n++] = (char)str_serial[2 + i*2];
     s_devid[n++] = ';';
     s_devid[n] = 0;
     s_devid_len = n;

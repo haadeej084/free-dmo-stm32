@@ -19,9 +19,9 @@ carries replies (status, SKU record, version).
 | idProduct | `0x002A` | `0x0028`. The driver's own PID→model table: `0x28` 550, `0x29` 550 Turbo, `0x2A` 5XL, `0x2B` 550 Twin Turbo, `0x2C` 550 **Twin** Pro, `0x2D` 5XL Pro, `0x1010` LabelManager Executive 640. Source: `dcx/src_DYMO.PrinterCommands/DYMO.PrinterCommands/PID.cs` and `CommandUtils.PidToModel`, which map exactly these seven and nothing else. Earlier revisions of this row invented a "550 Pro" at `0x2C` and shifted everything after it by one, giving a `0x2E` the driver does not define — DYMO's own PID space has no plain 550 Pro at all |
 | Manufacturer | `DYMO` | `DYMO` |
 | Product | `DYMO LabelWriter 5XL` | `DYMO LabelWriter 550` |
-| Serial | 12 decimal digits from the MCU UID (unique per chip) | same |
+| Serial | **14** decimal digits from the MCU UID (unique per chip; may start with `0`) — a genuine 550 reports `0416xxxxxx4527` (D45) | same |
 | Endpoints | bulk IN `0x82` (listed first), bulk OUT `0x02` | same |
-| IEEE-1284 ID | `MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;SERN:<USB serial>;` | same with `550` |
+| IEEE-1284 ID | `MFG:DYMO;CMD: ;MDL:LabelWriter 5XL;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 5XL;SERN:<USB serial>;` (unverified) | **Verified on a genuine 550, 19 Sep 2026 (D45):** `MFG:DYMO;CID:DYMOLabelWriter_550B;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;SERN:<14 digits>;` — note the `CID` key. The genuine reply's 2-byte length prefix is `81 81`, i.e. the total length (129) in **both** bytes rather than big-endian `00 81`; Windows accepts either, and we send the spec-conformant big-endian form |
 
 The `MFG`+`MDL` pair is what makes Windows derive the hardware ID
 `USBPRINT\<MFG+MDL, spaces to underscores, cut to 20><4-char OS CRC>`, here
@@ -29,7 +29,10 @@ The `MFG`+`MDL` pair is what makes Windows derive the hardware ID
 `DYMO_LW5xx.inf` binds (that INF has no compatible IDs, so the other 1284 keys
 cannot affect binding). The key layout, including the trailing `SERN` equal to
 the USB serial, follows the published LabelWriter 450 string (apple/cups#5821,
-michaelrsweet/pappl#396); the genuine 550/5XL string has not been captured. Microsoft
+michaelrsweet/pappl#396); the genuine **550** string was read on 19 Sep 2026 through
+usbprint's `IOCTL_USBPRINT_GET_1284_ID` (`tools/probe_genuine_win.py`, D45) and
+adds a `CID:DYMOLabelWriter_550B` key between `MFG` and `CMD`; the 5XL string is
+still uncaptured. Microsoft
 warns its CRC "may not match ... any other CRC algorithm", so the bench check is
 `setupapi.dev.log` (FIELDWORK section 5). Head widths (1248 / 672 dots) come from the tech reference and
 the driver GPDs' `MaxPrintableWidth`.
@@ -70,7 +73,7 @@ is big-endian**. `n` = 1 byte, `n1 n2` = u16 LE, `n1..n4` = u32 LE.
 | `1B 43` + duty | **ESC C** | Print density, `0–200` % (0 = off); echoed in status byte 9. The Windows driver's density ladder is `0x4B`/`0x58`/`0x64`/`0x71` (75/88/100/113 %), mirroring the ESC c/d/e/g presets below | tech ref p.16; capture byte9=0x64; LW5XX.GPD |
 | `1B 63` / `1B 64` / `1B 65` / `1B 67` | **ESC c / d / e / g** | Zero-argument print-density presets: Light 75 %, Medium 87.5 %, Normal 100 %, Dark 112.5 %. The CUPS driver emits one of these per job for the PPD's darkness choice. **`ESC d` was previously our feed backdoor** — a collision that would have eaten the next command's `ESC`; the feed now lives on `GS D 0x02` and `ESC f 1 n` | LW450 tech ref p.19; CUPS driver `SetPrintDensity` |
 | `1B 4D` + 8 bytes | **ESC M** | Media-type descriptor (`mtDefault` = 8 zero bytes), consumed + ignored. The 8-byte argument is confirmed by the driver's own length table, but note that the **Windows spooler driver never sends it** — no `1B 4D` is constructed anywhere in the three driver DLLs or any GPD. Only the managed DYMO Connect path emits it | port monitor length table; decompiled driver |
-| `1B 55` | **ESC U** | Get SKU info → 63-byte consumable record (below) | tech ref p.16 |
+| `1B 55` | **ESC U** | Get SKU info → **64-byte** consumable record (below; the genuine reply is 64, the tech ref's 63 is one short — D45) | tech ref p.16; genuine probe |
 | `1B 56` | **ESC V** | Get version → 34-byte reply (below) | tech ref p.20 |
 | `1B 2A` | **ESC *** | Restore factory settings (config back to defaults). `0x2A` is the opcode the stock port monitor dispatches as `RestoreFactorySettings`; it has no entry for `0x24`, which lands in its Unknown handler. The tech ref prints `1B 24` — the mnemonic is right and the hex is the typo — so we accept `1B 24` as an alias. The reset never clears `OP_FLAG_VH_INHIBIT`: the heat-rail interlock is not a setting a host may switch off | lw5xxmon.dll opcode table; tech ref p.20 |
 | `1B 6F` + count(u8) | **ESC o** | Set label count. **One** argument byte: the tech ref's table is `Byte 0 1 2 / 'ESC' 'o' Count`, three bytes total, where `ESC n`/`ESC L` get explicit two-byte tables. If a host does send a u16, its `0x00` high byte is ignored as a stray rather than eaten as a command — the safe direction. Use `GS C` for counts above 255 | tech ref p.20 |
@@ -141,21 +144,31 @@ Layout per tech ref p.13–16; values cross-checked against a live capture
 
 | Byte | Field | Meaning |
 |------|-------|---------|
-| 0 | PrintStatus | 0 idle, 1 printing, 2 error, 3 cancel, 4 busy, 5 unlock |
+| 0 | PrintStatus | 0 idle, 1 printing, 2 error, 3 cancel, 4 busy, 5 unlock. **Genuine 550 (D45):** `0` idle with a roll; **`2` whenever the bay is empty** (together with byte 10 = 2); **`4` while media detection has not completed** — right after DYMO Connect (re)connects, with SKU and count still empty. We answer 0 / 1 / 2; there is no detection phase here |
 | 1–4 | PrintJobID (u32 LE) | Job ID of the ongoing job (from ESC s) |
 | 5–6 | LabelIndex (u16 LE) | Label index (from ESC n) |
 | 7 | Reserved | 0 |
 | 8 | PrintHeadStatus | `0` = ok, `1` = overheated, `2` = unknown. Derived from the thermal path since cycle 3: `2` when the thermistor reading is not believable (open circuit, short, or no divider fitted — DECISIONS D33), `1` while the D7 over-temperature latch is set, `0` otherwise. DYMO's own 550 Linux driver reads exactly this byte (`phStatus = status[8] & 3`) and pauses the job and reprints the page on `1`, so a constant `0` meant a host could never see an overheat |
 | 9 | PrintDensity (%) | 0–200 (last ESC C / default 100) |
-| 10 | MainBayStatus | Full range (tech ref p.14): 0 unknown, 1 bay open, 2 no media, 3 not inserted properly, 4 media present/status unknown, 5 empty, 6 critically low, 7 low, **8 media present – ok**, 9 jammed, 10 **counterfeit media**. Always `8` here |
-| 11–22 | SKU info | 12 chars, NUL-padded (the configured SKU) |
+| 10 | MainBayStatus | Full range (tech ref p.14): 0 unknown, 1 bay open, 2 no media, 3 not inserted properly, 4 media present/status unknown, 5 empty, 6 critically low, 7 low, **8 media present – ok**, 9 jammed, 10 **counterfeit media**. Genuine 550: `8` with a roll, **`2` with the roll removed** (D45); the paper sensor drives the same two values here |
+| 11–22 | SKU info | 12 chars, NUL-padded (the configured SKU). Genuine 550: empty until its media detection has run, then e.g. `S0722400`; **kept** while the roll is out (D45) |
 | 23–26 | ErrorID (u32) | 0 |
-| 27–28 | LabelCount (u16 LE) | Remaining labels (decrements per label) |
-| 29 | EPS status | 1 = present |
-| 30 | PrintHeadVoltage | 0 unknown, **1 ok**, 2 low, 3 critically low, 4 too low for printing. We report `1`; the genuine engine measures the rail and suspends below 19.3 V, resuming at 21 V (LW450 tech ref p.7) — see PINMAP.md "head voltage sense" |
-| 31 | Reserved | `0xFF` |
+| 27–28 | LabelCount (u16 LE) | Remaining labels (decrements per label). Genuine 550: counted down **in RAM** per printed label (42 → 41 → 40 observed) even on a unit whose EEPROM is write-protected by the solder blob; after a power cycle it reverts to the stored value. The status shows the live counter, never whether the save succeeded (D45) |
+| 29 | EPS status | tech ref: 1 = present. **Genuine 550 answers `0`** in every probed state (D45); we send `0` |
+| 30 | PrintHeadVoltage | 0 unknown, 1 ok, 2 low, 3 critically low, 4 too low for printing. **Genuine 550 answers `0`** (unknown) in every probed state; we send `0`. The genuine engine still suspends below 19.3 V, resuming at 21 V (LW450 tech ref p.7) — see PINMAP.md "head voltage sense" |
+| 31 | Reserved | tech ref: `0xFF`. **Genuine 550 answers `0`**; we send `0` (D45) |
 
-### ESC U — 63-byte consumable record
+### ESC U — 64-byte consumable record
+
+**Length: 64.** A genuine 550 answers `ESC U` with exactly 64 bytes, with and
+without a roll fitted (19 Sep 2026, D45); the tech ref's "63" is one short. With
+no roll ever detected the 64 bytes are all zero; with the roll removed after a
+detection the printer keeps answering the **last record** (cached). The record
+read from a genuine S0722400 roll verified this table field by field, and its
+CRC-32 over bytes 0–59 (4–7 zeroed) reproduced — the first confirmation on a
+*printer reply* rather than a tag dump. Two deltas: byte 38–39 (vertical offset)
+was `15`, not the `16` seen on 23/37 tags, and **bytes 60–63 were `26 72 28 02`**
+— non-zero, outside the CRC, meaning unknown; we send zeros there.
 
 This layout is no longer read off the manual alone. **The root of this very
 repository embeds 37 dumps of genuine DYMO 550-series roll tags**
@@ -204,21 +217,25 @@ four four-character groups, no separators.
 
 | Byte | Field | Value / meaning |
 |------|-------|-----------------|
-| 0–15 | Hardware string | 16 chars, zero-padded — `LW5XL-REV.K` (5XL) / `LW550-REV.K` (550) |
+| 0–15 | Hardware string | 16 chars, zero-padded — **`LW550B_PPB_00002`** on a genuine 550 (exactly 16, no padding; D45) / `LW5XL-REV.K` (5XL, unverified) |
 | 16–19 | FW kind | `FWAP` = application, `FWBL` = boot loader |
 | 20–23 | Major release | 4 chars |
 | 24–27 | Minor release | 4 chars |
 | 28–31 | Release date | `MMYY` |
-| 32–33 | USB PID (LE) | `0x002A` (5XL) / `0x0028` (550) |
+| 32–33 | USB PID as **two ASCII hex digits** | `"28"` = `32 38` on a genuine 550 (D45); `"2A"` for the 5XL by analogy. This row used to say "u16 LE" and the firmware sent `28 00` — wrong |
 
-We send `FWAP000100010921`. The shape is not optional and the values are **not**
+The complete genuine 550 reply, byte for byte (19 Sep 2026):
+`LW550B_PPB_00002` `FWAP` `0002` `0042` `0725` `28` — application firmware
+2.42 of July 2025. We send exactly that for the 550 (`MODEL_HW_VERSION`,
+`MODEL_FW_VERSION_COMMON`, `MODEL_PID_ASCII` in `model.h`); `test_protocol_wire.py`
+pins the 34 bytes against the captured reply. The shape is not optional and the values are **not**
 purely informational — that was wrong, and the driver's own decoder says so:
 
 * bytes 16–19 must be literally `FWAP` (application) or `FWBL` (boot loader);
   anything else makes the host classify the firmware mode as Unknown;
 * bytes 20–23 and 24–27 are parsed as **base-10 ASCII** major and minor, and the
   host discards the whole version record unless both parse as non-zero;
-* bytes 32–33 are the PID, and if it maps to a known model the host **overrides**
+* bytes 32–33 are the PID **as ASCII hex**, and if it maps to a known model the host **overrides**
   the model it derived from the Windows hardware ID. Since the model then
   selects how many bytes the host expects back from `ESC A` (see below), a wrong
   PID here silently breaks status reads. Ours is `MODEL_PID`, so it agrees with

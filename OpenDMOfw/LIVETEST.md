@@ -49,7 +49,11 @@ say so; a step that fails costs only itself.
       → six 32-byte dumps, each labelled with its state
 - [x] **4. ESC U** — the roll record (S0722400, 64 bytes, CRC verified)
       → the reply **plus the SKU on the box** (e.g. `S0722370` / `30252`)
-- [ ] **5. Print two labels, measure with a ruler**
+- [x] **5. Print two labels, measure with a ruler** — closed from the printer's own
+      `ESC U` record instead (D45): S0722400 / DYMO 99012, label 88.6 × 35.7 mm,
+      pitch 93.1 mm, **gap 4.5 mm** (firmware's fleet-mode constant is 4.2; per-SKU
+      gap remains the open piece of work in `protocol.c`). The two-label job
+      counted the roll down by exactly 2 (38 → 36).
       → (a) printed length of one label, (b) gap between the two prints, in mm
       → and the roll SKU
 - [ ] **6. Density ladder** — same label at each darkness setting, strip kept in order

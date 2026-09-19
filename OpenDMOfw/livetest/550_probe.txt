@@ -187,3 +187,24 @@ opening \\?\usb#vid_0922&pid_0028#0416XXXXXX4527#{28d78fad-5a12-11d1-ae5b-0000f8
     <- 96 bytes: b6 ca 00 3c 36 42 0c 33 53 30 37 32 32 34 30 30 00 00 00 00 00 ff 04 01 01 00 00 00 a3 03 1e 00 26 00 00 00 00 00 0f 00 76 03 65 01 00 00 00 00 85 01 34 00 75 09 05 00 01 00 00 00 26 72 28 02 00 00 00 00 00 00 00 00 00 64 08 53 30 37 32 32 34 30 30 00 00 00 00 00 00 00 00 26 00 00 00 00
        ascii: '��\x00<6B\x0c3S0722400\x00\x00\x00\x00\x00�\x04\x01\x01\x00\x00\x00�\x03\x1e\x00&\x00\x00\x00\x00\x00\x0f\x00v\x03e\x01\x00\x00\x00\x00�\x014\x00u\t\x05\x00\x01\x00\x00\x00&r(\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00d\x08S0722400\x00\x00\x00\x00\x00\x00\x00\x00&\x00\x00\x00\x00'
 
+# 2026-09-19 23:37:23  3e after item-5 job (2 labels in one job)
+usbprint interfaces present: 1; DYMO: 1
+  \\?\usb#vid_0922&pid_0028#0416xxxxxx4527#{28d78fad-5a12-11d1-ae5b-0000f803a8c2}
+
+opening \\?\usb#vid_0922&pid_0028#0416xxxxxx4527#{28d78fad-5a12-11d1-ae5b-0000f803a8c2}
+
+[1] IEEE-1284 device ID (129 bytes raw, length prefix 81 81):
+    MFG:DYMO;CID:DYMOLabelWriter_550B;CMD: ;MDL:LabelWriter 550;CLASS:PRINTER;DESCRIPTION:DYMO LabelWriter 550;SERN:0416xxxxxx4527;
+    raw: 81 81 4d 46 47 3a 44 59 4d 4f 3b 43 49 44 3a 44 59 4d 4f 4c 61 62 65 6c 57 72 69 74 65 72 5f 35 35 30 42 3b 43 4d 44 3a 20 3b 4d 44 4c 3a 4c 61 62 65 6c 57 72 69 74 65 72 20 35 35 30 3b 43 4c 41 53 53 3a 50 52 49 4e 54 45 52 3b 44 45 53 43 52 49 50 54 49 4f 4e 3a 44 59 4d 4f 20 4c 61 62 65 6c 57 72 69 74 65 72 20 35 35 30 3b 53 45 52 4e 3a 30 34 31 36 32 33 30 32 35 36 34 35 32 37 3b
+
+[ESC A  (status, 32-byte struct)]  -> 1b 41 00
+    <- 32 bytes (3e after item-5 job (2 labels in one job)): 00 00 00 00 00 00 00 00 00 64 08 53 30 37 32 32 34 30 30 00 00 00 00 00 00 00 00 24 00 00 00 00
+
+[ESC V  (firmware version)]  -> 1b 56
+    <- 34 bytes: 4c 57 35 35 30 42 5f 50 50 42 5f 30 30 30 30 32 46 57 41 50 30 30 30 32 30 30 34 32 30 37 32 35 32 38
+       ascii: 'LW550B_PPB_00002FWAP00020042072528'
+
+[ESC U  (consumable / roll record)]  -> 1b 55
+    <- 64 bytes: b6 ca 00 3c 36 42 0c 33 53 30 37 32 32 34 30 30 00 00 00 00 00 ff 04 01 01 00 00 00 a3 03 1e 00 26 00 00 00 00 00 0f 00 76 03 65 01 00 00 00 00 85 01 34 00 75 09 05 00 01 00 00 00 26 72 28 02
+       ascii: '��\x00<6B\x0c3S0722400\x00\x00\x00\x00\x00�\x04\x01\x01\x00\x00\x00�\x03\x1e\x00&\x00\x00\x00\x00\x00\x0f\x00v\x03e\x01\x00\x00\x00\x00�\x014\x00u\t\x05\x00\x01\x00\x00\x00&r(\x02'
+

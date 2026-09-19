@@ -171,7 +171,9 @@ static uint16_t s_raster_lines;      /* dot LINES printed by the current raster
  * STILL AN APPROXIMATION: the genuine gap varies 42..118 tenths across stocks
  * (79 on 30323 Shipping, 95 on 30258 Diskette, 118 on 30277 File Folder).
  * Carrying it per paper code is the right answer and is the next piece of work;
- * 42 is the measured mode and the correct value for the default stock. */
+ * 42 is the measured mode and the correct value for the default stock.
+ * Measured on a genuine 550's own ESC U reply (19 Sep 2026, D45): the
+ * S0722400 / 99012 Large Address roll carries pitch 931 - length 886 = 45. */
 #define LABEL_GAP_TENTH_MM 42
 #define LABEL_GAP_DOTS   (((LABEL_GAP_TENTH_MM) * (MODEL_DPI) + 127) / 254)
 #define TEAR_EXTRA_DOTS  15          /* tear bar sits past the next print position */

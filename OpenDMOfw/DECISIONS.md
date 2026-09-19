@@ -1988,3 +1988,37 @@ Two observations about the *host*, recorded because they cost an evening:
 
 The raw log is `livetest/550_probe.txt` (serial redacted). Still open from
 LIVETEST: item 5 (ruler), 6 (density ladder), 7 (full job capture — USBPcap).
+
+## D46 — What DYMO Connect's quality menu does on the wire, and how fast the genuine unit feeds
+
+LIVETEST item 6 asked for a density ladder. DYMO Connect (1.6.1.7) exposes no
+darkness setting at all; its "Afdrukkwaliteit" menu has Auto, Hoge snelheid,
+Tekst and Streepjescode en grafisch. Probed after a print in each (19 Sep 2026,
+genuine 550): `ESC A` byte 9 stayed `0x64` in all four. The driver GPD
+(`LW5XX.GPD`) says what the menu maps to instead:
+
+| Menu | GPD feature | Bytes |
+|------|-------------|-------|
+| Tekst | PrintQuality Option1 | `ESC h` |
+| Streepjescode en grafisch | PrintQuality Option2 | `ESC i` |
+| Hoge snelheid | HighSpeedMode Option2 | `ESC T 20` (Option1 = `ESC T 10`) |
+| Auto | — | the app picks h/i by content |
+
+The density ladder `ESC C 4B/58/64/71` is the driver's own *PrintDensity*
+feature in Windows Printing Preferences; DYMO Connect never touches it.
+
+Timed from the spooler side (`tools/time_print_job.ps1`: the USB pipe is
+flow-controlled by the printer, so queue residency ≈ print time plus a constant
+render): same 36×89 label, Tekst **1.94 s**, Streepjescode en grafisch
+**3.19 s**, Hoge snelheid **1.68 s**. The genuine engine therefore runs the
+feed roughly **1.8× slower in graphics mode** (`ESC i`) — presumably a longer
+line period to give the head more energy per dot — and slightly faster with
+`ESC T 20`. Our firmware accepts `ESC h/i/T` and ignores them: one line period
+(`MODEL_LINE_PERIOD_US`) for every mode. Recorded as an open item, not
+changed: reproducing the slowdown means a per-mode line period and a matching
+energy model, and D30's energy ceiling was derived for the text-mode period.
+
+Also noticed: in "Hoge snelheid" DYMO Connect renders the label itself and
+spools **RAW** (68 068 B), whereas the other modes spool EMF (1.8 MB) that the
+driver renders at despool time. So a RAW `.SPL` retained by the spooler in that
+mode is a complete host→printer byte stream — LIVETEST item 7 without USBPcap.

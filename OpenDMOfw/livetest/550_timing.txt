@@ -1,0 +1,3 @@
+﻿2026-09-19 23:52:44  job 7: total 1.941 ms (printing phase 1.918 ms), spooled 1.834.936 B  [Tekst]
+2026-09-19 23:53:07  job 8: total 3.194 ms (printing phase 3.160 ms), spooled 1.834.936 B  [Streepjescode en grafisch]
+2026-09-19 23:53:36  job 9: total 1.677 ms (printing phase 1.596 ms), spooled 68.068 B  [Hoge snelheid]

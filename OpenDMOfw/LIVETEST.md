@@ -56,9 +56,25 @@ say so; a step that fails costs only itself.
       counted the roll down by exactly 2 (38 → 36).
       → (a) printed length of one label, (b) gap between the two prints, in mm
       → and the roll SKU
-- [ ] **6. Density ladder** — same label at each darkness setting, strip kept in order
+- [x] **6. Density ladder** — DYMO Connect exposes no darkness setting; its
+      "Afdrukkwaliteit" menu (Auto / Hoge snelheid / Tekst / Streepjescode en
+      grafisch) leaves `ESC A` byte 9 at 100 % in every mode. The driver GPD shows
+      what it does send instead: `ESC h` / `ESC i` (text / graphics) and `ESC T 10|20`
+      (speed). Measured from the spooler with `tools/time_print_job.ps1` on the
+      same 36×89 label: Tekst 1.94 s, **Streepjescode en grafisch 3.19 s** (≈1.8×
+      slower print phase — the genuine engine slows the feed in graphics mode,
+      which our firmware ignores), Hoge snelheid 1.68 s. The density ladder itself
+      (`ESC C 4B/58/64/71`) lives in the Windows driver's Printing Preferences, not
+      in DYMO Connect (D46).
       → photo under even light, marked; or captures if the setting is not exposed
-- [ ] **7. Full job capture** — one ordinary address label via DYMO Connect
+- [ ] **7. Full job capture** — one ordinary address label via DYMO Connect.
+      **Two routes now:** (a) USBPcap (installed 19 Sep 2026; its filter attaches
+      only after a reboot — `pnputil /restart-device` on the root hub refuses
+      while it is in use); (b) **no reboot:** in the "Hoge snelheid" quality mode
+      DYMO Connect renders itself and spools **RAW** (68 KB for a 36×89 label, vs
+      1.8 MB EMF in the other modes), so with `Set-Printer -KeepPrintedJobs $true`
+      on the queue the `.SPL` file *is* the host→printer byte stream. One label.
+      Turn it off again afterwards; it is a queue attribute, not the port (D45).
       → `550_print_address.pcapng`
 
 **Bring back:** the `.pcapng` files, `550_devid.txt`, the six status dumps, the

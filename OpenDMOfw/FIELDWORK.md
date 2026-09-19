@@ -113,6 +113,13 @@ python -c "import usb.core as u; d=u.find(idVendor=0x0922); r=d.ctrl_transfer(0x
 printer from the DYMO driver until you undo it. If that is a problem, the
 `lsusb`/USBTreeView dump alone is still worth sending.)
 
+> **Done on 19 Sep 2026 — items 2, 3 and 4 of this list are closed** (DECISIONS
+> D45), read off a genuine 550 with `tools/probe_genuine_win.py`, which needs no
+> Zadig. The firmware now answers `ESC V`, `ESC U` (64 bytes) and the device ID
+> (with `CID:DYMOLabelWriter_550B`, 14-digit `SERN`) exactly as that unit does.
+> Still wanted from a genuine unit: the **descriptor dump** (item 1), and the
+> same three replies from a **5XL**.
+
 What each one closes:
 
 | Capture | Settles |
@@ -386,13 +393,24 @@ short list of things that are already pinned down, so you can skip them.
 - **USB identity** (VID `0x0922`, PID `0x002A`/`0x0028`, IEEE-1284 device ID) and the
   **command set + status-struct layout** — sourced from the tech ref and a live
   capture of a genuine 550.
+- **The genuine 550's own replies, byte for byte** (D45, 19 Sep 2026): IEEE-1284
+  ID with the `CID` key and a 14-digit serial; `ESC V` = `LW550B_PPB_00002` +
+  `FWAP0002 0042 0725` + PID as ASCII `"28"`; `ESC A` bytes 29–31 = 0, byte 0 = 2
+  and byte 10 = 2 with the bay empty, byte 0 = 4 while media detection runs;
+  `ESC U` = 64 bytes with the CRC-32 reconstruction verified on a printer reply.
+  The firmware reproduces all of it, so bring-up step A/C compare against a
+  known answer, not a guess.
+- **What DYMO Connect's quality menu sends** (D46): `ESC h` / `ESC i` / `ESC T`,
+  never a density; the genuine engine feeds **≈1.8× slower in graphics mode**
+  (`ESC i`). Our line period is the same in every mode — a calibration target
+  for step C, not a bench measurement.
 
 > **What D.MO Connect actually checks** (decompiled, DECISIONS D24): it never
 > sends `ESC U`, so the record's CRC and geometry cannot upset it. Roll state
 > comes from the `ESC A` status only — bay status byte 10 (8 = OK, 10 =
 > counterfeit), the 12-byte SKU and the label count — and the SKU must be in
 > Connect's catalog for the install's region, or the roll shows as empty. The
-> `ESC V` version strings remain our own values (D12). See bring-up step C.
+> `ESC V` version strings are now the genuine 550's (D45). See bring-up step C.
 
 ### What the silicon already rules out
 
@@ -537,6 +555,13 @@ struct and its own catalog, not from `ESC U` (DECISIONS D24). Check, in order:
 Connect's catalog for your region (an EU install hides US-only SKUs as
 "empty"); then try the `pc-patch/` tool, which fixes the catalog side.
 **Report:** what Connect displayed, before and after the patch.
+**Two things known from the genuine unit to check against (D45/D46):** Connect
+shows the roll and count from `ESC A` bytes 11–28, and it prints ≈1.8× slower
+in "Streepjescode en grafisch" than in "Tekst" — if ours prints both at the same
+speed that is expected (we ignore `ESC i`), but note whether graphics-mode
+labels come out lighter than the genuine ones, which would say the slowdown is
+the genuine energy compensation. And **never move the queue's port** to capture
+the job stream (D45); use the RAW spool of a "Hoge snelheid" job instead.
 
 ---
 

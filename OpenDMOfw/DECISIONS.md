@@ -2018,7 +2018,8 @@ line period to give the head more energy per dot — and slightly faster with
 changed: reproducing the slowdown means a per-mode line period and a matching
 energy model, and D30's energy ceiling was derived for the text-mode period.
 
-Also noticed: in "Hoge snelheid" DYMO Connect renders the label itself and
-spools **RAW** (68 068 B), whereas the other modes spool EMF (1.8 MB) that the
-driver renders at despool time. So a RAW `.SPL` retained by the spooler in that
-mode is a complete host→printer byte stream — LIVETEST item 7 without USBPcap.
+Also noticed: one of the "Hoge snelheid" jobs was spooled **RAW** (68 068 B —
+the host→printer bytes themselves) where every other job was EMF (1.8 MB)
+rendered by the driver at despool time. A repeat in the same mode with
+`KeepPrintedJobs` on was EMF again, so the trigger for DYMO Connect's own raster
+path is unknown; it cannot be relied on for LIVETEST item 7.

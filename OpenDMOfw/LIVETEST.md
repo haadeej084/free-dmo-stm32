@@ -70,11 +70,12 @@ say so; a step that fails costs only itself.
 - [ ] **7. Full job capture** — one ordinary address label via DYMO Connect.
       **Two routes now:** (a) USBPcap (installed 19 Sep 2026; its filter attaches
       only after a reboot — `pnputil /restart-device` on the root hub refuses
-      while it is in use); (b) **no reboot:** in the "Hoge snelheid" quality mode
-      DYMO Connect renders itself and spools **RAW** (68 KB for a 36×89 label, vs
-      1.8 MB EMF in the other modes), so with `Set-Printer -KeepPrintedJobs $true`
-      on the queue the `.SPL` file *is* the host→printer byte stream. One label.
-      Turn it off again afterwards; it is a queue attribute, not the port (D45).
+      while it is in use); (b) **sometimes, not reliably:** one job on 19 Sep
+      2026 (printed in the "Hoge snelheid" mode) was spooled **RAW** (68 KB — the
+      host→printer bytes themselves), but a repeat in the same mode with
+      `KeepPrintedJobs` on came out as the usual 1.8 MB EMF. What makes DYMO
+      Connect pick its own raster path is not known, so route (b) is a lottery
+      ticket, not a procedure. Route (a) is the one to plan on.
       → `550_print_address.pcapng`
 
 **Bring back:** the `.pcapng` files, `550_devid.txt`, the six status dumps, the

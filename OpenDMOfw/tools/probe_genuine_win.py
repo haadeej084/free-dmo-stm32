@@ -200,6 +200,27 @@ def send(h, data):
         k32.CloseHandle(ov.hEvent)
 
 
+def send_unsafe(h, data):
+    """The one path around SAFE_COMMANDS: only for the two documented,
+    non-printing state commands behind --set-count / --restart."""
+    assert data[:2] in (b"\x1b\x6f", b"\x1b\x40"), "send_unsafe is for ESC o / ESC @ only"
+    n = wt.DWORD(0)
+    ov = OVERLAPPED()
+    ov.hEvent = k32.CreateEventW(None, True, False, None)
+    try:
+        ok = k32.WriteFile(h, data, len(data), ctypes.byref(n), ctypes.byref(ov))
+        if not ok:
+            if ctypes.get_last_error() != ERROR_IO_PENDING:
+                raise OSError(_err("WriteFile"))
+            if k32.WaitForSingleObject(ov.hEvent, 2000) != WAIT_OBJECT_0:
+                k32.CancelIoEx(h, ctypes.byref(ov))
+                raise OSError("WriteFile: timed out")
+            k32.GetOverlappedResult(h, ctypes.byref(ov), ctypes.byref(n), True)
+        return n.value
+    finally:
+        k32.CloseHandle(ov.hEvent)
+
+
 def recv(h, want, timeout_s=2.0):
     """Read up to `want` bytes with a real timeout. A plain ReadFile on usbprint
     blocks for as long as the printer stays silent, so the read is overlapped
@@ -234,6 +255,14 @@ def main():
     ap.add_argument("--label", default="", help="state label for the status dump, e.g. '3b out of paper'")
     ap.add_argument("--id-only", action="store_true", help="only the IEEE-1284 device ID")
     ap.add_argument("--path", help="usbprint device path (default: the first VID_0922)")
+    # NOT read-only, deliberately outside SAFE_COMMANDS and off by default:
+    # both are in DYMO's own 550 manual (p.20) and neither prints, feeds or
+    # touches the update path, but they change printer state.
+    ap.add_argument("--set-count", type=int, metavar="N",
+                    help="send ESC o N (DYMO 'set label count', 0-255) BEFORE the probes, then read the status back")
+    ap.add_argument("--u16", action="store_true", help="with --set-count: send the count as u16 LE (ESC o lo hi)")
+    ap.add_argument("--restart", action="store_true",
+                    help="send ESC @ ('restart print engine') BEFORE the probes, then read the status back")
     a = ap.parse_args()
 
     lines = []
@@ -253,6 +282,20 @@ def main():
     say(f"\nopening {path}")
     h = open_port(path)
     try:
+        if a.set_count is not None or a.restart:
+            send(h, SAFE_COMMANDS["ESC A  (status, 32-byte struct)"])
+            before = recv(h, 32)
+            cnt = (before[27] | (before[28] << 8)) if len(before) == 32 else "?"
+            say(f"\n[pre] ESC A before: {hexdump(before)}  (count = {cnt})")
+            if a.set_count is not None:
+                cmd = bytes([0x1B, 0x6F, a.set_count & 0xFF] + ([(a.set_count >> 8) & 0xFF] if a.u16 else []))
+                say(f"[state-changing] ESC o {a.set_count} -> {hexdump(cmd)}")
+                send_unsafe(h, cmd)
+            if a.restart:
+                cmd = b"\x1b\x40"
+                say(f"[state-changing] ESC @ -> {hexdump(cmd)}")
+                send_unsafe(h, cmd)
+                time.sleep(1.0)
         raw, s = get_1284_id(h)
         say(f"\n[1] IEEE-1284 device ID ({len(raw)} bytes raw, length prefix {hexdump(raw[:2])}):")
         say(f"    {s}")

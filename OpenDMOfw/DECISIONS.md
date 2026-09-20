@@ -2023,3 +2023,21 @@ the host→printer bytes themselves) where every other job was EMF (1.8 MB)
 rendered by the driver at despool time. A repeat in the same mode with
 `KeepPrintedJobs` on was EMF again, so the trigger for DYMO Connect's own raster
 path is unknown; it cannot be relied on for LIVETEST item 7.
+
+### D45 addendum — the counter cannot be set from the host on stock firmware
+
+Tested on the genuine 550 (20 Sep 2026, `probe_genuine_win.py --set-count` /
+`--restart`): `ESC o N` as one byte, `ESC o N` as u16 LE, and `ESC @` all leave
+`ESC A` bytes 27–28 unchanged. The stock firmware ignores the manual's
+"set label count" and does not reload the counter on an engine restart.
+
+Where the counter really lives, from the same evening: it survived a power
+cycle at the *decremented* value (40, not the ~47 the write-protected EEPROM
+holds), so the printer takes it from the roll tag on every start. The tag is
+an NXP ICODE SLIX2 whose 16-bit hardware counter only increments (eevblog:
+`INCREMENT COUNTER` with the UID-derived read password; the reset needs the
+factory write password, which is not in the printer). So on stock firmware
+there is no host-side lever at all: the MCU's RAM copy is just the tag's
+counter, the EEPROM lock only removes the backup copy, and the only ways
+around it are the tag side (emulation, as free-dmo's Bluepill does) or this
+firmware. Recorded here so nobody spends another evening on `ESC o`.
